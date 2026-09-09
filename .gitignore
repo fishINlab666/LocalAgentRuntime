@@ -1,0 +1,29 @@
+# Credentials and local configuration
+.env
+.env.*
+*.env
+*.key
+*.pem
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+
+# Generated files and local runtimes
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# Local execution evidence and private source materials
+runs/
+artifacts/
+/local-agent/trial/results/
+/local-agent/trial/workspace/
+/meeting/

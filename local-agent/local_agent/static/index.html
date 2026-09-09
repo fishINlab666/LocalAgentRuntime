@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="session-token" content="__SESSION_TOKEN__">
+  <title>单文件问答 · Local Agent</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#question">跳到问题输入</a>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">L<span>·</span>A</span><span>LOCAL AGENT<span class="brand-sub">本地资料助手</span></span></div>
+      <span class="badge" id="connection">正在连接本地服务</span>
+    </header>
+    <main>
+      <div class="intro"><div><p class="eyebrow">WORKSPACE / 单文件问答 · 目录发现</p><h1>让答案，回到文件。</h1><p class="intro-copy">读资料，问问题。每个回答，都有原文可查。</p></div><span class="version">01<span>资料问答体验版</span></span></div>
+      <div id="mode-notice" class="notice" hidden></div>
+      <div id="connection-error" class="notice error" role="alert" hidden></div>
+      <div class="layout">
+        <section class="input-panel" aria-labelledby="input-title">
+          <div class="panel-title"><span class="section-number">01</span><h2 id="input-title">文件与问题</h2></div>
+          <div class="workspace"><span class="small-label">当前工作区</span><code id="workspace">正在读取配置…</code></div>
+          <form id="question-form">
+            <label class="mode-toggle" for="discover"><input type="checkbox" id="discover" disabled aria-describedby="discover-help">目录发现</label>
+            <p class="field-help" id="discover-help">从当前工作区列出的 .md / .txt 资料中选择读取，最多 4 份。勾选后只需填写问题。</p>
+            <label for="file">文件路径</label>
+            <input id="file" name="file" placeholder="例如：demo-note.md" required maxlength="1024" autocomplete="off" aria-describedby="file-help">
+            <p class="field-help" id="file-help">填写工作区内的相对路径 · .md / .txt · 最大 32 KiB</p>
+            <button type="button" class="sample" id="sample" hidden>填入演示文件与问题 <span aria-hidden="true">↗</span></button>
+            <div class="label-row"><label for="question">想了解什么？</label><span id="count">0 / 4000</span></div>
+            <textarea id="question" name="question" rows="6" maxlength="4000" required placeholder="例如：项目代号、评审人和演示日期分别是什么？请引用原文。"></textarea>
+            <div class="suggestions"><button type="button" data-question="资料的主要内容是什么？请引用原文。">概括主要内容</button><button type="button" data-question="资料中写的预算是多少？">查找预算信息</button></div>
+            <p id="form-error" class="form-error" role="alert" hidden></p>
+            <div class="actions"><button class="primary" type="submit" id="start" disabled>开始问答 <span aria-hidden="true">↗</span></button><button type="button" class="secondary" id="cancel" hidden>取消运行</button></div>
+            <p class="privacy" id="privacy">开始后，所选文件内容和问题将发送给 DeepSeek。原文件保持只读。</p>
+          </form>
+        </section>
+        <section class="result-panel" aria-labelledby="result-title">
+          <div class="panel-title result-heading"><div><span class="section-number">02</span><h2 id="result-title">回答与依据</h2></div><span id="run-status" class="badge neutral" role="status" aria-live="polite">等待提问</span></div>
+          <div id="empty" class="empty">
+            <svg class="document-art" viewBox="0 0 130 130" aria-hidden="true"><path d="M28 19h53l22 22v66H28z" fill="var(--paper)" stroke="currentColor" stroke-width="1.5"/><path d="M81 19v22h22M43 56h44M43 68h35M43 80h27" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="96" cy="99" r="19" fill="var(--accent)"/><path d="m88 99 6 6 10-13" fill="none" stroke="white" stroke-width="2"/></svg>
+            <h3>从资料开始</h3><p>在左侧填写文件路径，或启用目录发现，再输入问题。<br>回答生成后，原文摘录会一起出现在这里。</p>
+            <div class="empty-steps"><span>读取文件</span><i aria-hidden="true">→</i><span>生成回答</span><i aria-hidden="true">→</i><span>核对依据</span></div>
+          </div>
+          <div id="output" hidden>
+            <p class="source-line" id="source-line"></p>
+            <p class="field-help" id="scope-summary" hidden></p>
+            <div id="progress" class="progress" hidden><span class="spinner" aria-hidden="true"></span><span id="progress-text">正在启动…</span></div>
+            <div id="answer-block" hidden><div class="answer-heading"><h3 id="answer-title">文件中的答案</h3><button type="button" class="copy" id="copy">复制回答</button></div><p id="answer-text" class="answer-text"></p><p id="answer-note" class="field-help"></p></div>
+            <div id="failure" class="failure" role="alert" hidden><h3 id="failure-title"></h3><p id="failure-message"></p></div>
+            <div id="evidence" hidden><div class="evidence-heading"><h3>原文依据</h3><span id="citation-count"></span></div><div id="citations"></div></div>
+            <details id="trace" class="trace"><summary>查看执行记录 <span id="event-count"></span></summary><ol id="events"></ol><p class="trace-note">仅展示执行步骤；默认本地日志不保存问题、正文和回答全文。</p><code id="trace-path"></code></details>
+          </div>
+        </section>
+      </div>
+      <footer><span>依据在文件里，判断在你手中。</span><span>本地界面 · 只读文件 · 可核对引用</span></footer>
+    </main>
+  </div>
+</body>
+</html>

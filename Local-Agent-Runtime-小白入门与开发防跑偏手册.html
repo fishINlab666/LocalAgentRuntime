@@ -1,0 +1,3112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Cpath d='M8 9h16v3H8zm0 6h12v3H8zm0 6h16v3H8z' fill='white'/%3E%3C/svg%3E">
+  <title>Local Agent Runtime｜入门与开发防跑偏手册</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --surface: #ffffff;
+      --surface-subtle: #eef2f6;
+      --surface-blue: #eff6ff;
+      --text: #172033;
+      --text-muted: #536174;
+      --accent: #2563eb;
+      --accent-dark: #1d4ed8;
+      --border: #dce3ea;
+      --border-strong: #bec9d6;
+      --focus: #1d4ed8;
+      --warning-bg: #fff8e8;
+      --warning-text: #713f12;
+      --success-bg: #f0fdf4;
+      --success-text: #14532d;
+      --sidebar-width: 18rem;
+      --content-width: 48rem;
+      --radius-sm: 0.375rem;
+      --radius-md: 0.75rem;
+      --shadow-sm: 0 1px 2px rgba(23, 32, 51, 0.06);
+      --shadow-md: 0 12px 32px rgba(23, 32, 51, 0.12);
+      --z-progress: 1000;
+      --z-mobile-header: 700;
+      --z-sidebar: 800;
+      --z-scrim: 750;
+      --z-floating: 600;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: 1.5rem;
+    }
+
+    body {
+      margin: 0;
+      min-width: 20rem;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.7;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body.nav-open {
+      overflow: hidden;
+    }
+
+    a {
+      color: var(--accent-dark);
+      text-decoration-thickness: 0.08em;
+      text-underline-offset: 0.18em;
+    }
+
+    a:hover {
+      color: #1e40af;
+    }
+
+    button,
+    input,
+    summary,
+    a {
+      touch-action: manipulation;
+    }
+
+    button,
+    input[type="search"] {
+      min-height: 44px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+    }
+
+    button {
+      padding: 0.55rem 0.8rem;
+      cursor: pointer;
+      transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, opacity 180ms ease;
+    }
+
+    button:hover {
+      border-color: #94a3b8;
+      background: var(--surface-subtle);
+    }
+
+    button:active {
+      background: #e2e8f0;
+    }
+
+    :focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 3px;
+    }
+
+    [hidden],
+    .search-hidden {
+      display: none !important;
+    }
+
+    .skip-link {
+      position: fixed;
+      z-index: 1100;
+      top: 0.75rem;
+      left: 0.75rem;
+      transform: translateY(-180%);
+      border-radius: var(--radius-sm);
+      background: var(--text);
+      color: #ffffff;
+      padding: 0.65rem 0.9rem;
+      text-decoration: none;
+      transition: transform 180ms ease;
+    }
+
+    .skip-link:focus {
+      transform: translateY(0);
+    }
+
+    #reading-progress {
+      position: fixed;
+      z-index: var(--z-progress);
+      inset: 0 0 auto 0;
+      height: 3px;
+      background: var(--accent);
+      transform: scaleX(0);
+      transform-origin: left center;
+    }
+
+    .mobile-header {
+      display: none;
+    }
+
+    #nav-scrim {
+      display: none;
+    }
+
+    #sidebar {
+      position: fixed;
+      z-index: var(--z-sidebar);
+      inset: 0 auto 0 0;
+      width: var(--sidebar-width);
+      padding: 1.5rem 1rem 1.25rem;
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.97);
+      scrollbar-width: thin;
+      scrollbar-color: #cbd5e1 transparent;
+    }
+
+    .sidebar-head {
+      position: relative;
+      padding: 0 0.5rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .eyebrow,
+    .kicker,
+    .chapter-number,
+    .toc-group,
+    .callout-label,
+    .mini-label {
+      margin: 0;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .sidebar-title {
+      margin: 0.25rem 0 0;
+      font-size: 1.08rem;
+      font-weight: 750;
+      letter-spacing: -0.015em;
+    }
+
+    #mobile-nav-close {
+      display: none;
+    }
+
+    .search-label {
+      display: block;
+      margin: 1rem 0.5rem 0.35rem;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      font-weight: 650;
+    }
+
+    .search-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.35rem;
+      padding: 0 0.5rem;
+    }
+
+    #handbook-search {
+      width: 100%;
+      min-width: 0;
+      padding: 0.55rem 0.7rem;
+      font-size: 0.9rem;
+    }
+
+    #clear-search {
+      padding-inline: 0.65rem;
+      font-size: 0.82rem;
+    }
+
+    #search-status {
+      min-height: 2.5rem;
+      margin: 0.45rem 0.5rem 0.75rem;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      line-height: 1.45;
+    }
+
+    .toc {
+      display: grid;
+      gap: 0.1rem;
+    }
+
+    .toc-group {
+      margin: 1rem 0.55rem 0.3rem;
+      color: #64748b;
+      font-size: 0.68rem;
+    }
+
+    .toc a {
+      display: flex;
+      align-items: center;
+      min-height: 36px;
+      border-left: 3px solid transparent;
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      padding: 0.35rem 0.55rem;
+      color: #475569;
+      font-size: 0.82rem;
+      line-height: 1.35;
+      text-decoration: none;
+      transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+    }
+
+    .toc a:hover {
+      background: #f1f5f9;
+      color: var(--text);
+    }
+
+    .toc a[aria-current="location"] {
+      border-left-color: var(--accent);
+      background: var(--surface-blue);
+      color: #1e40af;
+      font-weight: 700;
+    }
+
+    .sidebar-foot {
+      display: grid;
+      gap: 0.5rem;
+      margin-top: 1.25rem;
+      padding: 1rem 0.5rem 0;
+      border-top: 1px solid var(--border);
+    }
+
+    .sidebar-foot a,
+    .sidebar-foot button {
+      font-size: 0.8rem;
+      text-align: center;
+    }
+
+    #main-content {
+      width: min(calc(100% - var(--sidebar-width)), 80rem);
+      margin-left: var(--sidebar-width);
+      padding: 3rem clamp(2rem, 5vw, 6rem) 7rem;
+    }
+
+    .chapter,
+    .document-footer {
+      width: 100%;
+      max-width: var(--content-width);
+      margin: 0 auto;
+    }
+
+    .chapter {
+      scroll-margin-top: 2rem;
+      padding: 1.5rem 0 5.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .hero {
+      padding-top: 2rem;
+    }
+
+    .section-divider {
+      margin-top: 1rem;
+      padding: 4.5rem 0 3rem;
+    }
+
+    .deep-chapter,
+    .appendix {
+      padding-top: 4rem;
+    }
+
+    .chapter-head {
+      margin-bottom: 1.5rem;
+    }
+
+    h1,
+    h2,
+    h3,
+    h4 {
+      color: var(--text);
+      font-weight: 750;
+      letter-spacing: -0.025em;
+      line-height: 1.25;
+      text-wrap: balance;
+    }
+
+    h1 {
+      max-width: 17ch;
+      margin: 0.75rem 0 1.25rem;
+      font-size: clamp(2.25rem, 5.3vw, 4.25rem);
+      letter-spacing: -0.045em;
+    }
+
+    h2 {
+      margin: 0.5rem 0 0.75rem;
+      font-size: clamp(1.75rem, 3vw, 2.45rem);
+    }
+
+    h3 {
+      margin: 2rem 0 0.65rem;
+      font-size: 1.18rem;
+    }
+
+    h4 {
+      margin: 1.5rem 0 0.5rem;
+      font-size: 1rem;
+    }
+
+    p,
+    li {
+      overflow-wrap: anywhere;
+    }
+
+    p {
+      margin: 0.65rem 0 1rem;
+    }
+
+    .lead {
+      max-width: 43rem;
+      color: #334155;
+      font-size: 1.14rem;
+      line-height: 1.8;
+    }
+
+    .chapter-question {
+      max-width: 42rem;
+      color: var(--text-muted);
+      font-size: 1.02rem;
+    }
+
+    .chapter-number {
+      color: var(--accent-dark);
+    }
+
+    ul,
+    ol {
+      margin: 0.75rem 0 1.25rem;
+      padding-left: 1.4rem;
+    }
+
+    li + li {
+      margin-top: 0.45rem;
+    }
+
+    strong {
+      font-weight: 720;
+    }
+
+    code,
+    pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    code {
+      border-radius: 0.25rem;
+      background: #eef2f7;
+      padding: 0.1em 0.3em;
+      color: #1e3a5f;
+      font-size: 0.9em;
+    }
+
+    pre {
+      max-width: 100%;
+      margin: 1rem 0 1.5rem;
+      overflow-x: auto;
+      border: 1px solid #263449;
+      border-radius: var(--radius-md);
+      background: #172033;
+      padding: 1.15rem 1.25rem;
+      color: #edf2f7;
+      font-size: 0.84rem;
+      line-height: 1.65;
+      tab-size: 2;
+      scrollbar-width: thin;
+    }
+
+    pre code {
+      border: 0;
+      background: transparent;
+      padding: 0;
+      color: inherit;
+      font-size: inherit;
+    }
+
+    .meta-grid,
+    .two-column,
+    .three-column,
+    .four-column,
+    .role-split {
+      display: grid;
+      gap: 0.75rem;
+      margin: 1.5rem 0;
+    }
+
+    .meta-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .meta-grid > div,
+    .three-column > article,
+    .four-column > article,
+    .role-split > article {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      padding: 1rem;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .meta-grid strong,
+    .meta-grid span,
+    .four-column strong,
+    .four-column span {
+      display: block;
+    }
+
+    .meta-grid span,
+    .four-column span {
+      margin-top: 0.2rem;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+    }
+
+    .two-column,
+    .role-split {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .three-column {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .four-column {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .three-column h3,
+    .role-split h3 {
+      margin-top: 0;
+    }
+
+    .source-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      margin: 1.5rem 0;
+    }
+
+    .source-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.65rem;
+      border: 1px solid currentColor;
+      border-radius: 999px;
+      padding: 0.12rem 0.55rem;
+      font-size: 0.72rem;
+      font-weight: 720;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+
+    .source-design {
+      background: #eff6ff;
+      color: #1e40af;
+    }
+
+    .source-meeting-1 {
+      background: #f1f5f9;
+      color: #334155;
+    }
+
+    .source-meeting-2 {
+      background: #f0fdf4;
+      color: #166534;
+    }
+
+    .source-teaching {
+      background: #fffbeb;
+      color: #854d0e;
+    }
+
+    .source-note {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.35rem 0.65rem;
+      align-items: start;
+      margin-top: 2.25rem;
+      border-top: 1px dashed var(--border-strong);
+      padding-top: 1rem;
+      color: var(--text-muted);
+      font-size: 0.82rem;
+    }
+
+    .source-note p {
+      margin: 0.1rem 0 0.5rem;
+    }
+
+    .callout,
+    .checkpoint,
+    .next-action-panel {
+      margin: 1.5rem 0;
+      border: 1px solid var(--border);
+      border-left-width: 4px;
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      padding: 1rem 1.15rem;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .callout p:last-child,
+    .checkpoint p:last-child,
+    .next-action-panel p:last-child {
+      margin-bottom: 0;
+    }
+
+    .conclusion {
+      border-left-color: var(--accent);
+      background: var(--surface-blue);
+    }
+
+    .strong-conclusion {
+      border-width: 1px 1px 1px 5px;
+      border-color: #93c5fd #bfdbfe #bfdbfe var(--accent);
+    }
+
+    .warning {
+      border-left-color: #d97706;
+      background: var(--warning-bg);
+      color: var(--warning-text);
+    }
+
+    .teaching {
+      border-left-color: #ca8a04;
+      background: #fffdf2;
+    }
+
+    .checkpoint {
+      border-left-color: #475569;
+      background: #f8fafc;
+    }
+
+    .checkpoint h3,
+    .next-action-panel h3 {
+      margin-top: 0;
+    }
+
+    .next-action-panel {
+      border-left-color: #15803d;
+      background: var(--success-bg);
+      color: var(--success-text);
+    }
+
+    .contrast-block {
+      display: grid;
+      gap: 0;
+      margin: 1.5rem 0;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+    }
+
+    .contrast-block > div {
+      padding: 1rem 1.15rem;
+    }
+
+    .contrast-block > div + div {
+      border-top: 1px solid var(--border);
+    }
+
+    .diagram,
+    .architecture-map,
+    .context-stack {
+      margin: 1.5rem 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: #f8fafc;
+      padding: 1rem;
+    }
+
+    .diagram-node,
+    .layer,
+    .context-stack > div,
+    .cross-cut {
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      padding: 0.75rem 0.9rem;
+      text-align: center;
+    }
+
+    .diagram-node strong,
+    .diagram-node span,
+    .layer strong,
+    .layer span,
+    .context-stack strong,
+    .context-stack span,
+    .cross-cut strong,
+    .cross-cut span {
+      display: block;
+    }
+
+    .diagram-node span,
+    .layer span,
+    .context-stack span,
+    .cross-cut span,
+    .split-layer small {
+      margin-top: 0.2rem;
+      color: var(--text-muted);
+      font-size: 0.82rem;
+    }
+
+    .diagram-core,
+    .core-layer {
+      border-color: #93c5fd;
+      background: var(--surface-blue);
+    }
+
+    .diagram-arrow {
+      padding: 0.35rem;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      font-weight: 650;
+      text-align: center;
+    }
+
+    .inline-flow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.25rem;
+    }
+
+    .inline-flow .diagram-node {
+      flex: 1 1 0;
+      min-width: 0;
+    }
+
+    .branch-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.75rem;
+      margin: 0.75rem 0;
+    }
+
+    .branch {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      padding: 0.75rem;
+      text-align: center;
+    }
+
+    .branch span,
+    .branch strong {
+      display: block;
+    }
+
+    .branch span {
+      color: var(--text-muted);
+      font-size: 0.78rem;
+    }
+
+    .context-stack {
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .architecture-map {
+      display: grid;
+      gap: 0.55rem;
+    }
+
+    .split-layer {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.55rem;
+      border: 0;
+      background: transparent;
+      padding: 0;
+    }
+
+    .split-layer > span {
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      padding: 0.75rem;
+      text-align: center;
+    }
+
+    .table-wrap {
+      max-width: 100%;
+      margin: 1.25rem 0 1.75rem;
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+      -webkit-overflow-scrolling: touch;
+    }
+
+    table {
+      width: 100%;
+      min-width: 42rem;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      line-height: 1.55;
+    }
+
+    caption {
+      padding: 0.8rem 1rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-align: left;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 0.85rem;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f1f5f9;
+      color: #334155;
+      font-size: 0.78rem;
+      letter-spacing: 0.02em;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    tbody tr:nth-child(even) {
+      background: #fbfcfd;
+    }
+
+    td code {
+      word-break: break-all;
+    }
+
+    .glossary-table-wrap table,
+    .roadmap-table-wrap table {
+      min-width: 56rem;
+    }
+
+    details {
+      margin: 1.5rem 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+    }
+
+    summary {
+      min-height: 44px;
+      padding: 0.8rem 1rem;
+      cursor: pointer;
+      color: #334155;
+      font-weight: 700;
+      list-style-position: inside;
+    }
+
+    summary:hover {
+      background: #f8fafc;
+    }
+
+    details > :not(summary) {
+      margin-right: 1rem;
+      margin-left: 1rem;
+    }
+
+    details > :last-child {
+      margin-bottom: 1rem;
+    }
+
+    .check-list {
+      padding-left: 0;
+      list-style: none;
+    }
+
+    .check-list li {
+      position: relative;
+      padding-left: 1.55rem;
+    }
+
+    .check-list li::before {
+      position: absolute;
+      left: 0;
+      color: var(--accent-dark);
+      content: "✓";
+      font-weight: 800;
+    }
+
+    .step-list > li {
+      padding-left: 0.2rem;
+    }
+
+    .numbered-cards {
+      display: grid;
+      gap: 0.55rem;
+      padding-left: 1.8rem;
+    }
+
+    .numbered-cards li {
+      border-bottom: 1px solid var(--border);
+      padding: 0.5rem 0 0.75rem 0.2rem;
+    }
+
+    .priority-chain {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface-blue);
+      padding: 1rem;
+      color: #1e3a5f;
+      font-weight: 650;
+      line-height: 1.8;
+    }
+
+    .small-note {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    mark {
+      border-radius: 0.18rem;
+      background: #fde68a;
+      color: #422006;
+      padding: 0 0.08em;
+    }
+
+    .document-footer {
+      padding: 3rem 0 1rem;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+
+    #back-to-top {
+      position: fixed;
+      z-index: var(--z-floating);
+      right: 1.25rem;
+      bottom: 1.25rem;
+      min-width: 44px;
+      box-shadow: var(--shadow-md);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(0.5rem);
+    }
+
+    #back-to-top.is-visible {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 1100px) {
+      :root {
+        --sidebar-width: 16.5rem;
+      }
+
+      #main-content {
+        padding-right: 2.25rem;
+        padding-left: 2.25rem;
+      }
+
+      .three-column {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 900px) {
+      html {
+        scroll-padding-top: 5rem;
+      }
+
+      .mobile-header {
+        position: sticky;
+        z-index: var(--z-mobile-header);
+        top: 0;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 0.5rem;
+        align-items: center;
+        min-height: 60px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.97);
+        padding: 0.5rem 0.75rem;
+        box-shadow: var(--shadow-sm);
+      }
+
+      .mobile-title {
+        overflow: hidden;
+        color: #334155;
+        font-size: 0.9rem;
+        font-weight: 700;
+        text-align: center;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      #mobile-nav-toggle,
+      #mobile-print {
+        min-width: 52px;
+        padding-inline: 0.65rem;
+        font-size: 0.82rem;
+      }
+
+      #sidebar {
+        width: min(88vw, 21rem);
+        transform: translateX(-105%);
+        box-shadow: var(--shadow-md);
+        transition: transform 220ms ease-out;
+      }
+
+      body.nav-open #sidebar {
+        transform: translateX(0);
+      }
+
+      #nav-scrim {
+        position: fixed;
+        z-index: var(--z-scrim);
+        inset: 0;
+        display: block;
+        background: rgba(15, 23, 42, 0.52);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 180ms ease;
+      }
+
+      body.nav-open #nav-scrim {
+        opacity: 1;
+        pointer-events: auto;
+      }
+
+      #mobile-nav-close {
+        position: absolute;
+        top: -0.35rem;
+        right: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 52px;
+        font-size: 0.78rem;
+      }
+
+      .toc a {
+        min-height: 44px;
+      }
+
+      #main-content {
+        width: 100%;
+        margin-left: 0;
+        padding: 1.25rem clamp(1rem, 4vw, 2rem) 6rem;
+      }
+
+      .chapter {
+        scroll-margin-top: 5rem;
+      }
+
+      h1 {
+        font-size: clamp(2.2rem, 10vw, 3.6rem);
+      }
+
+      .inline-flow {
+        flex-direction: column;
+      }
+
+      .inline-flow .diagram-node {
+        width: 100%;
+      }
+
+      .inline-flow .diagram-arrow {
+        transform: rotate(90deg);
+      }
+    }
+
+    @media (max-width: 620px) {
+      .meta-grid,
+      .two-column,
+      .four-column,
+      .role-split,
+      .branch-row,
+      .split-layer {
+        grid-template-columns: 1fr;
+      }
+
+      .hero {
+        padding-top: 1rem;
+      }
+
+      .chapter,
+      .deep-chapter,
+      .appendix {
+        padding-bottom: 4rem;
+      }
+
+      .section-divider {
+        padding-top: 3rem;
+      }
+
+      .source-note {
+        grid-template-columns: 1fr;
+      }
+
+      pre {
+        border-radius: var(--radius-sm);
+        margin-right: -0.25rem;
+        margin-left: -0.25rem;
+        padding: 0.9rem;
+        font-size: 0.76rem;
+      }
+
+      #back-to-top {
+        right: 0.75rem;
+        bottom: 0.75rem;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+      }
+    }
+
+    @media print {
+      @page {
+        margin: 16mm 14mm;
+      }
+
+      :root {
+        --text: #000000;
+        --text-muted: #333333;
+        --border: #b8b8b8;
+      }
+
+      html,
+      body {
+        min-width: 0;
+        background: #ffffff;
+        color: #000000;
+        font-size: 10.5pt;
+      }
+
+      #reading-progress,
+      .mobile-header,
+      #nav-scrim,
+      #sidebar,
+      #back-to-top,
+      .skip-link {
+        display: none !important;
+      }
+
+      #main-content {
+        width: 100%;
+        margin: 0;
+        padding: 0;
+      }
+
+      .chapter,
+      .document-footer {
+        max-width: none;
+      }
+
+      .chapter {
+        padding: 8mm 0;
+        border-bottom-color: #b8b8b8;
+        break-before: auto;
+      }
+
+      .chapter:not(.hero),
+      .section-divider {
+        break-before: page;
+      }
+
+      h1 {
+        max-width: none;
+        font-size: 28pt;
+      }
+
+      h2 {
+        font-size: 20pt;
+      }
+
+      h3 {
+        font-size: 13pt;
+      }
+
+      a {
+        color: #000000;
+        text-decoration: none;
+      }
+
+      .callout,
+      .checkpoint,
+      .next-action-panel,
+      .diagram,
+      .architecture-map,
+      .context-stack,
+      .table-wrap,
+      details {
+        box-shadow: none;
+        break-inside: avoid;
+      }
+
+      .table-wrap {
+        overflow: visible;
+      }
+
+      table,
+      .glossary-table-wrap table,
+      .roadmap-table-wrap table {
+        min-width: 0;
+        font-size: 8.5pt;
+      }
+
+      thead {
+        display: table-header-group;
+      }
+
+      tr,
+      pre,
+      blockquote {
+        break-inside: avoid;
+      }
+
+      pre {
+        border-color: #555555;
+        background: #f3f3f3;
+        color: #000000;
+        white-space: pre-wrap;
+      }
+
+      details:not([open]) > :not(summary) {
+        display: block !important;
+      }
+
+      details > summary {
+        list-style: none;
+      }
+
+      .source-badge {
+        border-color: #555555;
+        background: #ffffff !important;
+        color: #000000 !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">跳到正文</a>
+  <div id="reading-progress" aria-hidden="true"></div>
+
+  <header class="mobile-header">
+    <button id="mobile-nav-toggle" type="button" aria-controls="sidebar" aria-expanded="false" aria-label="打开章节目录">
+      <span aria-hidden="true">目录</span>
+    </button>
+    <span class="mobile-title">Local Agent Runtime 手册</span>
+    <button id="mobile-print" type="button" aria-label="打印本手册">打印</button>
+  </header>
+
+  <div id="nav-scrim" aria-hidden="true"></div>
+  <aside id="sidebar" aria-label="章节导航">
+    <div class="sidebar-head">
+      <p class="eyebrow">PRODUCT WORKBOOK</p>
+      <p class="sidebar-title">Local Agent Runtime</p>
+      <button id="mobile-nav-close" type="button" aria-label="关闭章节目录">关闭</button>
+    </div>
+
+    <label class="search-label" for="handbook-search">全文搜索</label>
+    <div class="search-row">
+      <input id="handbook-search" type="search" autocomplete="off" placeholder="搜索概念、章节或来源">
+      <button id="clear-search" type="button">清除</button>
+    </div>
+    <p id="search-status" role="status" aria-live="polite">输入关键词即可筛选全文。</p>
+
+    <nav class="toc" aria-label="手册目录">
+      <p class="toc-group">60–90 分钟主线</p>
+      <a href="#start" aria-current="location">00 使用说明与学习地图</a>
+      <a href="#project">01 项目究竟做什么</a>
+      <a href="#model-to-agent">02 从大模型到 Agent</a>
+      <a href="#context">03 Context</a>
+      <a href="#tool">04 Tool</a>
+      <a href="#agent-loop">05 Agent Loop</a>
+      <a href="#runtime">06 Runtime / Harness</a>
+      <a href="#first-slice">07 第一步做什么</a>
+      <a href="#guardrails">08 防跑偏检查表</a>
+
+      <p class="toc-group">2–3 小时深挖</p>
+      <a href="#deep-dives">深挖导读</a>
+      <a href="#session-memory">10 Session、Context、Memory</a>
+      <a href="#context-compression">11 上下文压缩</a>
+      <a href="#long-term-memory">12 长期记忆与知识库</a>
+      <a href="#tool-runtime">13 Tool Runtime 与权限</a>
+      <a href="#completion-evaluation">14 完成条件与评测</a>
+      <a href="#provider-models">15 Provider 与模型能力</a>
+      <a href="#extensions">16 MCP / Skill / RAG / Cron</a>
+      <a href="#product-enterprise">17 产品形态与企业交付</a>
+      <a href="#roadmap">18 Phase 0–7 / M1–M5</a>
+      <a href="#collaboration-learning">19 协作与学习方式</a>
+
+      <p class="toc-group">附录与证据</p>
+      <a href="#appendices">附录导读</a>
+      <a href="#glossary">A 术语表</a>
+      <a href="#asr-corrections">B 转写纠错</a>
+      <a href="#example-index">C 例子索引</a>
+      <a href="#decision-ledger">D 信息分类账</a>
+      <a href="#coverage-matrix">E 覆盖矩阵</a>
+      <a href="#source-snapshot">F 源文件快照</a>
+    </nav>
+
+    <div class="sidebar-foot">
+      <button id="print-handbook" type="button">打印 / 导出 PDF</button>
+      <a href="#start">返回开头</a>
+    </div>
+  </aside>
+
+  <main id="main-content" tabindex="-1">
+    <section id="start" class="chapter hero" data-searchable data-nav-target>
+      <p class="kicker">LOCAL AGENT RUNTIME · 学习与开发手册</p>
+      <h1>先把 Agent 的骨架看懂，再写第一行项目代码</h1>
+      <p class="lead">这不是一份泛泛的 Agent 科普，而是把当前项目设计方案与两次会议逐字记录重新编排成一条能执行的学习路径。你读完主线，应当知道项目为什么做、核心怎样运行、第一步验证什么，以及哪些诱人的功能现在不要做。</p>
+
+      <div class="meta-grid" aria-label="手册阅读信息">
+        <div><strong>主线</strong><span>60–90 分钟主线</span></div>
+        <div><strong>完整阅读</strong><span>约 2–3 小时</span></div>
+        <div><strong>唯一事实来源</strong><span>1 份设计文档 + 2 份会议记录</span></div>
+        <div><strong>最终落点</strong><span>单 Provider + 单 read_file 的真实 Loop</span></div>
+      </div>
+
+      <div class="source-strip" aria-label="来源标签说明">
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
+        <span class="source-badge source-teaching" data-source="教学解释">教学解释</span>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">先记住这一句</p>
+        <p><strong>这个项目要证明的不是“我做了一个聊天页面”，而是“我做了一个边界清晰、可运行、可恢复、可调试、可扩展的本地 Agent Runtime”。</strong></p>
+      </div>
+
+      <h2>怎么读，摩擦最小</h2>
+      <ol class="reading-path">
+        <li><strong>今天只想开工：</strong>依次读第 01–08 章，最后照“第一垂直切片验收单”执行。</li>
+        <li><strong>想建立完整认知：</strong>主线后继续读第 10–19 章，再用术语表和来源矩阵复核。</li>
+        <li><strong>遇到术语不确定：</strong>先查附录 A；看到会议转写中的怪词，查附录 B，不要自行脑补。</li>
+        <li><strong>担心遗漏原话：</strong>附录 E 将设计文档十大主题、会议 01 七个时段、会议 02 六个时段逐一映射。</li>
+      </ol>
+
+      <div class="two-column">
+        <div>
+          <h3>来源标签怎么理解</h3>
+          <ul>
+            <li><strong>设计文档：</strong>当前项目正式边界、模块、路线与验收。</li>
+            <li><strong>会议 01 / 02：</strong>工程师解释、用户问题与偏好、讨论中的例子及行动建议。</li>
+            <li><strong>教学解释：</strong>为了学习而新增的比喻、图、伪代码、自检题或阶段归纳。</li>
+          </ul>
+        </div>
+        <div>
+          <h3>保真规则</h3>
+          <ul>
+            <li>调整顺序以便学习，但不改变意思。</li>
+            <li>不同口径并列，不偷偷合并成一个“更顺”的版本。</li>
+            <li>会议中的价格、厂商与行业判断只记为当时观点，不当作今日事实。</li>
+            <li>寒暄、设备操作、口吃重复不进主线，但在覆盖矩阵说明为非实质内容。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="source-note">
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>项目设计方案“文档定位、项目重点、1.2 项目目标”；本手册设计说明第 1–4 节。</p>
+      </div>
+    </section>
+
+    <section id="project" class="chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">01 · 约 8 分钟</p>
+        <h2>这个项目究竟要做什么</h2>
+        <p class="chapter-question">本章问题：为什么“会聊天”远远不等于做出了这个项目？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p><strong>Local Agent Runtime 是模型外部的一套运行系统：</strong>它让模型能在个人电脑上持续接收任务、选择工具、执行真实动作、保存过程、处理权限与错误，直到形成可检查的回答或 Artifact。</p>
+      </div>
+
+      <h3>项目的正式定位</h3>
+      <p>设计文档把它定位为“个人本地智能助手框架”，主要运行在个人电脑。用户可以通过 CLI 或桌面界面交流；Agent 可以调用本地或外部工具，管理连续会话，并通过 MCP、Skill、Cron 扩展能力。它同时是一件求职作品：不仅能演示，还要让面试官看见工程闭环、边界、安全与演进路径。</p>
+
+      <div class="diagram" role="img" aria-label="界面层、运行时与能力扩展的三层关系图">
+        <div class="diagram-node"><strong>交互形态</strong><span>CLI / 桌面 UI / API / 业务表单</span></div>
+        <div class="diagram-arrow" aria-hidden="true">↓</div>
+        <div class="diagram-node diagram-core"><strong>Local Agent Runtime</strong><span>Loop / State / Context / Tool Runtime / Security / Events</span></div>
+        <div class="diagram-arrow" aria-hidden="true">↓</div>
+        <div class="diagram-node"><strong>模型与扩展</strong><span>Provider / Built-in Tools / MCP / Skill / Cron</span></div>
+      </div>
+
+      <h3>贯穿项目的演示场景</h3>
+      <ol>
+        <li>用户要求 Agent 分析一个本地项目。</li>
+        <li>Agent 查看目录和文件，必要时执行命令。</li>
+        <li>经历多轮 Tool Call 后，生成报告或修改建议。</li>
+        <li>会话、模型调用、工具轨迹与产物被保存。</li>
+        <li>程序重启后，用户能恢复并继续任务。</li>
+        <li>后续用 Skill 增加工作流，用 MCP 接第三方工具，用 Cron 定期检查。</li>
+      </ol>
+
+      <h3>内核和外壳不是一回事</h3>
+      <p>会议 01 反复强调：对话框、CLI、工作流节点、传统表单都只是上层产品形态；真正决定智能效果的是底层内核能否基于可信数据完成有效分析。企业交付时，要先理解行业、业务场景、现有生态和工作流程，再决定把能力包装成什么样。不能因为市面上常见对话入口，就误以为 Agent 产品必然长成聊天窗口。</p>
+
+      <div class="contrast-block">
+        <div>
+          <p class="mini-label">设计文档的首版建议</p>
+          <p>Interaction Layer 第一版建议只做 CLI，核心稳定后再增加桌面界面。</p>
+        </div>
+        <div>
+          <p class="mini-label">会议中明确出现的用户偏好</p>
+          <p><strong>用户不偏好 CLI</strong>；会议也接受内核完成后包一层简单页面。</p>
+        </div>
+        <div>
+          <p class="mini-label">教学解释：怎样不让差异阻塞开工</p>
+          <p>第一垂直切片先用最薄的脚本、测试或调试入口验证内核；是否补 CLI 或简单页面，是后续演示选择，不应抢在 Loop 前面。</p>
+        </div>
+      </div>
+
+      <h3>当前项目必须能展示的能力</h3>
+      <ul class="check-list">
+        <li>完整 Agent Loop，而非单轮聊天封装。</li>
+        <li>统一 Tool Runtime，让模型安全操作外部环境。</li>
+        <li>Provider 层屏蔽云端或本地模型差异。</li>
+        <li>Session、Context、运行状态和长期记忆管理。</li>
+        <li>MCP、Skill、Cron 的统一扩展与触发机制。</li>
+        <li>模型调用、工具执行、异常、Token 和成本可观测。</li>
+        <li>本地文件、Shell、网络和删除操作具有权限边界。</li>
+      </ul>
+
+      <div class="callout warning">
+        <p class="callout-label">常见误区</p>
+        <p>先做一个漂亮聊天页面，再把 API 接进去。这只能证明“界面能请求模型”，不能证明工具闭环、状态、安全、恢复和可观测性成立。</p>
+      </div>
+
+      <div class="checkpoint">
+        <h3>开发检查点</h3>
+        <p>任何新需求先问：它属于 Runtime 核心、扩展层，还是交互外壳？如果只是外壳，是否会阻塞当前最小闭环？</p>
+      </div>
+
+      <details open class="self-check">
+        <summary>自检：你能回答吗？</summary>
+        <ol>
+          <li>这个项目与“套一个聊天页面”的根本区别是什么？</li>
+          <li>为什么企业交付不能先假设产品一定是对话框？</li>
+          <li>用户不偏好 CLI，会不会改变 Runtime 的核心验收？为什么？</li>
+        </ol>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>定位与目标：第 1 节；核心与扩展：第 2 节；Interaction Layer：5.1。</p>
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:01–00:10：三周估计、产品形态、企业交付、可信数据、事件轨迹与用户不偏好 CLI。</p>
+      </div>
+    </section>
+
+    <section id="model-to-agent" class="chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">02 · 约 8 分钟</p>
+        <h2>从大模型到 Agent：多出来的到底是什么</h2>
+        <p class="chapter-question">本章问题：为什么一个能生成文本的模型，还需要 Runtime 才能成为可工作的 Agent？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p>模型本体接收输入、生成输出；Agent 系统在它外面补上实时信息、状态连续性和真实行动能力。</p>
+      </div>
+
+      <h3>先把模型看成一个“输入 → 输出”的函数</h3>
+      <p>会议 01 从生成式 AI 的本质讲起：模型基于训练阶段学到的模式，对输入生成文本或其他多模态输出。对工程入门来说，先把它理解为一次 API 调用最有用——本次请求给它什么，它本次就看见什么；它不会因为你上一次调用过，就天然记住上一次内容。</p>
+
+      <div class="diagram inline-flow" role="img" aria-label="模型单次输入输出示意">
+        <div class="diagram-node">Input</div>
+        <div class="diagram-arrow" aria-hidden="true">→</div>
+        <div class="diagram-node diagram-core">Model</div>
+        <div class="diagram-arrow" aria-hidden="true">→</div>
+        <div class="diagram-node">Output</div>
+      </div>
+
+      <h3>会议归纳的三个局限</h3>
+      <div class="three-column">
+        <article>
+          <p class="mini-label">01 数据不实时</p>
+          <p>训练数据有时间边界。需要 Web Search 或业务数据工具，把新信息取回来。</p>
+        </article>
+        <article>
+          <p class="mini-label">02 没有天然状态与记忆</p>
+          <p>独立 API 请求互不相识。应用必须把历史消息重新放入下一次 Context。</p>
+        </article>
+        <article>
+          <p class="mini-label">03 不能亲自做事</p>
+          <p>模型只能生成输出；真正读文件、运行命令或写报告的是 Runtime 中的工具执行代码。</p>
+        </article>
+      </div>
+
+      <h3>Agent 不是一个更神秘的模型</h3>
+      <p>在本项目中，Agent 描述的是模型、提示词、工具和策略的组合；一次具体任务叫 AgentRun。模型仍然只输出文本或 ToolCall 参数。Runtime 解析输出、执行工具、把结果写回，再询问模型下一步。所谓“自主”，来自这个受控循环，不是模型突然拥有了电脑权限。</p>
+
+      <div class="callout teaching">
+        <span class="source-badge source-teaching" data-source="教学解释">教学解释</span>
+        <p><strong>类比：</strong>模型像只负责判断与写指令的“大脑”，Tool 是可调用的动作，Context 是桌面上摊开的全部材料，Runtime 是按规则递送材料、执行动作、记录过程并踩刹车的运行系统。类比只帮助分工，不意味着模型真的拥有人的意识。</p>
+      </div>
+
+      <div class="callout warning">
+        <p class="callout-label">常见误区</p>
+        <p>把“模型能力强”直接等同于“Agent 工程可靠”。模型会影响判断质量，但工具参数校验、权限、重试、状态、停止条件和 Trace 都是外部工程责任。</p>
+      </div>
+
+      <div class="checkpoint">
+        <h3>开发检查点</h3>
+        <p>看到任何“Agent 能做 X”的需求，都拆成三问：模型需要看见什么？它要请求哪个原子动作？Runtime 怎样安全执行并把证据送回去？</p>
+      </div>
+
+      <details open class="self-check">
+        <summary>自检：模型本体没有哪三样东西？</summary>
+        <ol>
+          <li>为什么第二次 API 调用不会天然知道第一次聊了什么？</li>
+          <li>Web Search 解决的是哪一类局限？</li>
+          <li>本地文件真正由谁读取：模型还是工具代码？</li>
+        </ol>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:11–00:17：生成式 AI、单次输入输出、数据不实时、无状态/记忆、不能实际行动，以及消息拼接。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>第 4 节核心对象；5.2 Agent Core。</p>
+      </div>
+    </section>
+
+    <section id="context" class="chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">03 · 约 9 分钟</p>
+        <h2>Context：模型这一轮实际看见的全部材料</h2>
+        <p class="chapter-question">本章问题：无状态 API 为什么能表现得像“记得前文”？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p><strong>不是模型在后台偷偷记住你，而是应用在每轮调用前重新组装 Context。</strong></p>
+      </div>
+
+      <h3>从单个 Input 扩展成 Context</h3>
+      <p>会议 01 先用两轮对话解释：第一轮问某人的新闻，第二轮只问“他今年多大”，如果第二次只发送这一句，模型不知道“他”是谁；若把第一轮 User、Assistant 和第二轮 User 依序放进 Message List，模型就能从本次请求里解析指代。</p>
+
+      <div class="context-stack" role="img" aria-label="Context 的组成结构">
+        <div><strong>System Prompt</strong><span>身份、目标、规则</span></div>
+        <div><strong>Agent 配置与 Skill 指令</strong><span>当前运行方式</span></div>
+        <div><strong>会话摘要与长期记忆</strong><span>被筛选、压缩后重新注入</span></div>
+        <div><strong>Message List</strong><span>User / Assistant / Tool 的近期历史</span></div>
+        <div><strong>当前 Run 状态</strong><span>目标、进度、待处理事项</span></div>
+        <div><strong>Tool List</strong><span>名称、描述、参数 Schema</span></div>
+      </div>
+
+      <h3>每一部分回答一个不同问题</h3>
+      <div class="table-wrap">
+        <table>
+          <caption>Context 组成与作用</caption>
+          <thead><tr><th>组成</th><th>回答的问题</th><th>漏掉后的表现</th></tr></thead>
+          <tbody>
+            <tr><td>System Prompt</td><td>“你是谁、要遵守什么”</td><td>身份、边界和输出行为漂移</td></tr>
+            <tr><td>Message List</td><td>“刚才发生了什么”</td><td>多轮对话断裂</td></tr>
+            <tr><td>Memory / Summary</td><td>“哪些旧信息仍值得带上”</td><td>跨会话偏好或长期任务丢失</td></tr>
+            <tr><td>Run State</td><td>“当前任务做到哪里”</td><td>恢复后重复或跳步</td></tr>
+            <tr><td>Tool List</td><td>“可以做什么、参数怎么写”</td><td>模型不知道可用动作，或参数错误</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Context 不是数据库，也不是 Session</h3>
+      <p>Context 是<strong>某一轮请求实际送给模型的集合</strong>；Session 是保存连续交互、运行、工具调用、Artifact 和摘要的容器；Memory 是被保存、加工、检索，并在需要时重新放进 Context 的信息。数据库负责持久化这些对象，但数据库里的所有内容不会每轮全部塞给模型。</p>
+
+      <h3>成本为什么会增长</h3>
+      <p>会议 01 指出，每次调用若都追加完整历史，Context 会不断累积，模型处理量与成本随之增大，最终触及上下文窗口限制。后续的裁剪、摘要和压缩，不是“可有可无的智能增强”，而是长会话迟早要面对的工程问题；但它不是第一垂直切片的前置条件。</p>
+
+      <div class="callout warning">
+        <p class="callout-label">常见误区</p>
+        <p>把“历史已写入 SQLite”当成“模型已经记住”。只有被 Context Builder 选中并放进本轮请求的信息，模型这一轮才能看见。</p>
+      </div>
+
+      <div class="checkpoint">
+        <h3>开发检查点</h3>
+        <p>调试模型行为时，先保存并查看本轮 Context 的构成；不要只盯最终答案，也不要把数据库记录与模型可见内容混为一谈。</p>
+      </div>
+
+      <details open class="self-check">
+        <summary>自检：能否画出本轮模型请求？</summary>
+        <ol>
+          <li>Message List 如何制造短期连续性？</li>
+          <li>Tool List 为什么属于 Context，而工具实现本身不属于？</li>
+          <li>Session 中有 100 条历史，是否代表模型本轮看见 100 条？</li>
+        </ol>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:15–00:28：API 无状态、消息拼接、System Prompt、Message List、Tool List、模型 API 与应用层/构建层。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>5.5 Session、Context 与 Memory；Context Builder 公式。</p>
+      </div>
+    </section>
+
+    <section id="tool" class="chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">04 · 约 9 分钟</p>
+        <h2>Tool：模型能请求、Runtime 能执行的原子动作</h2>
+        <p class="chapter-question">本章问题：模型怎样知道工具存在，又怎样“调用”它？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p>工具由可执行实现和可给模型阅读的定义组成；模型只生成 ToolCall，Runtime 才负责校验、授权与执行。</p>
+      </div>
+
+      <h3>一个工具至少要说清五件事</h3>
+      <pre><code>Tool
+├── name             # 稳定名称，例如 read_file
+├── description      # 什么时候使用、能做什么
+├── inputSchema      # 参数结构与约束
+├── permissionLevel  # 权限等级
+└── execute(...)     # 真正执行的代码</code></pre>
+
+      <p>会议用“天气搜索、网络搜索、读取文件、列出目录、创建/写入文件”解释工具：在计算机世界里，这些动作都可以封装成函数或脚本。模型看到的是名称、描述和参数要求；它根据任务生成调用参数。它不会直接跳进函数里操作电脑。</p>
+
+      <h3><code>read_file</code> 最小例子</h3>
+      <div class="code-with-caption">
+        <p>给模型看的定义（示意，不绑定具体语言）：</p>
+        <pre><code>{
+  "name": "read_file",
+  "description": "需要读取允许工作区内的文本文件时使用",
+  "inputSchema": {
+    "path": "string",
+    "startLine": "integer | optional",
+    "maxLines": "integer | optional"
+  }
+}</code></pre>
+      </div>
+
+      <p>模型若判断需要文件内容，输出的是类似“调用 <code>read_file</code>，参数为某个 path”的结构化请求。Runtime 必须验证路径是否在 Workspace、参数是否合法、文件是否可读，再执行函数，返回内容或标准化错误。</p>
+
+      <div class="role-split">
+        <article>
+          <h3>模型负责</h3>
+          <ul><li>判断是否需要工具</li><li>选择工具</li><li>生成参数</li><li>读取结果后决定下一步</li></ul>
+        </article>
+        <article>
+          <h3>Runtime 负责</h3>
+          <ul><li>校验 ToolCall</li><li>检查权限</li><li>执行与超时</li><li>记录 Trace</li><li>把结果写回 Context</li></ul>
+        </article>
+      </div>
+
+      <h3>描述与 Schema 为什么影响效果</h3>
+      <p>会议 01 指出，模型要调得准，必须知道三件事：有哪些工具、何时使用、具体怎样传参。描述含糊会导致选错工具；参数 Schema 不清会导致调用失败。模型自身是否具备可靠 Tool Calling 能力也会影响参数生成，但 Runtime 仍不能因此省略校验。</p>
+
+      <div class="callout warning">
+        <p class="callout-label">常见误区</p>
+        <p>“模型返回了工具参数”不等于“工具执行成功”。ToolCall 是请求；真实结果可能是成功内容，也可能是路径越界、文件不存在、参数错误、超时或被用户拒绝。</p>
+      </div>
+
+      <div class="checkpoint">
+        <h3>开发检查点</h3>
+        <p>第一个工具只做读取允许目录中的文本文件；先把成功、文件不存在、路径越界、内容过长四种结果结构定义清楚，不要一开始就接 Shell、网络与删除。</p>
+      </div>
+
+      <details open class="self-check">
+        <summary>自检：谁在做什么？</summary>
+        <ol>
+          <li>模型输出 <code>read_file</code> 参数后，下一步由谁接管？</li>
+          <li>为什么工具描述和 Schema 都要进入 Context？</li>
+          <li>为什么一个函数存在，不代表 Agent 就能安全使用它？</li>
+        </ol>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:24–00:35：工具作为实现函数、Tool List、read_file 的 path/行数示例、Function Calling 与参数生成。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>5.4 Tool Runtime；2.3 本地能力默认受限。</p>
+      </div>
+    </section>
+
+    <section id="agent-loop" class="chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">05 · 约 12 分钟</p>
+        <h2>Agent Loop：判断、行动、观察，再判断</h2>
+        <p class="chapter-question">本章问题：一次 ToolCall 为什么还不算 Agent？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p>真正的闭环是：模型决定直接回答或请求工具；Runtime 执行；<strong>工具结果回填</strong>到消息历史；模型基于新证据再次决定，直到满足停止条件。</p>
+      </div>
+
+      <div class="diagram loop-diagram" role="img" aria-label="Agent Loop 从模型判断到工具结果回填的循环">
+        <div class="diagram-node diagram-core">Model：判断</div>
+        <div class="branch-row">
+          <div class="branch"><span>Final Response</span><strong>保存并结束</strong></div>
+          <div class="branch"><span>ToolCall</span><strong>校验 → 权限 → 执行</strong></div>
+        </div>
+        <div class="diagram-arrow" aria-hidden="true">工具结果 / 错误 ↓</div>
+        <div class="diagram-node">Observation：写回 Message List</div>
+        <div class="diagram-arrow loop-back" aria-hidden="true">↖ 再次组装 Context 并调用模型</div>
+      </div>
+
+      <h3>用“写一份文档”走完整个例子</h3>
+      <ol class="step-list">
+        <li>用户提出写文档的目标。</li>
+        <li>模型发现缺资料，先请求列出目录或读取文件。</li>
+        <li>Runtime 执行工具，把目录或文件内容作为 Tool Result 追加回来。</li>
+        <li>模型发现读错文件，可以继续请求另一个文件。</li>
+        <li>证据足够后，模型请求写文件，Runtime 执行并回填结果。</li>
+        <li>模型看到目标和全部结果，判断是否可以给最终回答。</li>
+      </ol>
+
+      <h3>第一版可采用的伪代码</h3>
+      <pre><code>function runAgent(task, session, cancellationSignal):
+  run = createAgentRun(task, session)
+
+  for round from 1 to maxRounds:
+    if cancellationSignal.cancelled:
+      return finish(run, "cancelled")
+
+    context = buildContext(session, run, availableTools)
+    modelResult = provider.chat(context, timeout=modelTimeout)
+
+    if modelResult.isFinalResponse:
+      if completionPolicy.requiresValidation(run):
+        appendValidationRequest(session, run)
+        continue
+      return finish(run, "completed", modelResult.text)
+
+    if modelResult.isToolCall:
+      checkedCall = validateSchemaAndPermission(modelResult.toolCall)
+      toolResult = toolRuntime.execute(checkedCall, cancellationSignal)
+      appendToolCallAndResult(session, run, checkedCall, toolResult)
+      continue
+
+    if modelResult.isError:
+      if retryPolicy.canRetry(modelResult):
+        continue
+      return finish(run, "failed", modelResult.error)
+
+  return finish(run, "max_rounds_reached")</code></pre>
+
+      <p>伪代码明确写出四个防失控点：<strong>最大轮数</strong>、模型/工具超时、用户<strong>取消</strong>、以及完成前验证。设计文档还要求处理 Approval Required、重试、降级、暂停与恢复；第一垂直切片可以先保留清晰接口与状态，不必一次实现所有策略。</p>
+
+      <h3>停止不是一句“我做好了”</h3>
+      <p>会议 01 的关键追问是：模型声称任务完成，但可能没有按照项目文档检验，甚至“骗我”，怎么办？工程师的回答分两层：第一，模型能力会影响判断；第二，更可控的是 Context 和 Runtime。编码场景可以在模型准备结束时强制插入检查：重新读文件、运行代码、渲染页面或截图，再把验证结果送回主 Loop，让模型基于证据复判。</p>
+
+      <div class="callout warning">
+        <p class="callout-label">常见误区</p>
+        <p>把模型第一次返回的“已经完成”直接映射成 <code>run.completed</code>。若任务存在可执行验收，结束条件应依赖证据，而不是只依赖自然语言自报。</p>
+      </div>
+
+      <div class="checkpoint">
+        <h3>开发检查点</h3>
+        <p>最小 Loop 的日志至少能还原：每轮输入构成、模型选择、ToolCall 参数、执行结果、错误、轮数、停止原因。否则出错时只能猜。</p>
+      </div>
+
+      <details open class="self-check">
+        <summary>自检：为什么结果必须回填？</summary>
+        <ol>
+          <li>如果执行完 <code>read_file</code> 却不把内容放回消息历史，模型下一轮知道了什么？</li>
+          <li>Final Response 与 ToolCall 是哪一层作出的分叉？</li>
+          <li>最大轮数、取消和完成验证分别防什么风险？</li>
+          <li>Tool 执行报错后，为什么错误本身也应作为 Observation 回填？</li>
+        </ol>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:28–00:47：Tool Calling 分叉、结果追加、连续调用、完成判断、编码验证注入、思考—行动—观察循环与 RAG 回归工具。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>5.2 标准 Agent Loop、核心能力与时序图；10.1 Loop 风险测试。</p>
+      </div>
+    </section>
+
+    <section id="runtime" class="chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">06 · 约 10 分钟</p>
+        <h2>Runtime / Harness：让一次 AgentRun 真正跑起来</h2>
+        <p class="chapter-question">本章问题：Loop 之外，哪些工程机制是一运行就离不开的？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p>Runtime 是承载 AgentRun 的核心工程机制；Harness 是会议中描述模型外部框架/脚手架的宽泛用词，本项目正式名称统一为 Local Agent Runtime。</p>
+      </div>
+
+      <p>会议 02 明确提醒：Runtime 的定义在不同人之间不完全一致。工程师给出的个人定义是“在一次 Agent 运行过程中一定需要、少一个就跑不起来的模块”。设计文档把这个概念具体化为 Agent Core、状态与策略、Context、Provider、Tool Runtime，再由 Session、Security、Observability 等横向能力支撑。</p>
+
+      <div class="architecture-map" role="img" aria-label="Local Agent Runtime 分层架构">
+        <div class="layer"><strong>接入层</strong><span>CLI / Desktop UI / API / Trigger</span></div>
+        <div class="layer core-layer"><strong>Agent Runtime</strong><span>Agent Loop · Run State · Stop/Retry/Approval Policy · Context Builder</span></div>
+        <div class="layer split-layer">
+          <span><strong>Provider Layer</strong><small>模型协议与能力</small></span>
+          <span><strong>Tool Runtime</strong><small>注册、权限、执行</small></span>
+        </div>
+        <div class="layer"><strong>数据与状态</strong><span>Session / Message / AgentRun / Memory / Artifact / SQLite</span></div>
+        <div class="layer"><strong>扩展层</strong><span>Built-in Tools / MCP / Skills / Cron / Hooks</span></div>
+        <div class="cross-cut"><strong>横向约束与观测</strong><span>Configuration / Storage / Security / Event Bus / Observability</span></div>
+      </div>
+
+      <h3>关键对象不要混叫</h3>
+      <div class="table-wrap">
+        <table>
+          <caption>核心对象在一次任务中的分工</caption>
+          <thead><tr><th>对象</th><th>它是什么</th><th>不是什​​么</th></tr></thead>
+          <tbody>
+            <tr><td>Agent</td><td>模型、提示词、工具与策略的配置主体</td><td>不是某一次具体运行</td></tr>
+            <tr><td>AgentRun</td><td>可完成、失败、取消、暂停或恢复的一次任务</td><td>不是整段会话本身</td></tr>
+            <tr><td>RunContext</td><td>本次运行所需会话、配置、权限与状态</td><td>不等于只发给模型的文本</td></tr>
+            <tr><td>Event / Trace</td><td>状态变化与完整执行链路的结构化记录</td><td>不只是终端里的一行日志</td></tr>
+            <tr><td>Artifact</td><td>报告、文件或其他持久化产物</td><td>不等于最终聊天回复</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>扩展为什么不能侵入 Core</h3>
+      <p>设计原则要求：不同来源的工具最终都转换为统一 Tool 定义；来自 CLI、Cron 或未来 Webhook 的任务最终都转换为统一 AgentRun。MCP 是 Tool Runtime 的外部适配器，Cron 是 Trigger，Skill 注入方法与依赖。这样新增入口或扩展时，不必复制一套 Loop。</p>
+
+      <h3>可观测性不是最后补日志</h3>
+      <p>模型请求、工具调用、用户确认、错误恢复与最终结果都应形成结构化事件。设计文档给出的事件包括 <code>run.started</code>、<code>context.built</code>、<code>model.started</code>、<code>tool.requested</code>、<code>approval.required</code>、<code>tool.completed</code>、<code>run.completed</code>、<code>run.failed</code>。会议 01 也把工具调用轨迹作为理解执行链路和产品展示的重要部分。</p>
+
+      <div class="callout warning">
+        <p class="callout-label">常见误区</p>
+        <p>每接一个新能力就写一条独立流程。例如让 Cron 直接调模型、MCP 自己维护另一套工具执行、UI 自己编排 Loop。这样很快会出现状态、权限和日志不一致。</p>
+      </div>
+
+      <div class="checkpoint">
+        <h3>开发检查点</h3>
+        <p>新增能力前，明确它落入哪条统一通道：模型差异走 Provider；动作走 Tool；外部工具走 MCP→Tool；定时任务走 Trigger→AgentRun；界面只消费 Event。</p>
+      </div>
+
+      <details open class="self-check">
+        <summary>自检：Runtime 的边界在哪里？</summary>
+        <ol>
+          <li>Cron 到点后为什么不应该拥有另一套 Agent Loop？</li>
+          <li>UI 为什么只消费事件，不直接决定下一步调用哪个工具？</li>
+          <li>Event 与 Artifact 的区别是什么？</li>
+        </ol>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>第 2–5 节：设计原则、总体架构、核心对象与核心模块。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
+        <p>00:11–00:13：Runtime 的个人定义，以及 Skill、MCP、知识库作为可选外围扩展。</p>
+      </div>
+    </section>
+
+    <section id="first-slice" class="chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">07 · 约 12 分钟</p>
+        <h2>第一步到底做什么：先证明一个最小垂直闭环</h2>
+        <p class="chapter-question">本章问题：连接 API、做出第一个工具、完成 M1，三者有什么区别？</p>
+      </div>
+
+      <div class="callout conclusion strong-conclusion">
+        <p class="callout-label">第一个要验证的最小产品单位</p>
+        <p><strong>用户提出“读取指定工作区内的一个文本文件并据此回答问题” → 模型自主请求 <code>read_file</code> → Runtime 校验并执行 → 工具结果写回 Context → 模型基于文件内容给出最终回答 → 全程留下可检查记录。</strong></p>
+      </div>
+
+      <h3>先区分三个大小不同的目标</h3>
+      <div class="table-wrap">
+        <table>
+          <caption>连通性检查、第一垂直切片与 M1</caption>
+          <thead><tr><th>层级</th><th>证明什么</th><th>包含什么</th><th>还不能证明什么</th></tr></thead>
+          <tbody>
+            <tr><td>A. 模型 API 连通性</td><td>Provider 凭据和基本请求可用</td><td>Input → API → Output</td><td>不能证明 Tool Calling 或 Loop</td></tr>
+            <tr><td>B. 第一垂直切片</td><td>真正的单工具 Agent Loop 成立</td><td>单 Provider、单 <code>read_file</code>、结果回填、最终回答、边界和 Trace</td><td>尚未达到完整 Phase 1</td></tr>
+            <tr><td>C. M1：Agent 能工作</td><td>Phase 0–1 可独立演示</td><td>CLI/最薄入口、流式输出、2–3 个工具、最大轮数、超时、取消、日志</td><td>尚无完整持久化、权限系统、MCP/Skill/Cron</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>为什么选择 <code>read_file</code></h3>
+      <ul>
+        <li><strong>动作真实：</strong>模型训练数据里没有你本地这个文件，必须通过工具取得。</li>
+        <li><strong>链路完整：</strong>能够覆盖工具选择、参数、执行、Observation 回填和停止判断。</li>
+        <li><strong>风险较低：</strong>只读比写入、Shell、网络和删除更适合作为第一个能力。</li>
+        <li><strong>容易验收：</strong>可以准备一个固定文件和只有该文件包含的问题，判断回答是否有据可查。</li>
+        <li><strong>映射主场景：</strong>本地工作空间助手的后续目录分析、报告生成都从文件读取开始。</li>
+      </ul>
+
+      <h3>建议按这个顺序动手</h3>
+      <ol class="step-list numbered-cards">
+        <li><strong>API 连通性：</strong>接一个模型 API，发固定 Input，保存原始 Output 与错误。</li>
+        <li><strong>工具契约：</strong>定义 <code>read_file</code> 的 name、description、inputSchema、结果和错误。</li>
+        <li><strong>工作区边界：</strong>仅允许读取明确 Workspace 内的文本文件，拒绝越界路径。</li>
+        <li><strong>模型看见工具：</strong>把工具定义放入 Context，请求一个必须读取文件才能回答的任务。</li>
+        <li><strong>执行与回填：</strong>解析 ToolCall，校验并执行，把结果作为工具消息追加。</li>
+        <li><strong>再次调用模型：</strong>携带原任务、ToolCall 与 Tool Result，让模型生成最终答案。</li>
+        <li><strong>停止保护：</strong>加入最大轮数、模型和工具超时、取消入口及明确停止原因。</li>
+        <li><strong>验收记录：</strong>保存每轮 Context 摘要、ToolCall、Result、最终回答、耗时和错误。</li>
+      </ol>
+
+      <h3>第一垂直切片的验收单</h3>
+      <ul class="check-list acceptance-list">
+        <li>不给模型文件正文，只给任务和工具定义。</li>
+        <li>模型确实返回 <code>read_file</code> ToolCall，而不是假装读过。</li>
+        <li>路径合法时读取成功；不存在或越界时返回结构化错误。</li>
+        <li>ToolCall 与 Tool Result 都被追加到同一轮运行历史。</li>
+        <li>最终回答引用文件中独有的信息，不凭空补充。</li>
+        <li>工具失败后模型能看到错误并合理结束或调整，而不是死循环。</li>
+        <li>达到最大轮数、超时或取消时，AgentRun 有明确状态。</li>
+        <li>运行记录足够让你复盘“为什么调工具、拿到什么、为什么结束”。</li>
+      </ul>
+
+      <h3>2–3 个工具与 7–8 个工具：不要选边站</h3>
+      <div class="contrast-block">
+        <div>
+          <p class="mini-label">设计文档 Phase 1</p>
+          <p>完成 M1 时建议目录查看、文件读取等 <strong>2–3 个工具</strong>，并具备最大轮数、超时、取消和基本日志。</p>
+        </div>
+        <div>
+          <p class="mini-label">会议 02 的口头建议</p>
+          <p>先从 API 与 <code>read_file</code> 开始，随后可做 <strong>7–8 个内置工具</strong>，把整个 Loop 跑通。</p>
+        </div>
+        <div>
+          <p class="mini-label">教学解释：阶段化处理</p>
+          <p>先用 1 个工具验证最小闭环，再扩到 2–3 个工具完成 M1；7–8 个是后续常用工具集建议，不是第一天的门槛。</p>
+        </div>
+      </div>
+
+      <div class="callout warning">
+        <p class="callout-label">首切片明确不做</p>
+        <p>不做长期记忆、Context 压缩、SQLite 会话恢复、MCP、Skill、RAG/知识库、Cron、多 Provider、复杂 Planner、多 Agent、精美 UI。接口可留边界，功能不要并行铺开。</p>
+      </div>
+
+      <details open class="self-check">
+        <summary>自检：你准备做的是 A、B 还是 C？</summary>
+        <ol>
+          <li>只看到模型返回“你好”，为什么还不算最小 Agent？</li>
+          <li>第一垂直切片必须留下哪几类证据？</li>
+          <li>首个工具失败时，怎样证明系统没有偷偷绕过工具？</li>
+          <li>什么时候才应把工具扩到 2–3 个？</li>
+        </ol>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
+        <p>00:17–00:21：先接 API，再做 read_file，读取本地文件，追加历史和 Tool List，跑通 Loop；Memory 可先不管；克制范围，先做最小单位。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>Phase 0–1、M1 与第 9 节开发优先级。</p>
+      </div>
+    </section>
+
+    <section id="guardrails" class="chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">08 · 约 10 分钟</p>
+        <h2>开发防跑偏检查表</h2>
+        <p class="chapter-question">本章问题：怎样在每一轮开发中知道自己仍在做“当前阶段该做的事”？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p>用“阶段目标 → 可演示场景 → 可观察证据 → 完成标准”约束范围；后一阶段只在前一阶段验收稳定后开始。</p>
+      </div>
+
+      <h3>开工前：五问</h3>
+      <ol>
+        <li>这项工作直接服务当前阶段的哪条完成标准？</li>
+        <li>它属于核心、扩展还是 UI 外壳？</li>
+        <li>是否有更小的垂直切片能先证明最大风险？</li>
+        <li>完成后能留下什么 Trace、测试或 Artifact，而不只是“看起来能用”？</li>
+        <li>如果先不做，会不会阻塞当前验收？不会就进入后续清单。</li>
+      </ol>
+
+      <h3>开发中：八条红线</h3>
+      <ul class="check-list">
+        <li>Agent Core 不直接依赖某个具体模型、工具或 UI。</li>
+        <li>UI 不直接编排 Agent Loop，只提交任务并消费 Event。</li>
+        <li>模型只请求 ToolCall，不绕过 Tool Runtime 操作外部环境。</li>
+        <li>工具执行成功与失败都回填，不能只回填成功结果。</li>
+        <li>最大轮数、超时和取消从第一个可运行 Loop 就存在。</li>
+        <li>文件读取有 Workspace 边界；写、Shell、网络、删除不默认放行。</li>
+        <li>每次 AgentRun 的停止原因和关键链路可复盘。</li>
+        <li>不同时并行推进多个尚未闭环的模块。</li>
+      </ul>
+
+      <h3>每个模块交付时：证据四件套</h3>
+      <div class="four-column">
+        <article><strong>场景</strong><span>用户从哪里开始，预期得到什么</span></article>
+        <article><strong>自动检查</strong><span>状态机、Schema、权限或端到端测试</span></article>
+        <article><strong>Trace</strong><span>模型、工具、错误与停止原因</span></article>
+        <article><strong>边界说明</strong><span>这版做了什么、没做什么、下一步是什么</span></article>
+      </div>
+
+      <h3>原始材料明确建议暂缓的内容</h3>
+      <div class="table-wrap">
+        <table>
+          <caption>不应阻塞基础 Runtime 的后续能力</caption>
+          <thead><tr><th>暂缓项</th><th>为什么现在不做</th><th>何时再做</th></tr></thead>
+          <tbody>
+            <tr><td>多 Agent、复杂 Planner、自我反思、无限自循环</td><td>放大状态与停止风险，无法替代基础 Loop</td><td>单 Agent 可靠后再评估</td></tr>
+            <tr><td>大规模向量知识库</td><td>首期不需要，且评测与检索质量本身复杂</td><td>有明确知识任务与基准后</td></tr>
+            <tr><td>微服务和多发布包</td><td>单人求职项目过早增加工程负担</td><td>单仓单进程出现真实瓶颈后</td></tr>
+            <tr><td>大而全桌面 UI</td><td>消耗前端时间，却不证明 Runtime 可靠</td><td>核心稳定、需要演示包装时</td></tr>
+            <tr><td>同时支持大量 Provider 与协议</td><td>适配面扩大，掩盖闭环问题</td><td>先有一个 Provider，再用第二个证明抽象</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>与工程师的协作节奏</h3>
+      <p>会议 01 的原始估计是在每天时间不多的情况下约三周，并明确建议按模块推进：模块开始前讨论边界，完成后尽快展示，不要连续埋头几天后一次性给出大包。会议 02 延续了这一点：用编码 Agent 开发，在 GitHub 同步进度，先克制范围、跑通 Loop；遇到不懂再问，不必先投入大量时间听长课程。</p>
+
+      <div class="callout teaching">
+        <span class="source-badge source-teaching" data-source="教学解释">教学解释</span>
+        <p><strong>一次对齐消息的模板：</strong>“本轮只验证 X；输入/输出是 Y；明确不做 Z；已通过的场景和测试是 A；当前 Trace 显示 B；下一步准备 C。请重点看边界和完成标准是否正确。”</p>
+      </div>
+
+      <details open class="self-check">
+        <summary>主线毕业自检</summary>
+        <ol>
+          <li>你能用不超过三句话区分 Model、Agent、Agent Loop 与 Runtime 吗？</li>
+          <li>你能解释 Context 怎样制造短期连续性吗？</li>
+          <li>你能画出 ToolCall → 执行 → Result 回填 → 再判断吗？</li>
+          <li>你能说清第一垂直切片与完整 M1 的边界吗？</li>
+          <li>你能列出当前明确不做的五类能力吗？</li>
+        </ol>
+      </details>
+
+      <div class="next-action-panel">
+        <p class="mini-label">读完主线后的唯一下一步</p>
+        <h3>准备一个固定文本文件和一个只有该文件能回答的问题，开始验证单 Provider + 单 read_file Loop。</h3>
+        <p>先完成可复现验收，再决定是扩到第二个工具，还是修正 Context、ToolCall、错误结构或停止逻辑。</p>
+      </div>
+
+      <div class="source-note">
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>2.4 先可靠闭环；7.1 阶段验收原则；第 9–10 节开发优先级与测试策略。</p>
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:01–00:03、00:45–00:46：约三周估计、模块前后及时沟通、分段学习。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
+        <p>00:20–结束：克制范围、最小单位、GitHub 同步、编码 Agent 开发和课程取舍。</p>
+      </div>
+    </section>
+
+    <section id="deep-dives" class="chapter section-divider" data-searchable data-nav-target>
+      <p class="chapter-number">PART II · 选读深挖</p>
+      <h2>把主线扩展成 2–3 小时完整学习</h2>
+      <p>下面十章不改变第一步的范围，而是帮助你在后续阶段做正确设计。建议在对应阶段开始前阅读；每章都默认展开，离线或禁用 JavaScript 时也不会丢失正文。</p>
+    </section>
+
+    <section id="session-memory" class="chapter deep-chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">10 · 深挖</p>
+        <h2>Session、Context 与 Memory：三个常被混用的概念</h2>
+        <p class="chapter-question">先理解数据装在哪里，再讨论模型这一轮看见什么。</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">边界结论</p>
+        <p><strong>Session 是连续交互的容器，Context 是一轮模型请求的可见集合，Memory 是被保存、加工、检索并重新注入的信息。</strong></p>
+      </div>
+
+      <div class="diagram comparison-diagram" role="img" aria-label="Session、Memory 和 Context 的关系">
+        <div class="diagram-node"><strong>Session / Storage</strong><span>messages · runs · toolCalls · artifacts · summary</span></div>
+        <div class="diagram-arrow" aria-hidden="true">筛选 / 裁剪 / 摘要 / 检索 ↓</div>
+        <div class="diagram-node"><strong>Memory</strong><span>短期 · 会话 · 长期 · Workspace</span></div>
+        <div class="diagram-arrow" aria-hidden="true">Context Builder 组装 ↓</div>
+        <div class="diagram-node diagram-core"><strong>Context</strong><span>本轮真正发给模型的内容</span></div>
+      </div>
+
+      <h3>Session 承载什么</h3>
+      <pre><code>Session
+├── metadata
+├── messages
+├── runs
+├── toolCalls
+├── artifacts
+└── summary</code></pre>
+      <p>设计文档把 Session 定义为“一段连续交互及其元数据”。会议 01 在结束前补充：个人助手需要管理自己的多个会话，每个会话的上下文隔离，本质上需要一套数据库管理。Phase 2 再用 SQLite 持久化 Session、Message、ToolCall 和 AgentRun，让程序重启后仍能查看与继续。</p>
+
+      <h3>Memory 的四层建议</h3>
+      <ul>
+        <li><strong>Short-term Memory：</strong>当前上下文窗口里的近期消息。</li>
+        <li><strong>Session Memory：</strong>当前会话摘要与任务状态。</li>
+        <li><strong>Long-term Memory：</strong>跨会话的用户偏好和稳定事实。</li>
+        <li><strong>Workspace Memory：</strong>某个本地项目的约定、背景与经验。</li>
+      </ul>
+      <p>会议 02 将短期记忆解释为不断追加的 Message List，把跨会话或跨周期信息归为长期记忆。设计文档更细地拆为四层。二者并不冲突：会议是入门二分法，设计文档是项目落地分层。</p>
+
+      <h3>存储策略的阶段边界</h3>
+      <p>第一版建议 SQLite 保存结构化数据，Artifact 单独放在 Workspace 目录；向量检索不是首期必需。第一个单工具 Loop 可以先使用内存中的消息列表，直到 Phase 2 才要求程序重启后恢复。接口命名要为 Session 与 AgentRun 留出边界，但不能因为未来要持久化，就提前把第一切片做成完整数据库项目。</p>
+
+      <div class="callout warning">
+        <p class="callout-label">常见误区</p>
+        <p>把所有历史都叫 Memory，或把 Memory 当成一个永远自动正确的文件。记忆价值取决于抽取、保留、检索和重新注入策略；原文会话记录通常仍需单独保留。</p>
+      </div>
+
+      <details open>
+        <summary>阶段检查：何时需要实现哪一层</summary>
+        <ul>
+          <li>第一垂直切片：进程内 Message List 足以证明结果回填。</li>
+          <li>Phase 2：Session、Message、ToolCall、AgentRun 持久化和简单摘要。</li>
+          <li>Phase 7：完善长期记忆的查看、编辑、删除，以及更完整的可观测性。</li>
+        </ul>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>5.5、Phase 2、Phase 7。</p>
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:47–结束：多会话、Context 上限、会话隔离与数据库管理。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
+        <p>00:00–00:01：短期与长期记忆的入门区分。</p>
+      </div>
+    </section>
+
+    <section id="context-compression" class="chapter deep-chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">11 · 深挖</p>
+        <h2>上下文压缩：不是把聊天随便缩成一段话</h2>
+        <p class="chapter-question">怎样在窗口快满时保留继续工作所需的状态？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p>压缩的目标不是“越短越好”，而是在 Token 预算内保住任务目标、已采取行动、当前进度、关键结果、未完成事项和经验。</p>
+      </div>
+
+      <h3>会议中的示意阈值</h3>
+      <p>会议 02 用一个非固定参数的例子说明：每轮调用前先计算上下文占比，达到<strong>约 80%</strong>时触发压缩，再要求一个模型把历史压到<strong>约 30%</strong>。这两个数字是讲解示例，不是已经确认的项目配置；真正阈值要结合模型窗口、任务质量、成本与评测决定。</p>
+
+      <div class="diagram inline-flow" role="img" aria-label="上下文压缩处理流程">
+        <div class="diagram-node">历史消息</div>
+        <div class="diagram-arrow" aria-hidden="true">→</div>
+        <div class="diagram-node">计算占比</div>
+        <div class="diagram-arrow" aria-hidden="true">→ 达到阈值</div>
+        <div class="diagram-node diagram-core">压缩 LM / Loop</div>
+        <div class="diagram-arrow" aria-hidden="true">→</div>
+        <div class="diagram-node">结构化摘要</div>
+      </div>
+
+      <h3>比“总结成一段话”更可靠的结构</h3>
+      <pre><code>TaskSummary
+├── goal          # 用户原目标
+├── actions       # 已采取行动与工具
+├── progress      # completed / in_progress / not_started
+├── results       # 关键产物与已验证结果
+├── blockers      # 错误、拒绝、缺失信息
+├── nextSteps     # 继续执行所需动作
+└── lessons       # 已验证的经验与约束</code></pre>
+
+      <p>会议建议按任务拆分历史，并分别记录目标、行动、进度与经验。已完成任务可多保留最终结果与沉淀经验；进行中和未完成任务要保留更多上下文，便于之后续接。结构化格式比连续摘要更容易被 Context Builder 选取，也更容易测试“关键状态有没有丢”。</p>
+
+      <h3>方法论必须回到工程实践</h3>
+      <p>用户追问压缩策略来自模型交互还是人类经验。工程师回答“两者都有”，但最终要回到工程实践和评测基准：行业经验可以提出候选策略，模型可以执行摘要，真正决定好坏的是任务能否继续、关键事实是否保留、错误是否减少。若评测基准歪了，就可能“实际更差，但自以为更好”。</p>
+
+      <div class="callout warning">
+        <p class="callout-label">压缩风险</p>
+        <p>摘要一旦把“尚未完成”写成“已完成”，或者删除了用户约束，后续模型会在错误状态上继续。压缩输出需要结构校验、关键字段检查，并保留可回溯的原始会话。</p>
+      </div>
+
+      <details open>
+        <summary>后续验收题</summary>
+        <ol>
+          <li>同一长任务压缩前后，下一步行动是否一致？</li>
+          <li>已完成、进行中、未开始三类任务是否被正确区分？</li>
+          <li>用户限制、失败原因和 Artifact 路径是否仍在？</li>
+          <li>压缩节省了多少 Token，是否以任务成功率为代价？</li>
+        </ol>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
+        <p>00:01–00:07：上下文占比、80%/30% 示例、结构化任务摘要、进度差异、工程实践与评测基准。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>Phase 2 简单裁剪与摘要；10.7 关键任务状态丢失风险。</p>
+      </div>
+    </section>
+
+    <section id="long-term-memory" class="chapter deep-chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">12 · 深挖</p>
+        <h2>长期记忆与知识库：存储、加工、检索、再注入</h2>
+        <p class="chapter-question">把信息写进 memory.md 后，为什么还不算“记住了”？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p>长期记忆和知识库都要解决四步：保存什么、怎样加工、何时检索、如何放回 Context；文件只是载体，不是完整机制。</p>
+      </div>
+
+      <h3>会议中的 <code>memory.md</code> 做法</h3>
+      <ol class="step-list">
+        <li>在某个周期性事件或会话阶段结束后，调用模型读取相关记录。</li>
+        <li>提示模型抽取用户偏好、用户画像与稳定客观事实。</li>
+        <li>把结果持续写入本地 <code>memory.md</code>，而非只写一次。</li>
+        <li>在后续 Context 中加入该文件内容，例如注入 System Prompt。</li>
+        <li>信息多起来后，提供记忆搜索工具，按任务检索相关片段。</li>
+      </ol>
+
+      <h3>“总结本周工作”的完整例子</h3>
+      <p>用户要求总结本周工作时，Agent 可以调用记忆搜索工具，从 <code>memory.md</code> 或所有会话记录中检索本周信息，再组织报告。会议还提到混合检索、向量检索和可能的关键词/图结构匹配，但转写词存在歧义，因此这里只保留“可组合多种检索策略”的结论，不把具体算法当作已确定方案。</p>
+
+      <div class="diagram inline-flow" role="img" aria-label="长期记忆与知识库的共同机制">
+        <div class="diagram-node">原始会话 / 文档</div>
+        <div class="diagram-arrow" aria-hidden="true">→</div>
+        <div class="diagram-node">加工与结构化</div>
+        <div class="diagram-arrow" aria-hidden="true">→</div>
+        <div class="diagram-node">持久化</div>
+        <div class="diagram-arrow" aria-hidden="true">→</div>
+        <div class="diagram-node">检索</div>
+        <div class="diagram-arrow" aria-hidden="true">→</div>
+        <div class="diagram-node diagram-core">注入 Context</div>
+      </div>
+
+      <h3>知识库与个人记忆的共同点和不同点</h3>
+      <p>会议将二者归纳为同一套“数据的存储、加工、检索机制”。共同点是最后都必须回到 Loop：要么被 Context Builder 直接加入，要么由模型请求检索工具。不同点是信息来源与治理：长期记忆偏用户偏好、事实与任务经验；知识库偏外部领域材料，通常需要切分、结构化、权限与版本管理。</p>
+
+      <div class="callout warning">
+        <p class="callout-label">当前范围</p>
+        <p>设计文档明确“向量检索不是首期必需能力”；会议 02 也说在先跑 Loop 的顺序里 Memory 可以先不管。不要用“以后需要知识库”阻塞单工具闭环。</p>
+      </div>
+
+      <details open>
+        <summary>长期记忆实现前要回答的问题</summary>
+        <ul>
+          <li>哪些信息是稳定事实，哪些只是一次对话中的临时猜测？</li>
+          <li>用户能否查看、编辑和删除记忆？</li>
+          <li>怎样避免把敏感信息无差别放进模型 Context？</li>
+          <li>检索不到、检索错误和记忆冲突时怎样处理？</li>
+        </ul>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
+        <p>00:07–00:11：memory.md、持续写入、Context 注入、记忆搜索、周报例子和知识库共性。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>5.5 Memory 分层；Phase 7 长期记忆可查看、编辑和删除。</p>
+      </div>
+    </section>
+
+    <section id="tool-runtime" class="chapter deep-chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">13 · 深挖</p>
+        <h2>Tool Runtime 与权限：工具越多，越不能各自为政</h2>
+        <p class="chapter-question">如果有 100 个工具，谁负责让它们以同一套规则运行？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p>Tool Runtime 把不同来源的工具统一注册、发现、校验、授权、执行、取消、截断、报错和记录；安全边界必须走这条主链。</p>
+      </div>
+
+      <h3>从“一个函数”升级为“可控执行系统”</h3>
+      <ul class="check-list">
+        <li>注册、发现、命名去重与能力声明。</li>
+        <li>依据 JSON Schema 校验模型参数。</li>
+        <li>权限策略与用户确认。</li>
+        <li>执行、取消、超时和并发边界。</li>
+        <li>结果长度控制、截断与 Artifact 化。</li>
+        <li>成功/错误统一结构。</li>
+        <li>ToolCall 日志、事件与 Trace。</li>
+      </ul>
+
+      <h3>读、写、删不是同一种风险</h3>
+      <div class="table-wrap">
+        <table>
+          <caption>设计文档建议的权限等级</caption>
+          <thead><tr><th>风险</th><th>示例</th><th>默认策略</th><th>会议中的直观解释</th></tr></thead>
+          <tbody>
+            <tr><td>低</td><td>查看目录、读取允许目录内文件</td><td>可自动执行</td><td>read_file 通常可较自由使用</td></tr>
+            <tr><td>中</td><td>写文件、安装依赖、访问网络</td><td>按策略确认</td><td>write 多数时候先请求审批</td></tr>
+            <tr><td>高</td><td>删除、危险 Shell、发送外部消息</td><td>必须确认</td><td>delete 应逐次向用户确认</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>会议还用 Read Only、Workspace Write、Full Access 三档解释工具权限，与某些产品的“极简/标准/其他 Harness 模式”不是一回事：前者决定工具能执行到哪里，后者可能改变 System Prompt 和 Tool List 的整体配置。</p>
+
+      <h3>极简与标准 Harness 的会议例子</h3>
+      <p>工程师举例：极简模式可能只有 Bash 和编辑类两个工具，System Prompt 也很短，因此速度快、适合在简洁内核上二次扩展；标准模式会有更完整的工具集，例如网络搜索。该段是在解释“框架配置模式”，不是本项目已确认要复制的产品规格。</p>
+
+      <h3>Security 还包括什么</h3>
+      <ul>
+        <li>Workspace 访问边界和真实目标展示。</li>
+        <li>命令参数展示与危险操作审批。</li>
+        <li>Secret 与模型 Context 隔离。</li>
+        <li>Built-in、User Tool、MCP Tool 的来源与信任状态。</li>
+        <li>敏感输出脱敏、运行取消和超时保护。</li>
+      </ul>
+
+      <div class="callout warning">
+        <p class="callout-label">常见误区</p>
+        <p>把权限提示只做在 UI 上。UI 可以显示确认，但真正的拒绝必须发生在 Tool Runtime 执行前；否则换一个入口或后台 Trigger 就可能绕过。</p>
+      </div>
+
+      <details open>
+        <summary>Phase 3 完成标准</summary>
+        <p>危险操作必须确认；工具失败后，Agent 能读到标准化错误并调整下一步行为；Workspace 边界、超时、取消、结果截断与统一记录均可验证。</p>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>2.3、5.4、5.9、Phase 3。</p>
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:49–00:55：工具统一注册、权限边界、读写删除、权限档位与 Harness 模式差异。</p>
+      </div>
+    </section>
+
+    <section id="completion-evaluation" class="chapter deep-chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">14 · 深挖</p>
+        <h2>完成条件、验证与评测基准：防止“模型说做完了”</h2>
+        <p class="chapter-question">怎样把“我觉得完成”变成可核验的完成？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p>任务完成要尽量绑定外部证据；优化策略要绑定能代表真实质量的评测基准。</p>
+      </div>
+
+      <h3>完成判断受两类因素影响</h3>
+      <ol>
+        <li><strong>模型本身能力：</strong>不同模型在推理、Tool Calling 和代码任务上的可靠性不同。</li>
+        <li><strong>模型实际看见的 Context：</strong>目标、规则、结果、错误和验收标准是否被清楚放入。</li>
+      </ol>
+      <p>模型能力不是 Runtime 能直接改变的，但可以通过 Provider 的能力声明选择合适模型；Context、停止策略和验证注入则是项目可控的工程空间。</p>
+
+      <h3>会议中的“结束前强制检查”</h3>
+      <p>工程师以编码任务举例：主模型准备结束时，Runtime 可以强制插入验证请求，让它重新读取写出的文件、运行代码，前端任务还可以渲染页面并截图检查。验证产物回填同一主 Loop，模型重新判断是否真的完成。也可以先用小模型做任务分类，只在 Coding 场景启用对应验证策略；这是高级优化示例，不是首切片必需。</p>
+
+      <div class="diagram inline-flow" role="img" aria-label="完成前验证门禁流程">
+        <div class="diagram-node">模型拟结束</div>
+        <div class="diagram-arrow" aria-hidden="true">→</div>
+        <div class="diagram-node diagram-core">Completion Policy</div>
+        <div class="diagram-arrow" aria-hidden="true">→</div>
+        <div class="diagram-node">运行 / 复读 / 渲染</div>
+        <div class="diagram-arrow" aria-hidden="true">→</div>
+        <div class="diagram-node">证据回填</div>
+        <div class="diagram-arrow" aria-hidden="true">→ 再判断</div>
+      </div>
+
+      <h3>三层测试策略</h3>
+      <div class="table-wrap">
+        <table>
+          <caption>设计文档建议的测试分层</caption>
+          <thead><tr><th>层级</th><th>重点对象</th><th>本项目例子</th></tr></thead>
+          <tbody>
+            <tr><td>Unit Test</td><td>状态机、Schema、权限、Context Builder</td><td>越界路径被拒绝；最大轮数状态正确</td></tr>
+            <tr><td>Integration Test</td><td>Provider、工具、SQLite、MCP</td><td>真实/模拟 ToolCall 能完整回填</td></tr>
+            <tr><td>Scenario Test</td><td>从用户任务到 Artifact</td><td>读取项目资料后生成有证据的报告</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>风险优先级</h3>
+      <ol>
+        <li>Loop 是否正确结束，是否会无限循环。</li>
+        <li>ToolCall 参数、权限和错误是否正确。</li>
+        <li>Session 中断后是否能恢复。</li>
+        <li>Provider 的消息和 Tool Schema 是否一致。</li>
+        <li>MCP 断线或工具失败是否拖垮主进程。</li>
+        <li>Cron 是否重复、漏执行或并发冲突。</li>
+        <li>Context 裁剪是否丢关键任务状态。</li>
+      </ol>
+
+      <div class="callout warning">
+        <p class="callout-label">评测基准风险</p>
+        <p>错误基准会把系统带向错误方向：可能指标更高，真实任务却更差。先定义“用户任务是否完成、证据是否充分、是否越权、能否恢复”，再优化提示词、压缩或模型选择。</p>
+      </div>
+
+      <details open>
+        <summary>最小完成门禁</summary>
+        <p>首切片至少检查：文件确实由工具读取；答案中关键事实能在固定文件找到；越界路径不执行；达到最大轮数有明确失败；Trace 能复现每一步。</p>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:37–00:45：完成准确性、模型与 Context、任务分类、编码场景强制检查。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
+        <p>00:05–00:07：工程实践与评测基准。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>第 10 节测试与验收策略。</p>
+      </div>
+    </section>
+
+    <section id="provider-models" class="chapter deep-chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">15 · 深挖</p>
+        <h2>Provider 与模型能力：API 能连通，不等于抽象完成</h2>
+        <p class="chapter-question">怎样让 Agent Core 不被某一家模型服务绑死？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p>Provider 把不同模型服务的消息、Tool Calling、流式事件、错误、Usage 与能力声明转换成 Agent Core 的统一协议。</p>
+      </div>
+
+      <pre><code>ModelProvider
+├── chat(request)
+├── stream(request)
+├── listModels()
+└── getCapabilities(model)</code></pre>
+
+      <h3>统一接口至少处理什么</h3>
+      <ul class="check-list">
+        <li>消息角色与格式转换。</li>
+        <li>Tool Calling Schema 与结果格式转换。</li>
+        <li>流式输出事件。</li>
+        <li>Usage、Token 与成本信息标准化。</li>
+        <li>错误、限流、超时与重试标准化。</li>
+        <li>模型能力声明，以及 API Key、Base URL 和参数管理。</li>
+      </ul>
+
+      <h3>为什么先一个，再第二个</h3>
+      <p>设计文档建议先支持一个云端 Provider，跑通闭环后再加入一个 OpenAI-compatible 或本地模型 Provider。Phase 4 的完成标准是“不修改 Agent Core 即可切换 Provider”。如果第一天就适配多家，往往只得到一堆条件分支，却还没证明核心协议真的正确。</p>
+
+      <h3>依赖能力，不依赖模型名字</h3>
+      <p>会议 01 解释了 Tool Calling 是模型生成结构化工具参数的能力；不同模型会影响完成判断与调用质量。设计文档因此要求 Agent 查询 Capability，而不是用模型名称硬编码判断“这个能不能 Tool Calling”。</p>
+
+      <h3>应用层产品与构建层产品</h3>
+      <p>用户在会议 01 追问“自己接 API”和“在现成 Agent 产品里选模型”有什么区别。工程师区分了开箱即用的应用层产品与允许开发者接模型、做二次开发的构建层产品。本项目属于后者：必须自己理解模型 API 请求与响应，而不是只在某个已有界面中选择模型。</p>
+
+      <div class="callout warning">
+        <p class="callout-label">时效说明</p>
+        <p>会议 02 讨论了某具体模型 API 的价格与推荐。这是会议发生时的工程师观点，价格和产品状态会变化；本手册不把它改写成当前采购结论，也不替项目选择供应商。</p>
+      </div>
+
+      <details open>
+        <summary>Phase 4 验收</summary>
+        <p>同一个 Agent Core、同一个 Tool 定义和同一场景测试，在切换 Provider 后仍能完成；差异只留在适配层，错误与 Usage 采用统一结构。</p>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>5.3 Provider Layer；Phase 4。</p>
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:20–00:24、00:29–00:40：模型 API、应用层/构建层、Tool Calling 与模型差异。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
+        <p>00:17–00:19：首个 API 与当时的成本讨论。</p>
+      </div>
+    </section>
+
+    <section id="extensions" class="chapter deep-chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">16 · 深挖</p>
+        <h2>MCP、Skill、RAG/知识库和 Cron：都要回到统一主链</h2>
+        <p class="chapter-question">这些热门概念分别接在哪，为什么不属于第一最小闭环？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p>MCP 最终适配成内部 Tool/Resource，Skill 向 Context 和工具注册表注入方法与依赖，RAG 通过 Context 或检索 Tool 提供证据，Cron 作为 Trigger 创建 AgentRun。</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <caption>四类扩展的边界</caption>
+          <thead><tr><th>概念</th><th>本质</th><th>进入主链的位置</th><th>没有它能否跑首个 Loop</th></tr></thead>
+          <tbody>
+            <tr><td>MCP</td><td>外部 Server 能力的协议与连接方式</td><td>MCP Client → Schema 转换 → Tool Registry</td><td>能</td></tr>
+            <tr><td>Skill</td><td>某类任务的方法、步骤、约束和依赖包</td><td>指令进入 Context，依赖工具进入 Registry</td><td>能</td></tr>
+            <tr><td>RAG / 知识库</td><td>外部知识的存储、加工与检索</td><td>检索结果直接进 Context，或通过检索 Tool 回填</td><td>能</td></tr>
+            <tr><td>Cron</td><td>按时间创建任务的 Trigger</td><td>Scheduler → AgentRun → 标准 Loop</td><td>能</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>MCP：外部适配器，不侵入 Agent Core</h3>
+      <p>设计文档要求支持 Server 配置与启停、stdio/HTTP 等连接、Tools/Resources/Prompts 发现、Schema 转换、断线/超时/进程退出、信任等级、权限与日志。其关键不是“能连一个 Server”，而是外部能力转换成内部统一对象后，继续走相同 Tool Runtime。</p>
+
+      <h3>Skill：方法包，不是原子动作</h3>
+      <p>Skill 可以包含 <code>SKILL.md</code>、manifest、可选工具、提示词、脚本和参考资料。它负责告诉 Agent 一类任务该按什么步骤与约束完成，并声明所需能力。边界口诀是：<strong>Tool 是原子动作，Skill 是完成一类任务的方法，Agent 是执行目标与策略的主体。</strong></p>
+
+      <h3>RAG：最后仍是模型可见证据</h3>
+      <p>会议 01 用非常直接的方式解释：模型输出只有最终回答或工具参数；若知识检索不是事先注入 Context，就只能由模型请求检索工具，结果再回填。会议中的“reg”大概率指 RAG，但保留在转写纠错表，不把每个模糊词静默改写。</p>
+
+      <h3>Cron：改变触发时间，不改变执行内核</h3>
+      <p>会议 02 的“每天 8 点看金价”例子包含任务内容、时间、运行位置、所属会话和频率。时间到后，调度器把任务注入标准 Loop，可能带上定时任务标签或相应 System Prompt。设计文档进一步要求一次性/周期任务、启停、并发、超时、重试、历史与通知。未来 Webhook 也复用 Trigger → AgentRun。</p>
+
+      <div class="callout warning">
+        <p class="callout-label">范围判断</p>
+        <p>这些能力都很适合作为后续里程碑展示，但它们不能替代单 Provider、ToolCall、执行、回填和停止条件。先做扩展，会把尚未稳定的主链复制到更多入口。</p>
+      </div>
+
+      <details open>
+        <summary>扩展接入前检查</summary>
+        <ul>
+          <li>能否转换成统一 Tool、Context 信息或 AgentRun？</li>
+          <li>是否复用同一权限、错误、取消和事件机制？</li>
+          <li>卸载扩展后，Agent Core 是否仍能正常运行？</li>
+        </ul>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>2.5、5.6–5.8、Phase 5–6。</p>
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:45–00:47：RAG/知识库作为 Loop 外扩能力并回归工具。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
+        <p>00:10–00:16：知识库、外围扩展、Cron 调度与任务注入。</p>
+      </div>
+    </section>
+
+    <section id="product-enterprise" class="chapter deep-chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">17 · 深挖</p>
+        <h2>产品形态与企业交付：先问业务如何工作</h2>
+        <p class="chapter-question">同一套内核为什么可以长成对话框、表单或工作流？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p>内核提供可靠智能与行动能力；行业、业务场景、可信数据、现有生态和工作流程决定最终产品形态。</p>
+      </div>
+
+      <h3>会议中的企业交付三层逻辑</h3>
+      <ol class="step-list">
+        <li><strong>需求层：</strong>企业是什么行业、什么业务场景、当前生态怎样、底层框架需要解决什么。</li>
+        <li><strong>能力层：</strong>Agent 能否基于可信外部数据完成有效分析与行动。</li>
+        <li><strong>产品层：</strong>能力应嵌入对话入口、网页点选、传统表单、工作流节点，还是其他业务流程。</li>
+      </ol>
+
+      <p>用户用之前的文旅 AI 项目追问企业交付。工程师指出，最核心的是 Agent 的智能能力是否能利用可信数据做有效分析；至于长成智能助手页面、点选式网页还是工作流产品，是应用形态问题。会议还用 GTM 场景举例：AI 可以融入市场营销和销售流程，主要交互未必是对话。</p>
+
+      <h3>为什么过程轨迹是产品能力</h3>
+      <p>项目不仅要显示最终答案，还要展示会话管理、Context 持久化、工具调用与事件流。对用户，这提供进度、确认和错误解释；对开发者，它揭示执行链路；对企业，它支持审计、信任和故障复盘。设计文档因此把“一切执行均可追踪”列为核心原则。</p>
+
+      <h3>交互层的责任边界</h3>
+      <ul>
+        <li>创建、选择、恢复 Session。</li>
+        <li>接收自然语言任务，展示流式输出。</li>
+        <li>展示 ToolCall、运行进度、异常与 Artifact。</li>
+        <li>处理确认、取消与中断。</li>
+        <li><strong>不直接编排 Agent Loop。</strong></li>
+      </ul>
+
+      <div class="callout warning">
+        <p class="callout-label">产品误区</p>
+        <p>把“大家现在常用聊天入口”误判为“所有 AI 产品都必须聊天”。对话只是高频形态；若业务已有稳定表单与审批流，AI 更可能作为某个决策或执行节点。</p>
+      </div>
+
+      <details open>
+        <summary>后续做 UI 前的五问</summary>
+        <ol>
+          <li>用户的真实任务从哪个业务节点开始？</li>
+          <li>哪些信息来自可信数据，怎样展示依据？</li>
+          <li>哪些动作需要人工确认？</li>
+          <li>用户需要看最终结果，还是还要看中间 Trace？</li>
+          <li>对话是否真比表单、批处理或定时报告更自然？</li>
+        </ol>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:03–00:10：CLI/页面只是外壳、企业需求、文旅项目、可信数据、表单/工作流/GTM 示例、过程轨迹。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>1.3 演示场景、2.2 可追踪、5.1 Interaction Layer。</p>
+      </div>
+    </section>
+
+    <section id="roadmap" class="chapter deep-chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">18 · 深挖</p>
+        <h2>完整工程路线：Phase 0–7 与 M1–M5</h2>
+        <p class="chapter-question">每个阶段交付什么，怎样知道可以进入下一阶段？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">推进原则</p>
+        <p>每个里程碑都形成可独立演示版本；后一阶段只在前一阶段的验收场景稳定后开始。</p>
+      </div>
+
+      <div class="table-wrap roadmap-table-wrap">
+        <table>
+          <caption>Phase 0–7：目标、关键交付与完成标准</caption>
+          <thead><tr><th>阶段</th><th>目标</th><th>关键交付</th><th>完成标准</th></tr></thead>
+          <tbody>
+            <tr><td>Phase 0</td><td>工程骨架与约束</td><td>目录、核心接口、配置、日志、基础测试、AgentRun 状态、简短架构决策</td><td>项目可启动，依赖方向清晰</td></tr>
+            <tr><td>Phase 1</td><td>最小 Agent Loop</td><td>最薄交互入口、单 Provider、流式输出、Tool Calling、2–3 工具、轮数/超时/取消、日志</td><td>连续调用一个或多个工具并最终回答</td></tr>
+            <tr><td>Phase 2</td><td>会话与持久化</td><td>SQLite、Session 切换/恢复、Message/ToolCall/Run 持久化、简单裁剪摘要、Artifact 目录</td><td>重启后可查看并继续会话</td></tr>
+            <tr><td>Phase 3</td><td>Tool Runtime 与安全</td><td>Registry、Schema、统一结果/错误、超时/取消/截断、权限、审批、Workspace 边界</td><td>危险操作确认；失败后 Agent 能调整</td></tr>
+            <tr><td>Phase 4</td><td>Provider 抽象</td><td>统一接口、第二 Provider、能力声明、错误/Usage/流标准化、切换与重试/降级</td><td>不改 Agent Core 即可换 Provider</td></tr>
+            <tr><td>Phase 5</td><td>MCP 与 Skill</td><td>MCP Client、动态发现、Skill Loader、manifest/依赖、示例 Skill、权限展示</td><td>安装 Skill 或配置 MCP 即可增能力</td></tr>
+            <tr><td>Phase 6</td><td>Cron 与后台运行</td><td>Scheduler、一次/周期任务、Trigger、并发、重试、历史、通知</td><td>定期扫描 Workspace 并生成报告</td></tr>
+            <tr><td>Phase 7</td><td>Memory、观测与作品包装</td><td>摘要、长期记忆治理、Trace、Token/成本/耗时、端到端测试、架构图、Demo 脚本/视频</td><td>面试官能理解决策、步骤、恢复和扩展</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <caption>M1–M5：可展示成果</caption>
+          <thead><tr><th>里程碑</th><th>阶段</th><th>演示重点</th></tr></thead>
+          <tbody>
+            <tr><td>M1：Agent 能工作</td><td>Phase 0–1</td><td>自主调用本地工具完成任务</td></tr>
+            <tr><td>M2：Agent 能持续工作</td><td>Phase 2–3</td><td>会话恢复、权限确认、错误恢复</td></tr>
+            <tr><td>M3：框架可替换、可扩展</td><td>Phase 4–5</td><td>多 Provider、MCP、Skill</td></tr>
+            <tr><td>M4：Agent 能主动工作</td><td>Phase 6</td><td>Cron 自动任务与运行历史</td></tr>
+            <tr><td>M5：形成求职作品</td><td>Phase 7</td><td>Trace、测试、文档和 Demo</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>推荐依赖顺序</h3>
+      <p class="priority-chain">Agent Loop → Tool Calling → Session → Tool Runtime 与权限 → Provider 抽象 → MCP → Skill → Cron → Memory → UI 与可观测性完善</p>
+
+      <h3>推荐单仓目录</h3>
+      <pre><code>local-agent/
+├── apps/cli/ · apps/desktop/
+├── src/agent/ · providers/ · tools/ · sessions/
+├── src/memory/ · storage/ · mcp/ · skills/
+├── src/scheduler/ · security/ · events/ · observability/
+├── skills/ · config/ · workspace/ · tests/ · docs/
+└── single repository / single process first</code></pre>
+      <p>设计文档明确：单人求职项目先保持单仓库、单进程，通过目录与接口维持模块边界，不必过早拆微服务或多个发布包。</p>
+
+      <h3>依赖方向</h3>
+      <p>接入层调用 Runtime；Runtime 通过抽象接口使用 Provider 和 Tool Runtime；扩展通过适配器注册；Session、Security、Observability 为整个过程提供状态、安全和观测。依赖箭头不能反过来让 Core 知道某个具体 UI 或 MCP Server。</p>
+
+      <details open>
+        <summary>每阶段开始前的门禁</summary>
+        <p>上一阶段的演示场景是否稳定？自动检查是否可重复？失败能否定位？完成标准是否有证据？四项都能回答，再开始下一阶段。</p>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>第 6–10 节：工程结构、Phase 0–7、M1–M5、优先级和测试策略。</p>
+      </div>
+    </section>
+
+    <section id="collaboration-learning" class="chapter deep-chapter" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">19 · 深挖</p>
+        <h2>实际协作与学习方式：边做、边验、边对齐</h2>
+        <p class="chapter-question">要先上完一套大课，还是直接做？多久展示一次？</p>
+      </div>
+
+      <div class="callout conclusion">
+        <p class="callout-label">一句话结论</p>
+        <p>先掌握本手册的核心概念，然后用编码 Agent 辅助实现最小闭环；每个模块开始前与完成后及时对齐，用 GitHub 同步，不必先把大量课程学完。</p>
+      </div>
+
+      <h3>会议里已经明确的协作方式</h3>
+      <ul>
+        <li>工程师按用户每天时间有限估计，整个项目可能约三周；这是粗略原始估计，不是固定工期承诺。</li>
+        <li>从内核向扩展层，一个模块一个模块做。</li>
+        <li>模块开始前可以讨论边界，完成后尽快展示；避免闷头数天后一次性交付。</li>
+        <li>用户计划用编码 Agent 开发，在自己的 Agent 中测试，并把代码推到 GitHub 供实时对齐。</li>
+        <li>先克制功能，把 Loop 搭起来；遇到不懂的概念再针对性询问。</li>
+      </ul>
+
+      <h3>为什么这份手册强调“从已知往前走”</h3>
+      <p>用户在会议 01 提到，自己学习现有项目时，模型经常假设他已经知道前置概念，导致不断向上追溯。本手册因此从模型的单次输入输出开始，再依次引入 Context、Tool、Loop、Runtime；每个准确术语前先给出用途和边界。</p>
+
+      <h3>课程取舍</h3>
+      <p>会议 02 结束前，用户问是否有必要先看长篇基础课程。工程师判断，刚讲的核心概念若已理解，就没有必要先听大量课程，继续动手更有效。这不等于课程没有价值，而是当前最紧缺的证据是“最小 Loop 是否跑通”，不是“看过多少课”。</p>
+
+      <div class="callout teaching">
+        <span class="source-badge source-teaching" data-source="教学解释">教学解释</span>
+        <p>建议把学习问题绑定当前故障：模型没发 ToolCall，就学 Tool Schema 与 Context；重复调用，就看停止条件；越界读取，就学 Tool Runtime 权限。问题驱动的知识更容易立即进入工程判断。</p>
+      </div>
+
+      <h3>每次模块评审带什么</h3>
+      <ul class="check-list">
+        <li>一句话阶段目标与本轮不做项。</li>
+        <li>可重复的最小演示输入。</li>
+        <li>成功和失败各一条 Trace。</li>
+        <li>自动检查结果。</li>
+        <li>一个最需要工程师判断的边界问题。</li>
+      </ul>
+
+      <details open>
+        <summary>本章自检</summary>
+        <ol>
+          <li>你下一次给工程师看的最小演示是什么？</li>
+          <li>你准备明确说出哪些“不做项”？</li>
+          <li>如果编码 Agent 给出大范围方案，你用哪条阶段完成标准裁剪？</li>
+        </ol>
+      </details>
+
+      <div class="source-note">
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:01–00:03、00:09–00:10、00:45–00:46：时间估计、模块沟通、学习摩擦与分段讲解。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
+        <p>00:20–结束：编码 Agent、最小单位、GitHub 同步、克制范围与课程取舍。</p>
+      </div>
+    </section>
+
+    <section id="appendices" class="chapter section-divider" data-searchable data-nav-target>
+      <p class="chapter-number">PART III · 附录</p>
+      <h2>术语、转写疑点与证据覆盖</h2>
+      <p>附录用于核对，不替代主线。所有不确定转写都保留原词并给出置信度；三份源文件的完整覆盖位置在此列账。</p>
+    </section>
+
+    <section id="glossary" class="chapter appendix" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">附录 A</p>
+        <h2>Agent 核心术语表</h2>
+      </div>
+      <div class="table-wrap glossary-table-wrap">
+        <table>
+          <caption>本项目统一用语与边界</caption>
+          <thead><tr><th>规范术语</th><th>教学定义</th><th>边界提醒</th></tr></thead>
+          <tbody>
+            <tr><td>Model</td><td>接收输入并生成输出的模型本体。</td><td>不负责真实工具执行和长期状态保存。</td></tr>
+            <tr><td>Provider</td><td>把不同模型 API 转换为统一请求、响应、流式事件、错误和能力声明的适配层。</td><td>Agent Core 不应硬编码供应商协议。</td></tr>
+            <tr><td>Agent</td><td>一组模型、提示词、工具和策略配置所描述的执行主体。</td><td>不是某一次任务运行。</td></tr>
+            <tr><td>AgentRun</td><td>一次从任务开始到完成、失败、取消或暂停的具体运行。</td><td>同一 Session 可有多个 Run。</td></tr>
+            <tr><td>Agent Loop</td><td>模型判断、行动、观察结果并再次判断的循环。</td><td>必须有停止、超时与取消。</td></tr>
+            <tr><td>Runtime</td><td>让一次 AgentRun 能真实运行所需的核心工程机制。</td><td>不同团队定义可能有宽窄差异。</td></tr>
+            <tr><td>Harness</td><td>会议中用于描述模型外部工程框架或脚手架的词。</td><td>本项目正式名称统一为 Local Agent Runtime。</td></tr>
+            <tr><td>Context</td><td>一轮模型调用可见的提示词、消息、工具、记忆和运行状态集合。</td><td>不等于数据库全部内容。</td></tr>
+            <tr><td>Session</td><td>连续交互及其消息、运行、工具调用、产物和摘要的容器。</td><td>不同 Session 的 Context 应隔离。</td></tr>
+            <tr><td>Memory</td><td>被保存、压缩、检索并重新放入 Context 的信息。</td><td>文件或向量库只是载体。</td></tr>
+            <tr><td>Tool</td><td>Agent 可以请求执行的一项原子操作。</td><td>不同于一整套任务方法。</td></tr>
+            <tr><td>ToolCall</td><td>模型对某个工具及其参数的一次调用请求与结果记录。</td><td>请求不等于已经执行成功。</td></tr>
+            <tr><td>Tool Runtime</td><td>负责工具注册、校验、权限、执行、取消、错误和日志的系统。</td><td>所有工具来源最终走统一主链。</td></tr>
+            <tr><td>Skill</td><td>完成某类任务的方法、约束和能力依赖包。</td><td>不等同于原子 Tool。</td></tr>
+            <tr><td>MCP</td><td>将外部 Server 的 Tool、Resource 或 Prompt 适配进内部系统的协议与连接方式。</td><td>不应直接侵入 Agent Core。</td></tr>
+            <tr><td>Trigger</td><td>创建 AgentRun 的触发来源，如 CLI、Cron 或未来 Webhook。</td><td>不拥有独立 Loop。</td></tr>
+            <tr><td>Artifact</td><td>Agent 生成的文件、报告或其他持久化产物。</td><td>与最终聊天文本可并存。</td></tr>
+            <tr><td>Event / Trace</td><td>描述运行状态变化和完整执行链路的结构化记录。</td><td>用于 UI、调试、审计和评测。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="source-note">
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
+        <p>第 4 节核心对象及本手册设计说明第 6 节统一术语。</p>
+      </div>
+    </section>
+
+    <section id="asr-corrections" class="chapter appendix" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">附录 B</p>
+        <h2>会议转写纠错与不确定词</h2>
+      </div>
+      <p>以下是转写疑点，不对原文件做任何修改。高置信度也只表示“结合上下文很可能”，不是在原文中偷偷替换。</p>
+      <div class="table-wrap">
+        <table>
+          <caption>原转写、可能术语、依据与置信度</caption>
+          <thead><tr><th>原转写</th><th>可能术语</th><th>判断依据</th><th>置信度</th></tr></thead>
+          <tbody>
+            <tr><td>look / 路口 / 路普</td><td>Loop</td><td>均出现在 Agent 判断—工具—回填—再次判断的循环语境。</td><td>高</td></tr>
+            <tr><td>refile / redfile / Virus File</td><td>read_file</td><td>紧邻“读取本地文件、path、返回文件内容”。</td><td>高</td></tr>
+            <tr><td>tell list / tour list</td><td>Tool List</td><td>用于声明模型有哪些工具及如何调用。</td><td>高</td></tr>
+            <tr><td>方心靠 / 通信靠</td><td>Function Call / Function Calling</td><td>被解释为模型生成工具调用参数的能力。</td><td>高</td></tr>
+            <tr><td>chrome</td><td>Cron</td><td>后文明确解释“定时任务、每天 8 点、调度器”。</td><td>高</td></tr>
+            <tr><td>reg</td><td>RAG</td><td>与知识库、检索、作为 Tool 使用的讨论相连。</td><td>中高</td></tr>
+            <tr><td>C R I</td><td>CLI</td><td>与“偏 CLI”“命令行形态”和页面外壳相对照。</td><td>高</td></tr>
+            <tr><td>绘画 / 货号</td><td>会话</td><td>与多个 Session、上下文隔离、数据库管理相连。</td><td>中高</td></tr>
+            <tr><td>pass</td><td>path</td><td>被定义为本地文件路径参数。</td><td>高</td></tr>
+            <tr><td>实现机类 / 实验机类 / 鸡肋实现</td><td>实现函数 / 最小执行单元</td><td>上下文反复说明 Tool 是封装好的函数或脚本。</td><td>中</td></tr>
+            <tr><td>open cloud / harmony / hermes</td><td>某些 Agent 构建层产品名称</td><td>产品名转写不稳定，但讨论重点是“构建层而非开箱应用”。</td><td>低</td></tr>
+            <tr><td>color code / cloud code / colas / collect / Codeless</td><td>某个编码 Agent 产品名称</td><td>用于“开发项目、选择模型、定时任务”等例子，具体品牌无法仅凭转写可靠确定。</td><td>低</td></tr>
+            <tr><td>oppos / oppo 5</td><td>某个主模型名称</td><td>与“小模型做任务分类”对比，但型号转写不足以定论。</td><td>低</td></tr>
+            <tr><td>grape</td><td>图检索或关键词/混合检索相关术语</td><td>出现在记忆搜索的混合检索例子中。</td><td>低</td></tr>
+            <tr><td>PDC 跟创造</td><td>无法可靠判断</td><td>只出现一次，且说话者明确暂不展开。</td><td>低</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="source-note">
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>主要分布于 00:03、00:24–00:36、00:46、00:53–结束。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
+        <p>主要分布于 00:07–00:20。</p>
+      </div>
+    </section>
+
+    <section id="example-index" class="chapter appendix" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">附录 C</p>
+        <h2>原材料中的例子与类比索引</h2>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <caption>会议例子保留其教学作用后的去向</caption>
+          <thead><tr><th>例子</th><th>原本解释什么</th><th>本手册去向</th><th>来源</th></tr></thead>
+          <tbody>
+            <tr><td>问新闻后再问“他多大”</td><td>独立 API 无状态，历史必须拼进 Message List</td><td>第 03 章</td><td>会议 01 00:15–00:20</td></tr>
+            <tr><td>天气 / Web Search</td><td>实时信息通过 Tool 获得</td><td>第 02、04 章</td><td>会议 01 00:14–00:15、00:24–00:26</td></tr>
+            <tr><td>read_file 的 path 和行数</td><td>Tool 描述、输入参数和输出</td><td>第 04、07 章</td><td>会议 01 00:27、00:31–00:33</td></tr>
+            <tr><td>写文档前列目录、读文件、再写入</td><td>多轮工具选择与结果回填</td><td>第 05 章</td><td>会议 01 00:35–00:37</td></tr>
+            <tr><td>编码结束前运行、复读、截图</td><td>完成门禁与强制验证</td><td>第 05、14 章</td><td>会议 01 00:39–00:43</td></tr>
+            <tr><td>已完成 / 进行中 / 未完成任务</td><td>上下文压缩策略应区别任务状态</td><td>第 11 章</td><td>会议 02 00:03–00:05</td></tr>
+            <tr><td>总结本周工作</td><td>记忆搜索与会话记录检索</td><td>第 12 章</td><td>会议 02 00:09–00:10</td></tr>
+            <tr><td>每天 8 点看金价</td><td>Cron 把任务注入标准 Loop</td><td>第 16 章</td><td>会议 02 00:14–00:16</td></tr>
+            <tr><td>文旅 AI 与 GTM 工作流</td><td>内核与产品形态解耦，可信数据和业务流程优先</td><td>第 01、17 章</td><td>会议 01 00:04–00:09</td></tr>
+            <tr><td>100 个工具的注册与权限</td><td>Tool Runtime 的统一管理价值</td><td>第 13 章</td><td>会议 01 00:49–00:52</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="decision-ledger" class="chapter appendix" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">附录 D</p>
+        <h2>决定、建议、偏好、示例与未决事项分类账</h2>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <caption>不同信息类型不能混成同等约束</caption>
+          <thead><tr><th>类型</th><th>内容</th><th>本手册处理</th></tr></thead>
+          <tbody>
+            <tr><td>已确认决定</td><td>做本地 Agent Runtime；先可靠闭环；模块化从内核向扩展；先最小单位；GitHub 同步。</td><td>主线第 01、07、08 章。</td></tr>
+            <tr><td>正式设计边界</td><td>统一 Tool/AgentRun、权限、Event、Phase 0–7、M1–M5、测试风险排序。</td><td>以设计文档为项目正式依据。</td></tr>
+            <tr><td>工程师观点</td><td>约三周、Runtime 的个人定义、先一个 API、课程暂不必先学、具体价格与厂商建议。</td><td>保留时间语境，不扩写成永久事实。</td></tr>
+            <tr><td>用户问题 / 偏好</td><td>不偏好 CLI；关心企业交付、完成准确性、知识库位置、压缩方法、学习方式。</td><td>在对应章节显式保留。</td></tr>
+            <tr><td>教学示例</td><td>天气、新闻指代、read_file、写文档、代码验证、周报、金价 Cron。</td><td>附录 C 建立索引。</td></tr>
+            <tr><td>未来设想</td><td>第二 Provider、MCP、Skill、Cron、Memory、Webhook、复杂优化与 UI。</td><td>按路线图延后，不进入首切片。</td></tr>
+            <tr><td>未决事项</td><td>具体语言/框架、数据库实现细节、首个 Provider、最终 UI 形态、压缩阈值、检索算法。</td><td>不擅自替项目作决定。</td></tr>
+            <tr><td>非实质内容</td><td>寒暄、连线/共享屏幕、画图工具操作、口吃与无信息重复。</td><td>不进入教学正文，覆盖矩阵注明已排除。</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="coverage-matrix" class="chapter appendix" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">附录 E</p>
+        <h2>三份源材料覆盖矩阵</h2>
+      </div>
+
+      <h3>设计文档十大主题</h3>
+      <div class="table-wrap">
+        <table>
+          <caption>设计文档覆盖账本</caption>
+          <thead><tr><th>键</th><th>原主题</th><th>手册位置</th><th>覆盖说明</th></tr></thead>
+          <tbody>
+            <tr data-coverage="D-01"><td>D-01</td><td>项目定位</td><td>第 01、17 章</td><td>名称、目标、七项能力与本地工作空间助手演示场景。</td></tr>
+            <tr data-coverage="D-02"><td>D-02</td><td>设计原则</td><td>第 06、08、13 章</td><td>核心/扩展分离、可追踪、受限本地能力、先闭环、统一内部模型。</td></tr>
+            <tr data-coverage="D-03"><td>D-03</td><td>总体架构</td><td>第 06 章</td><td>接入、Runtime、Provider、Tool、数据、扩展和横向基础设施及依赖方向。</td></tr>
+            <tr data-coverage="D-04"><td>D-04</td><td>核心对象</td><td>第 06 章、附录 A</td><td>Agent、Session、Message、AgentRun、RunContext、Provider、Tool、ToolCall、Skill、Trigger、Artifact、Event。</td></tr>
+            <tr data-coverage="D-05"><td>D-05</td><td>核心模块设计</td><td>第 03–06、10–17 章</td><td>Interaction、Core、Provider、Tool、Session/Memory、MCP、Skill、Cron、Security、Observability 全覆盖。</td></tr>
+            <tr data-coverage="D-06"><td>D-06</td><td>推荐工程结构</td><td>第 18 章</td><td>目录职责、单仓单进程与模块接口边界。</td></tr>
+            <tr data-coverage="D-07"><td>D-07</td><td>落地节奏</td><td>第 18 章</td><td>Phase 0–7 的目标、交付和完成标准。</td></tr>
+            <tr data-coverage="D-08"><td>D-08</td><td>项目里程碑</td><td>第 18 章</td><td>M1–M5 的阶段与可展示成果。</td></tr>
+            <tr data-coverage="D-09"><td>D-09</td><td>开发优先级</td><td>第 07、08、18 章</td><td>优先链、不建议首期投入内容及第一垂直切片。</td></tr>
+            <tr data-coverage="D-10"><td>D-10</td><td>测试与验收</td><td>第 14、18 章</td><td>七类风险和 Unit/Integration/Scenario 三层测试。</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>会议 01 时间段</h3>
+      <div class="table-wrap">
+        <table>
+          <caption>会议 01 覆盖账本</caption>
+          <thead><tr><th>键</th><th>时间</th><th>实质信息</th><th>手册去向</th></tr></thead>
+          <tbody>
+            <tr data-coverage="M1-01"><td>M1-01</td><td>00:01–00:10</td><td>项目目标、约三周、模块沟通、Harness、CLI/UI、企业交付、业务形态、可信数据、轨迹、学习摩擦。</td><td>第 01、08、17、19 章</td></tr>
+            <tr data-coverage="M1-02"><td>M1-02</td><td>00:11–00:17</td><td>生成式模型本质、输入输出、三类局限、API 无状态、消息拼接与指代例子。</td><td>第 02、03 章</td></tr>
+            <tr data-coverage="M1-03"><td>M1-03</td><td>00:18–00:28</td><td>Context、User/System/Message List/Tool List、模型 API、应用层与构建层、用户不偏好 CLI、工具函数。</td><td>第 01、03、04、15 章</td></tr>
+            <tr data-coverage="M1-04"><td>M1-04</td><td>00:29–00:37</td><td>Function Calling、read_file 参数、ToolCall 分叉、结果回填、列目录/读/写文档的连续循环。</td><td>第 04、05、07 章</td></tr>
+            <tr data-coverage="M1-05"><td>M1-05</td><td>00:37–00:47</td><td>完成判断、模型与 Context、小模型分类、编码强制验证、思考—行动—观察、RAG 回归工具。</td><td>第 05、14、16 章</td></tr>
+            <tr data-coverage="M1-06"><td>M1-06</td><td>00:47–00:55</td><td>多会话、Context 上限与压缩、工具统一注册、权限边界、Read/Write/Delete、权限档位与 Harness 模式。</td><td>第 10、11、13 章</td></tr>
+            <tr data-coverage="M1-07"><td>M1-07</td><td>00:55–结束</td><td>会话隔离与数据库管理；重开会议等操作话语为非实质内容。</td><td>第 10 章、本矩阵</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>会议 02 时间段</h3>
+      <div class="table-wrap">
+        <table>
+          <caption>会议 02 覆盖账本</caption>
+          <thead><tr><th>键</th><th>时间</th><th>实质信息</th><th>手册去向</th></tr></thead>
+          <tbody>
+            <tr data-coverage="M2-01"><td>M2-01</td><td>00:00–00:07</td><td>短/长期记忆、压缩阈值示例、结构化任务摘要、完成状态差异、经验与评测基准。</td><td>第 10、11、14 章</td></tr>
+            <tr data-coverage="M2-02"><td>M2-02</td><td>00:07–00:11</td><td>memory.md、偏好/画像/事实、持续写入、Context 注入、记忆搜索、周报和知识库机制。</td><td>第 12 章</td></tr>
+            <tr data-coverage="M2-03"><td>M2-03</td><td>00:11–00:13</td><td>Runtime 的个人定义；核心与 Skill/MCP/知识库外围扩展。</td><td>第 06、16 章</td></tr>
+            <tr data-coverage="M2-04"><td>M2-04</td><td>00:13–00:16</td><td>Cron、调度器、任务/时间/位置/会话/频率、每天看金价、任务注入 Loop。</td><td>第 16 章</td></tr>
+            <tr data-coverage="M2-05"><td>M2-05</td><td>00:17–00:20</td><td>先接 API、Input/Output、read_file、本地文件验证、历史/System Prompt/Tool List、Memory 可延后、7–8 工具建议。</td><td>第 07、15 章</td></tr>
+            <tr data-coverage="M2-06"><td>M2-06</td><td>00:20–结束</td><td>用编码 Agent 开发、克制范围、先 Loop、最小单位、GitHub 同步、课程取舍；告别为非实质内容。</td><td>第 08、19 章、本矩阵</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="source-snapshot" class="chapter appendix" data-searchable data-nav-target>
+      <div class="chapter-head">
+        <p class="chapter-number">附录 F</p>
+        <h2>源文件版本快照</h2>
+      </div>
+      <p>以下三份文件是本手册内容的唯一事实来源。供应商价格、行业产品状态等易变化信息没有通过互联网改写，只按会议当时观点记录。</p>
+      <div class="table-wrap">
+        <table>
+          <caption>只读源文件与 SHA-256</caption>
+          <thead><tr><th>源文件</th><th>行数</th><th>字节数</th><th>SHA-256</th></tr></thead>
+          <tbody>
+            <tr><td><a href="个人本地智能助手-Agent项目设计方案.md">个人本地智能助手-Agent项目设计方案.md</a></td><td>768</td><td>23,713</td><td><code>3c1c322affc8056295a6810f4f6db6c6c0a208a9b9ea163564856e105e2f3779</code></td></tr>
+            <tr><td><a href="meeting/0829/会议录制：agent-meeting01.md">会议录制：agent-meeting01.md</a></td><td>1,151</td><td>59,156</td><td><code>6ba6fb17d6dc83ae5335c6af210b4b68df63154c1fe8c424add755bad2d8d670</code></td></tr>
+            <tr><td><a href="meeting/0829/会议录制：agent-meeting02.md">会议录制：agent-meeting02.md</a></td><td>464</td><td>22,506</td><td><code>f33607087582a429eace0e19b919aa83a7911befc398b7e33b0b295608fef4a5</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small-note">合计 2,383 行、105,375 字节。交付检查会重新计算三个校验值；若任一个变化，本覆盖矩阵需要重新审计。</p>
+    </section>
+
+    <footer class="document-footer">
+      <p>本手册是三份本地源材料的教学性整合。源文件保持不变；教学新增内容均以“教学解释”标记。</p>
+      <a href="#start">返回开头</a>
+    </footer>
+  </main>
+
+  <button id="back-to-top" type="button" aria-label="返回顶部">返回顶部</button>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const body = document.body;
+      const sidebar = document.getElementById("sidebar");
+      const navToggle = document.getElementById("mobile-nav-toggle");
+      const navClose = document.getElementById("mobile-nav-close");
+      const navScrim = document.getElementById("nav-scrim");
+      const searchInput = document.getElementById("handbook-search");
+      const clearSearch = document.getElementById("clear-search");
+      const searchStatus = document.getElementById("search-status");
+      const progress = document.getElementById("reading-progress");
+      const backToTop = document.getElementById("back-to-top");
+      const main = document.getElementById("main-content");
+      const desktopPrint = document.getElementById("print-handbook");
+      const mobilePrint = document.getElementById("mobile-print");
+      const mobileQuery = window.matchMedia("(max-width: 900px)");
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      const navLinks = Array.from(document.querySelectorAll('.toc a[href^="#"]'));
+      const searchableSections = Array.from(document.querySelectorAll("[data-searchable]"));
+      const observedSections = Array.from(document.querySelectorAll("[data-nav-target]"));
+
+      let searchTimer = 0;
+      let scrollTicking = false;
+      let printOpenState = [];
+
+      function setSidebarAccessibility(isOpen) {
+        const hiddenOnMobile = mobileQuery.matches && !isOpen;
+        sidebar.setAttribute("aria-hidden", String(hiddenOnMobile));
+        if ("inert" in sidebar) {
+          sidebar.inert = hiddenOnMobile;
+        }
+      }
+
+      function setMobileNav(isOpen, restoreFocus = false) {
+        const shouldOpen = mobileQuery.matches && isOpen;
+        body.classList.toggle("nav-open", shouldOpen);
+        navToggle.setAttribute("aria-expanded", String(shouldOpen));
+        navScrim.setAttribute("aria-hidden", String(!shouldOpen));
+        setSidebarAccessibility(shouldOpen);
+
+        if (shouldOpen) {
+          window.requestAnimationFrame(() => navClose.focus());
+        } else if (restoreFocus && mobileQuery.matches) {
+          navToggle.focus();
+        }
+      }
+
+      function syncViewportNavigation() {
+        if (mobileQuery.matches) {
+          setMobileNav(false, false);
+        } else {
+          body.classList.remove("nav-open");
+          navToggle.setAttribute("aria-expanded", "false");
+          navScrim.setAttribute("aria-hidden", "true");
+          sidebar.setAttribute("aria-hidden", "false");
+          if ("inert" in sidebar) {
+            sidebar.inert = false;
+          }
+        }
+      }
+
+      navToggle.addEventListener("click", () => setMobileNav(true));
+      navClose.addEventListener("click", () => setMobileNav(false, true));
+      navScrim.addEventListener("click", () => setMobileNav(false, true));
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && body.classList.contains("nav-open")) {
+          setMobileNav(false, true);
+        }
+      });
+
+      navLinks.forEach((link) => {
+        link.addEventListener("click", () => {
+          if (mobileQuery.matches) {
+            const targetId = decodeURIComponent(link.hash.slice(1));
+            const target = document.getElementById(targetId);
+            setMobileNav(false, false);
+            if (target) {
+              target.setAttribute("tabindex", "-1");
+              window.requestAnimationFrame(() => target.focus({ preventScroll: true }));
+            }
+          }
+        });
+      });
+
+      if (typeof mobileQuery.addEventListener === "function") {
+        mobileQuery.addEventListener("change", syncViewportNavigation);
+      } else if (typeof mobileQuery.addListener === "function") {
+        mobileQuery.addListener(syncViewportNavigation);
+      }
+      syncViewportNavigation();
+
+      function normalizeSearch(value) {
+        return value.trim().toLocaleLowerCase("zh-CN").replace(/\s+/g, " ");
+      }
+
+      function sectionMatches(section, terms) {
+        const text = normalizeSearch(section.textContent || "");
+        return terms.every((term) => text.includes(term));
+      }
+
+      function updateNavForSearch() {
+        navLinks.forEach((link) => {
+          const targetId = decodeURIComponent(link.hash.slice(1));
+          const target = document.getElementById(targetId);
+          link.hidden = Boolean(target && target.classList.contains("search-hidden"));
+        });
+
+        document.querySelectorAll(".toc-group").forEach((group) => {
+          let sibling = group.nextElementSibling;
+          let hasVisibleLink = false;
+          while (sibling && !sibling.classList.contains("toc-group")) {
+            if (sibling.matches("a") && !sibling.hidden) {
+              hasVisibleLink = true;
+            }
+            sibling = sibling.nextElementSibling;
+          }
+          group.hidden = !hasVisibleLink;
+        });
+      }
+
+      function runSearch() {
+        const query = normalizeSearch(searchInput.value);
+        const terms = query ? query.split(" ") : [];
+        let visibleCount = 0;
+
+        searchableSections.forEach((section) => {
+          const matches = terms.length === 0 || sectionMatches(section, terms);
+          section.classList.toggle("search-hidden", !matches);
+          if (matches) {
+            visibleCount += 1;
+          }
+        });
+
+        updateNavForSearch();
+        if (terms.length === 0) {
+          searchStatus.textContent = "已显示完整手册。输入关键词可筛选章节。";
+        } else if (visibleCount === 0) {
+          searchStatus.textContent = "没有匹配章节。请缩短关键词，或点击“清除”恢复全文。";
+        } else {
+          searchStatus.textContent = `找到 ${visibleCount} 个相关章节。清除搜索可恢复全文。`;
+        }
+      }
+
+      searchInput.addEventListener("input", () => {
+        window.clearTimeout(searchTimer);
+        searchTimer = window.setTimeout(runSearch, 120);
+      });
+
+      clearSearch.addEventListener("click", () => {
+        searchInput.value = "";
+        runSearch();
+        searchInput.focus();
+      });
+
+      function setActiveSection(id) {
+        navLinks.forEach((link) => {
+          if (link.hash === `#${id}`) {
+            link.setAttribute("aria-current", "location");
+          } else {
+            link.removeAttribute("aria-current");
+          }
+        });
+      }
+
+      if ("IntersectionObserver" in window) {
+        const visibleSections = new Map();
+        const observer = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (entry.isIntersecting) {
+                visibleSections.set(entry.target.id, entry.target);
+              } else {
+                visibleSections.delete(entry.target.id);
+              }
+            });
+
+            const nearest = Array.from(visibleSections.values())
+              .filter((section) => !section.classList.contains("search-hidden"))
+              .sort((a, b) => Math.abs(a.getBoundingClientRect().top) - Math.abs(b.getBoundingClientRect().top))[0];
+
+            if (nearest) {
+              setActiveSection(nearest.id);
+            }
+          },
+          { rootMargin: "-18% 0px -68% 0px", threshold: [0, 0.01] }
+        );
+        observedSections.forEach((section) => observer.observe(section));
+      }
+
+      function updateScrollState() {
+        const root = document.documentElement;
+        const scrollable = Math.max(root.scrollHeight - root.clientHeight, 1);
+        const ratio = Math.min(Math.max(root.scrollTop / scrollable, 0), 1);
+        progress.style.transform = `scaleX(${ratio})`;
+        backToTop.classList.toggle("is-visible", root.scrollTop > 720);
+        scrollTicking = false;
+      }
+
+      function requestScrollUpdate() {
+        if (!scrollTicking) {
+          scrollTicking = true;
+          window.requestAnimationFrame(updateScrollState);
+        }
+      }
+
+      window.addEventListener("scroll", requestScrollUpdate, { passive: true });
+      window.addEventListener("resize", requestScrollUpdate);
+      requestScrollUpdate();
+
+      backToTop.addEventListener("click", () => {
+        window.scrollTo({
+          top: 0,
+          behavior: reducedMotion.matches ? "auto" : "smooth"
+        });
+        main.focus({ preventScroll: true });
+      });
+
+      function printHandbook() {
+        window.print();
+      }
+
+      desktopPrint.addEventListener("click", printHandbook);
+      mobilePrint.addEventListener("click", printHandbook);
+
+      window.addEventListener("beforeprint", () => {
+        const details = Array.from(document.querySelectorAll("details"));
+        printOpenState = details.map((item) => item.open);
+        details.forEach((item) => {
+          item.open = true;
+        });
+      });
+
+      window.addEventListener("afterprint", () => {
+        document.querySelectorAll("details").forEach((item, index) => {
+          item.open = printOpenState[index] ?? true;
+        });
+      });
+
+      runSearch();
+    })();
+  </script>
+</body>
+</html>
