@@ -178,6 +178,19 @@ class StoredMessage:
     created_at: float
 
 
+@dataclass(frozen=True)
+class StoredSummary:
+    id: str
+    session_id: str
+    version: int
+    covered_through_seq: int
+    payload: dict
+    model: dict
+    prompt_version: str
+    state: str
+    created_at: float
+
+
 def _json_text(value) -> str:
     try:
         return json.dumps(
@@ -353,16 +366,26 @@ class RunJournal:
         return tuple(indexed)
 
     def record_model_reply(
-        self, message: dict, usage: dict | None, validation: str
+        self,
+        message: dict,
+        usage: dict | None,
+        validation: str,
+        source_kind: str = "model",
     ) -> str:
         message = _json_object(message)
         message.pop("reasoning_content", None)
         usage = None if usage is None else _json_object(usage)
-        if not isinstance(validation, str) or not validation:
+        if (
+            not isinstance(validation, str)
+            or not validation
+            or source_kind not in {"model", "summary"}
+            or (source_kind == "summary" and not validation.startswith("summary_"))
+            or (source_kind == "model" and validation.startswith("summary_"))
+        ):
             raise StoreError("JOURNAL_PAYLOAD_INVALID")
         calls = (
             self._valid_tool_calls(message)
-            if validation == "tool_calls_valid"
+            if source_kind == "model" and validation == "tool_calls_valid"
             else ()
         )
         with self._write() as connection:
@@ -372,7 +395,7 @@ class RunJournal:
             message_id = self._append_message(
                 connection,
                 role="assistant",
-                source_kind="model",
+                source_kind=source_kind,
                 payload=message,
                 validation=validation,
             )
@@ -916,6 +939,192 @@ class SessionStore:
         except (OSError, sqlite3.DatabaseError) as error:
             raise StoreError("STATE_BACKUP_FAILED") from error
         return destination
+
+    @staticmethod
+    def _summary_from_row(row) -> StoredSummary:
+        try:
+            payload = json.loads(row[4])
+            model = json.loads(row[5])
+            if not isinstance(payload, dict) or not isinstance(model, dict):
+                raise ValueError("summary payload is not an object")
+            return StoredSummary(
+                id=row[0],
+                session_id=row[1],
+                version=row[2],
+                covered_through_seq=row[3],
+                payload=payload,
+                model=model,
+                prompt_version=row[6],
+                state=row[7],
+                created_at=row[8],
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            raise StoreError("SESSION_STORE_ERROR") from error
+
+    def load_active_summary(self, session_id: str) -> StoredSummary | None:
+        try:
+            row = self.connection().execute(
+                """SELECT m.id, m.session_id, m.version,
+                          m.covered_through_seq, m.payload_json, m.model_json,
+                          m.prompt_version, m.state, m.created_at
+                   FROM sessions s
+                   LEFT JOIN summaries m
+                     ON m.id=s.active_summary_id AND m.session_id=s.id
+                   WHERE s.id=?""",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                raise StoreError("NOT_FOUND")
+            if row[0] is None:
+                return None
+            return self._summary_from_row(row)
+        except StoreError:
+            raise
+        except (sqlite3.DatabaseError, OSError) as error:
+            raise StoreError("SESSION_STORE_ERROR") from error
+
+    @staticmethod
+    def _summary_source_text(connection, session_id, message_id, covered_through_seq):
+        row = connection.execute(
+            """SELECT session_seq, role, source_kind, payload_json,
+                      validation_state
+               FROM messages
+               WHERE session_id=? AND id=? AND session_seq<=?""",
+            (session_id, message_id, covered_through_seq),
+        ).fetchone()
+        if row is None:
+            raise StoreError("SUMMARY_INVALID")
+        role, source_kind, validation = row[1], row[2], row[4]
+        if not (
+            (role == "user" and source_kind == "user")
+            or (role == "assistant" and validation == "answer_valid")
+        ):
+            raise StoreError("SUMMARY_INVALID")
+        try:
+            payload = json.loads(row[3])
+        except (TypeError, ValueError, RecursionError):
+            raise StoreError("SUMMARY_INVALID") from None
+        content = payload.get("content") if isinstance(payload, dict) else None
+        if not isinstance(content, str):
+            raise StoreError("SUMMARY_INVALID")
+        return content
+
+    def save_summary(
+        self,
+        session_id: str,
+        covered_through_seq: int,
+        payload: dict,
+        model: dict,
+        prompt_version: str,
+    ) -> StoredSummary:
+        """Validate source anchors and atomically switch the active summary."""
+        keys = {
+            "goals", "constraints", "decisions", "completed", "pending", "anchors"
+        }
+        if (
+            type(covered_through_seq) is not int
+            or covered_through_seq <= 0
+            or not isinstance(payload, dict)
+            or set(payload) != keys
+            or not isinstance(model, dict)
+            or not isinstance(prompt_version, str)
+            or not prompt_version
+        ):
+            raise StoreError("SUMMARY_INVALID")
+        try:
+            payload = _json_object(payload)
+            model = _json_object(model)
+            if len(_json_text(payload).encode("utf-8")) > 6144:
+                raise StoreError("SUMMARY_INVALID")
+            now = self._clock()
+            summary_id = uuid.uuid4().hex
+            with self.transaction() as connection:
+                session = connection.execute(
+                    "SELECT active_summary_id FROM sessions WHERE id=?", (session_id,)
+                ).fetchone()
+                if session is None:
+                    raise StoreError("NOT_FOUND")
+                terminal = connection.execute(
+                    """SELECT 1
+                       FROM runs r JOIN messages m
+                         ON m.run_id=r.id AND m.session_id=r.session_id
+                       WHERE r.session_id=? AND r.finished_at IS NOT NULL
+                       GROUP BY r.id
+                       HAVING MAX(m.session_seq)=?""",
+                    (session_id, covered_through_seq),
+                ).fetchone()
+                if terminal is None:
+                    raise StoreError("SUMMARY_INVALID")
+                previous = None
+                if session[0] is not None:
+                    previous = connection.execute(
+                        """SELECT version, covered_through_seq
+                           FROM summaries WHERE id=? AND session_id=?""",
+                        (session[0], session_id),
+                    ).fetchone()
+                    if previous is None or covered_through_seq <= previous[1]:
+                        raise StoreError("SUMMARY_INVALID")
+
+                for field in keys:
+                    facts = payload[field]
+                    if not isinstance(facts, list):
+                        raise StoreError("SUMMARY_INVALID")
+                    for fact in facts:
+                        if not isinstance(fact, dict) or set(fact) != {
+                            "text", "message_id", "start", "end"
+                        }:
+                            raise StoreError("SUMMARY_INVALID")
+                        text = fact["text"]
+                        message_id = fact["message_id"]
+                        start, end = fact["start"], fact["end"]
+                        if (
+                            not isinstance(text, str)
+                            or not text
+                            or not isinstance(message_id, str)
+                            or not message_id
+                            or type(start) is not int
+                            or type(end) is not int
+                            or not 0 <= start < end
+                        ):
+                            raise StoreError("SUMMARY_INVALID")
+                        source = self._summary_source_text(
+                            connection, session_id, message_id, covered_through_seq
+                        )
+                        if end > len(source) or source[start:end] != text:
+                            raise StoreError("SUMMARY_INVALID")
+
+                version = previous[0] + 1 if previous else 1
+                if session[0] is not None:
+                    connection.execute(
+                        "UPDATE summaries SET state='superseded' WHERE id=?",
+                        (session[0],),
+                    )
+                connection.execute(
+                    """INSERT INTO summaries (
+                           id, session_id, version, covered_through_seq,
+                           payload_json, model_json, prompt_version, state,
+                           created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)""",
+                    (
+                        summary_id,
+                        session_id,
+                        version,
+                        covered_through_seq,
+                        _json_text(payload),
+                        _json_text(model),
+                        prompt_version,
+                        now,
+                    ),
+                )
+                connection.execute(
+                    "UPDATE sessions SET active_summary_id=? WHERE id=?",
+                    (summary_id, session_id),
+                )
+            return self.load_active_summary(session_id)
+        except StoreError:
+            raise
+        except (sqlite3.DatabaseError, OSError) as error:
+            raise StoreError("SESSION_STORE_ERROR") from error
 
     def load_run_messages(
         self, session_id: str, run_id: str

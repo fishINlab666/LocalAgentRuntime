@@ -57,7 +57,7 @@ class NullRunJournal:
     def record_model_request(self, request, manifest):
         return None
 
-    def record_model_reply(self, message, usage=None, validation='raw'):
+    def record_model_reply(self, message, usage=None, validation='raw', source_kind='model'):
         return None
 
     def record_tool_started(self, call_id):
@@ -142,13 +142,22 @@ class Runtime:
             raise ValueError('Trace and journal must use the same run ID')
         self._used = False
 
-    def _build_request(self, current_request: dict, step: int):
+    def _build_request(self, current_request: dict, step: int, *, summarize=None):
         if self.request_builder is None:
             return current_request, {'source_kind': 'current_run', 'request_seq': step}
         builder = (self.request_builder.build
                    if callable(getattr(self.request_builder, 'build', None))
                    else self.request_builder)
-        built = builder(copy.deepcopy(current_request), self.config.max_input_bytes)
+        try:
+            built = builder(
+                copy.deepcopy(current_request),
+                self.config.max_input_bytes,
+                summarize=summarize,
+            )
+        except (ValueError, JournalFailure):
+            raise
+        except Exception as error:
+            raise JournalFailure(error) from error
         request = getattr(built, 'request', None)
         manifest = getattr(built, 'manifest', None)
         if not isinstance(request, dict) or not isinstance(manifest, dict):
@@ -166,6 +175,7 @@ class Runtime:
         finalize_only, final_reason = False, None
         calls, seen_ids = 0, set()
         answer_repairs = 0
+        summary_attempted = False
         engine = adapt_tools(self.tool)
         tools = engine.registry.schemas()
         persistent = not isinstance(self.journal, NullRunJournal)
@@ -211,6 +221,68 @@ class Runtime:
                     result.update(state='failed', stop_reason='TRACE_ERROR', answer=None)
             return result
 
+        def complete_request(request, manifest, purpose):
+            nonlocal calls
+            if calls >= self.config.max_steps:
+                return None
+            control.check()
+            deadline = time.monotonic() + control.remaining()
+            journal_call('record_model_request', request, manifest)
+            calls += 1
+            emit('model.requested', {'step': calls, 'purpose': purpose, **request})
+            model_start = time.monotonic()
+            timeout = min(self.config.model_timeout, deadline - model_start)
+            provider_messages = copy.deepcopy(request['messages'])
+            provider_tools = copy.deepcopy(request['tools'])
+            reply = bounded_call(
+                lambda: self.provider.complete(provider_messages, provider_tools, timeout),
+                timeout,
+                cancel,
+                deadline,
+                'MODEL_TIMEOUT',
+                self.journal.close_thread_connection,
+            )
+            return reply, model_start
+
+        def summarize(request, manifest):
+            nonlocal summary_attempted
+            if summary_attempted or calls >= self.config.max_steps - 1:
+                return None
+            summary_attempted = True
+            try:
+                completed = complete_request(request, manifest, 'summary')
+            except ProviderError:
+                return None
+            except StopRun as error:
+                if error.code == 'MODEL_TIMEOUT':
+                    return None
+                raise
+            if completed is None:
+                return None
+            reply, model_start = completed
+            if not isinstance(reply, ModelReply) or not isinstance(reply.message, dict):
+                return None
+            message = reply.message
+            validation = (
+                'summary_raw'
+                if message.get('role') == 'assistant'
+                else 'summary_invalid_response'
+            )
+            journal_call(
+                'record_model_reply', message, reply.usage, validation, 'summary'
+            )
+            emit('model.completed', {
+                'step': calls,
+                'purpose': 'summary',
+                'message': message,
+                'usage': reply.usage,
+                'elapsed_seconds': time.monotonic() - model_start,
+            })
+            return {
+                'message': copy.deepcopy(message),
+                'model': copy.deepcopy(self.provider.metadata),
+            }
+
         try:
             emit('run.started', {'provider': self.provider.metadata, 'config': asdict(self.config),
                                  'path': target_path, 'question': question})
@@ -220,21 +292,22 @@ class Runtime:
                 return finish('failed', 'INVALID_TASK')
             while calls < self.config.max_steps:
                 control.check()
-                deadline = time.monotonic() + control.remaining()
                 current_request = engine.policy.model_request(
                     messages, self.config.max_input_bytes, tools)
-                request, manifest = self._build_request(current_request, calls + 1)
-                if len(json.dumps(request, ensure_ascii=False).encode('utf-8')) > self.config.max_input_bytes:
+                request, manifest = self._build_request(
+                    current_request, calls + 1, summarize=summarize)
+                if len(json.dumps(
+                    request,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    sort_keys=True,
+                    separators=(',', ':'),
+                ).encode('utf-8')) > self.config.max_input_bytes:
                     return finish('failed', 'CONTEXT_LIMIT')
-                journal_call('record_model_request', request, manifest)
-                calls += 1
-                emit('model.requested', {'step': calls, **request})
-                model_start = time.monotonic()
-                timeout = min(self.config.model_timeout, deadline - model_start)
-                provider_messages, provider_tools = copy.deepcopy(request['messages']), copy.deepcopy(request['tools'])
-                reply = bounded_call(lambda: self.provider.complete(provider_messages, provider_tools, timeout),
-                                     self.config.model_timeout, cancel, deadline, 'MODEL_TIMEOUT',
-                                     self.journal.close_thread_connection)
+                completed = complete_request(request, manifest, 'task')
+                if completed is None:
+                    return finish('max_steps', 'MAX_STEPS')
+                reply, model_start = completed
                 if not isinstance(reply, ModelReply) or not isinstance(reply.message, dict):
                     return finish('failed', 'INVALID_MODEL_RESPONSE')
                 message = reply.message

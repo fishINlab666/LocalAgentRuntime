@@ -1049,8 +1049,8 @@ class SessionService:
         context = ContextBuilder(self.store, prepared.session_id, prepared.run_id)
 
         class RequestBuilder:
-            def build(inner_self, request, limit):
-                built = context.build(request, limit)
+            def build(inner_self, request, limit, *, summarize=None):
+                built = context.build(request, limit, summarize=summarize)
                 setter = getattr(policy, "set_visible_messages", None)
                 if callable(setter):
                     setter(built.manifest["selected_message_ids"])

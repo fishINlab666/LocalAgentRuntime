@@ -9,7 +9,8 @@ from local_agent.approvals import ApprovalBroker
 from local_agent.discovery import DirectoryTools
 from local_agent.file_tools import adapt_tools
 from local_agent.files import ReadFile
-from local_agent.runtime import Runtime
+from local_agent.provider import ModelReply
+from local_agent.runtime import RunConfig, Runtime
 from local_agent.session_store import SessionStore, StoreError
 from local_agent.sessions import RunSubmission, SessionScope, SessionService
 from local_agent.trace import Trace
@@ -45,6 +46,28 @@ class SessionRuntimeTests(unittest.TestCase):
             ),
         )
         return session, prepared
+
+    def seed_long_conversation(self, session, count=20):
+        messages = []
+        for number in range(count):
+            padding = chr(0x4E00 + number % 100) * 1400
+            prepared = self.service.submit(session.id, RunSubmission(
+                f"history-{number}", f"早期目标-{number}：{padding}",
+                "conversation", session.scope, None, None, {}))
+            prepared.journal.record_model_request(
+                {"messages": []}, {"source_kind": "fixture"})
+            prepared.journal.record_model_reply(
+                {"role": "assistant", "content": f"已记录-{number}：{padding}"},
+                None,
+                "answer_valid",
+            )
+            prepared.journal.finish_run({
+                "state": "completed",
+                "stop_reason": "ANSWER_VALIDATED",
+                "answer": f"已记录-{number}",
+            })
+            messages.append(self.store.load_run_messages(session.id, prepared.run_id)[0])
+        return messages
 
     def test_runtime_persists_each_request_reply_and_tool_result_in_order(self):
         session, prepared = self.prepare()
@@ -268,6 +291,117 @@ class SessionRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(file_result["stop_reason"], "WORKSPACE_UNAVAILABLE")
         self.assertEqual(file_provider.requests, [])
+
+    def test_summary_and_task_calls_share_one_model_budget_and_journal(self):
+        session = self.service.create(
+            self.workspace, "长会话", SessionScope("directory", None))
+        history = self.seed_long_conversation(session)
+        prepared = self.service.submit(session.id, RunSubmission(
+            "long-current", "继续上一轮", "conversation", session.scope,
+            None, None, {"max_steps": 2}))
+        first = history[0]
+        first_text = first.payload["content"][:12]
+        fact = {"text": first_text, "message_id": first.id,
+                "start": 0, "end": len(first_text)}
+        summary = {key: ([] if key not in {"goals", "pending", "anchors"} else [fact])
+                   for key in ("goals", "constraints", "decisions", "completed",
+                               "pending", "anchors")}
+        recent = history[-1]
+        recent_text = recent.payload["content"]
+        final = {"role": "assistant", "content": json.dumps({
+            "status": "answered",
+            "answer": "已继续上一轮。",
+            "references": [{"message_id": recent.id, "start": 0,
+                            "end": len(recent_text)}],
+        }, ensure_ascii=False)}
+
+        class PurposeProvider:
+            metadata = {"provider": "fixture", "model": "summary-budget", "simulated": True}
+
+            def __init__(inner_self):
+                inner_self.requests = []
+
+            def complete(inner_self, messages, tools, timeout):
+                inner_self.requests.append({
+                    "messages": messages, "tools": tools, "timeout": timeout})
+                reply = ({"role": "assistant", "content": json.dumps(summary, ensure_ascii=False)}
+                         if len(inner_self.requests) == 1 else final)
+                return ModelReply(reply, {"total_tokens": 10})
+
+        provider = PurposeProvider()
+        result = self.service.execute(
+            prepared,
+            provider,
+            Trace(self.root / "runs", self.workspace, run_id=prepared.run_id),
+            config=RunConfig(max_steps=2),
+        )
+
+        self.assertEqual(result["state"], "completed", result)
+        self.assertEqual(result["model_calls"], 2)
+        self.assertEqual(len(provider.requests), 2)
+        self.assertEqual(provider.requests[0]["tools"], [])
+        self.assertTrue(provider.requests[1]["tools"])
+        self.assertIn("session_summary", json.dumps(
+            provider.requests[1]["messages"], ensure_ascii=False))
+        manifests = self.store.connection().execute(
+            "SELECT payload_json FROM context_manifests WHERE run_id=? ORDER BY request_seq",
+            (prepared.run_id,),
+        ).fetchall()
+        self.assertEqual([
+            json.loads(row[0])["manifest"]["source_kind"] for row in manifests
+        ], ["summary", "task"])
+        summary_messages = self.store.connection().execute(
+            "SELECT validation_state FROM messages WHERE run_id=? AND source_kind='summary'",
+            (prepared.run_id,),
+        ).fetchall()
+        self.assertEqual(len(summary_messages), 1)
+
+    def test_failed_summary_is_attempted_once_then_history_tool_can_recover_detail(self):
+        session = self.service.create(
+            self.workspace, "降级会话", SessionScope("directory", None))
+        history = self.seed_long_conversation(session)
+        prepared = self.service.submit(session.id, RunSubmission(
+            "long-fallback", "找回最早目标", "conversation", session.scope,
+            None, None, {}))
+        first = history[0]
+        prefix = "早期目标-0"
+        search_call = {
+            "role": "assistant", "content": None, "tool_calls": [{
+                "id": "history-call", "type": "function", "function": {
+                    "name": "session_history",
+                    "arguments": json.dumps({
+                        "action": "search", "query": prefix, "intent": "回查早期目标",
+                    }, ensure_ascii=False),
+                },
+            }],
+        }
+        final = {"role": "assistant", "content": json.dumps({
+            "status": "answered", "answer": prefix,
+            "references": [{"message_id": first.id, "start": 0,
+                            "end": len(prefix)}],
+        }, ensure_ascii=False)}
+        provider = ScriptedProvider([
+            {"role": "assistant", "content": "not-json"},
+            search_call,
+            final,
+        ])
+
+        result = self.service.execute(
+            prepared,
+            provider,
+            Trace(self.root / "runs", self.workspace, run_id=prepared.run_id),
+        )
+
+        self.assertEqual(result["state"], "completed", result)
+        self.assertEqual(result["model_calls"], 3)
+        manifests = self.store.connection().execute(
+            "SELECT payload_json FROM context_manifests WHERE run_id=? ORDER BY request_seq",
+            (prepared.run_id,),
+        ).fetchall()
+        self.assertEqual([
+            json.loads(row[0])["manifest"]["source_kind"] for row in manifests
+        ], ["summary", "task", "task"])
+        self.assertIsNone(self.store.load_active_summary(session.id))
 
 
 class ApprovalJournalTests(unittest.TestCase):

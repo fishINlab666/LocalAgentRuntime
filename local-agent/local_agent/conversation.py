@@ -24,12 +24,13 @@ class ConversationPolicy:
         self.store = store
         self.session_id = session_id
         self.before_seq = before_seq
-        self._visible_segments = {}
+        self._context_segments = {}
+        self._queried_segments = {}
         self._queries = 0
         self._query_error = None
 
     def set_visible_messages(self, message_ids):
-        self._visible_segments = {}
+        self._context_segments = {}
         for message_id in message_ids:
             if not isinstance(message_id, str):
                 continue
@@ -37,7 +38,7 @@ class ConversationPolicy:
                 text = self._source_text(message_id)
             except AnswerError:
                 continue
-            self._visible_segments[message_id] = [(0, len(text), text)]
+            self._context_segments[message_id] = [(0, len(text), text)]
 
     def initial_messages(self, question, target):
         if not isinstance(question, str) or not question.strip() or target is not None:
@@ -69,13 +70,13 @@ class ConversationPolicy:
                 excerpt = hit.get("excerpt")
                 if (isinstance(message_id, str) and type(start) is int and type(end) is int
                         and isinstance(excerpt, str) and len(excerpt) == end - start):
-                    self._visible_segments.setdefault(message_id, []).append((start, end, excerpt))
+                    self._queried_segments.setdefault(message_id, []).append((start, end, excerpt))
         elif result.get("action") == "read":
             message_id, start, end = result.get("message_id"), result.get("start"), result.get("end")
             text = result.get("text")
             if (isinstance(message_id, str) and type(start) is int and type(end) is int
                     and isinstance(text, str) and len(text) == end - start):
-                self._visible_segments.setdefault(message_id, []).append((start, end, text))
+                self._queried_segments.setdefault(message_id, []).append((start, end, text))
 
     def failure_reason(self):
         return self._query_error
@@ -108,7 +109,11 @@ class ConversationPolicy:
         return text
 
     def _load_visible_text(self, message_id: str, start: int, end: int) -> str:
-        for left, right, text in self._visible_segments.get(message_id, ()):
+        segments = [
+            *self._context_segments.get(message_id, ()),
+            *self._queried_segments.get(message_id, ()),
+        ]
+        for left, right, text in segments:
             if left <= start < end <= right:
                 return text[start - left:end - left]
         raise AnswerError("INVALID_REFERENCE", "INVALID_REFERENCE: range is not visible")
