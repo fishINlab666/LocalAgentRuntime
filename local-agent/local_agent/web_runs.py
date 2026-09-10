@@ -379,8 +379,9 @@ class WebRuns:
 
     @staticmethod
     def _validate_session_run(data):
-        required = {'client_request_id', 'task_type', 'question', 'output_file'}
-        if not isinstance(data, dict) or set(data) != required:
+        required = {'client_request_id', 'task_type', 'question'}
+        if (not isinstance(data, dict)
+                or not required <= set(data) <= required | {'output_file'}):
             raise WebError(400, 'INVALID_REQUEST')
         request_id, question, task_type = data['client_request_id'], data['question'], data['task_type']
         if (not isinstance(request_id, str) or not 1 <= len(request_id) <= 128
@@ -390,7 +391,7 @@ class WebRuns:
             raise WebError(400, 'INVALID_QUESTION')
         if task_type not in {'files', 'conversation'}:
             raise WebError(400, 'INVALID_TASK')
-        output = data['output_file']
+        output = data.get('output_file')
         if output is not None:
             WebRuns.validate_output({'output_file': output}, None)
         if task_type == 'conversation' and output is not None:

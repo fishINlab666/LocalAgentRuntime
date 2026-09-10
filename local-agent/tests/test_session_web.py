@@ -209,7 +209,6 @@ class SessionWebTests(unittest.TestCase):
         session_id = self.create_session()
         for invalid in (
             {},
-            {"client_request_id": "r", "task_type": "files", "question": "q"},
             {"client_request_id": "r", "task_type": "other", "question": "q", "output_file": None},
             {"client_request_id": "r", "task_type": "files", "question": "q", "output_file": None, "scope": {}},
         ):
@@ -218,6 +217,14 @@ class SessionWebTests(unittest.TestCase):
                     self.request("POST", f"/api/sessions/{session_id}/runs", invalid)[0],
                     400,
                 )
+
+        status, started = self.request(
+            "POST",
+            f"/api/sessions/{session_id}/runs",
+            {"client_request_id": "without-output", "task_type": "files", "question": "q"},
+        )
+        self.assertEqual(status, 202)
+        self.wait_run(session_id, started["run"]["id"])
 
     def test_completed_history_survives_more_than_twenty_runs(self):
         session_id = self.create_session()
