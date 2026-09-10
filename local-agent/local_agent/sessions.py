@@ -895,3 +895,15 @@ class SessionService:
             journal=prepared.journal,
             request_builder=RequestBuilder(),
         ).run(prepared.submission.question, target)
+
+    def backup(self, destination: Path) -> dict:
+        try:
+            path = self.store.backup(destination)
+            connection = self.store.connection()
+            sessions = connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+            runs = connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+            return {"backup_path": str(path), "sessions": sessions, "runs": runs}
+        except StoreError:
+            raise
+        except sqlite3.DatabaseError:
+            raise SessionError("SESSION_STORE_ERROR") from None
