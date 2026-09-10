@@ -3,6 +3,8 @@
 from contextlib import contextmanager
 import copy
 from dataclasses import dataclass
+import hashlib
+import json
 import threading
 import time
 from typing import Callable, TypeVar
@@ -19,6 +21,15 @@ class ApprovalError(Exception):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+class JournalFailure(Exception):
+    """A durable run record could not be advanced safely."""
+
+    def __init__(self, cause: Exception | None = None):
+        self.code = 'SESSION_STORE_ERROR'
+        self.cause = cause
+        super().__init__(self.code)
 
 
 T = TypeVar('T')
@@ -91,10 +102,13 @@ class _Approval:
 
 class ApprovalBroker:
     def __init__(self, run_id: str, publish: Callable[[str, dict], None] | None = None,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic, *, journal=None,
+                 process_generation: str | None = None):
         self.run_id = run_id
         self.publish = publish
         self.clock = clock
+        self.journal = journal
+        self.process_generation = process_generation or uuid.uuid4().hex
         self._condition = threading.Condition(threading.RLock())
         self._pending: _Approval | None = None
         self._history: dict[str, _Approval] = {}
@@ -142,10 +156,19 @@ class ApprovalBroker:
                         if key in preview}
                 data.update(id=approval_id, approval_id=approval_id, run_id=self.run_id,
                             call_id=call_id, name=name, arguments=arguments, preview=preview,
-                            created_at=created, expires_at=created + remaining)
+                            created_at=created, expires_at=created + remaining,
+                            argument_hash=hashlib.sha256(json.dumps(
+                                arguments, ensure_ascii=False, allow_nan=False,
+                                sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest(),
+                            process_generation=self.process_generation)
                 if 'content' not in data and 'content' in arguments:
                     data['content'] = arguments['content']
                 approval = _Approval(data, control)
+                if self.journal is not None:
+                    try:
+                        self.journal.record_approval_required(call_id, data)
+                    except Exception as error:
+                        raise JournalFailure(error) from error
                 self._pending = approval
             try:
                 self._emit('approval.required', approval)
@@ -205,6 +228,11 @@ class ApprovalBroker:
                     if approval.decision != decision:
                         raise ApprovalError('APPROVAL_CONFLICT')
                     return decision
+                if self.journal is not None:
+                    try:
+                        self.journal.record_approval_decision(approval_id, decision)
+                    except Exception as error:
+                        raise JournalFailure(error) from error
                 approval.decision = decision
                 self._condition.notify_all()
                 return decision

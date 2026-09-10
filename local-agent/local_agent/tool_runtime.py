@@ -2,10 +2,11 @@
 
 import copy
 from dataclasses import dataclass
+import hashlib
 import json
 import time
 
-from .approvals import ApprovalError, RunStopped
+from .approvals import ApprovalError, JournalFailure, RunStopped
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,9 @@ def valid_arguments(spec, arguments):
             return False
         if len(value) < rule.get('minLength', 0) or len(value) > rule.get('maxLength', float('inf')):
             return False
+        allowed = rule.get('enum')
+        if allowed is not None and value not in allowed:
+            return False
         try:
             value.encode('utf-8')
         except UnicodeError:
@@ -134,6 +138,7 @@ class Invocation:
     result: dict
     decision: str = 'continue'
     reason: str | None = None
+    artifact_receipt: dict | None = None
 
 
 class ToolRuntime:
@@ -196,7 +201,19 @@ class ToolRuntime:
         except Exception:
             return None
 
-    def invoke(self, call, *, budget_ok, execute_bounded, emit, control, approvals=None, tool_timeout=5):
+    @staticmethod
+    def _journal(journal, method, *args):
+        if journal is None:
+            return None
+        try:
+            return getattr(journal, method)(*args)
+        except JournalFailure:
+            raise
+        except Exception as error:
+            raise JournalFailure(error) from error
+
+    def invoke(self, call, *, budget_ok, execute_bounded, emit, control, approvals=None,
+               tool_timeout=5, journal=None):
         function = call['function']
         name = function['name']
         emit('tool.requested', {'id': call['id'], **function})
@@ -248,6 +265,7 @@ class ToolRuntime:
                     except (ApprovalError, RunStopped) as error:
                         result, decision = tool_error(error.code), 'stop'
                 if result is None:
+                    self._journal(journal, 'record_tool_started', call['id'])
                     emit('tool.started', {'id': call['id'], 'name': name,
                          **{k: preview[k] for k in ('action_summary', 'risk', 'source', 'path') if k in preview}})
                     started = time.monotonic()
@@ -256,7 +274,7 @@ class ToolRuntime:
                         control.check()
                         if time.monotonic() >= tool_deadline:
                             raise RunStopped('TOOL_TIMEOUT')
-                    published, publication_outcomes = [], []
+                    published, publication_outcomes, unpersisted_receipts = [], [], []
                     publication_attempted = False
                     def publish(callback):
                         def accept_publication():
@@ -267,6 +285,13 @@ class ToolRuntime:
                             # Approval authorizes one publication attempt. Consume it before
                             # calling adapter code because that callback may have side effects.
                             publication_attempted = True
+                            if name == 'write_file':
+                                content = values.get('content')
+                                raw = content.encode('utf-8') if isinstance(content, str) else b''
+                                self._journal(journal, 'record_publication_intent', call['id'], {
+                                    'path': values.get('path'), 'bytes': len(raw),
+                                    'sha256': hashlib.sha256(raw).hexdigest(),
+                                })
                             try:
                                 receipt = callback()
                             except OSError:
@@ -284,6 +309,15 @@ class ToolRuntime:
                                 outcome = tool_error('WRITE_OUTCOME_UNKNOWN')
                                 publication_outcomes.append(copy.deepcopy(outcome))
                                 return outcome
+                            if name == 'write_file':
+                                try:
+                                    self._journal(journal, 'record_publication_receipt',
+                                                  call['id'], checked)
+                                except JournalFailure:
+                                    unpersisted_receipts.append(copy.deepcopy(checked))
+                                    outcome = tool_error('WRITE_OUTCOME_UNKNOWN')
+                                    publication_outcomes.append(copy.deepcopy(outcome))
+                                    return outcome
                             self.policy.accept(name, copy.deepcopy(values), copy.deepcopy(checked))
                             published.append(copy.deepcopy(checked))
                             publication_outcomes.append(copy.deepcopy(checked))
@@ -315,6 +349,8 @@ class ToolRuntime:
                         with control.lock:
                             result = published[0] if published else tool_error(error.code)
                         decision, reason = 'stop', error.code
+                    except JournalFailure:
+                        raise
                     except Exception:
                         with control.lock:
                             result = published[0] if published else tool_error('IO_ERROR')
@@ -323,14 +359,19 @@ class ToolRuntime:
                     outcome = self._outcome(tool, name, values, result, decision, reason,
                                             verify_result=verify_result,
                                             allow_success=allow_success,
-                                            accepted=bool(published))
+                                            accepted=bool(published), journal=journal,
+                                            call_id=call['id'], artifact_receipt=(
+                                                unpersisted_receipts[0]
+                                                if unpersisted_receipts else None))
                     emit('tool.finished', {'id': call['id'], 'elapsed_seconds': time.monotonic() - started})
                     return outcome
         return self._outcome(tool, name, values, result, decision, reason,
-                             verify_result=verify_result, allow_success=allow_success)
+                             verify_result=verify_result, allow_success=allow_success,
+                             journal=journal, call_id=call['id'])
 
     def _outcome(self, tool, name, arguments, raw, decision, reason, *,
-                 verify_result=False, allow_success=True, accepted=False):
+                 verify_result=False, allow_success=True, accepted=False,
+                 journal=None, call_id=None, artifact_receipt=None):
         if verify_result and tool is not None:
             raw = self._adapter_result(tool, arguments, raw, allow_success=allow_success)
         result = wire_result(raw, user_error_codes=self._user_errors(tool))
@@ -344,4 +385,6 @@ class ToolRuntime:
         result = wire_result(raw, self.policy.result_fields(), self._user_errors(tool))
         if not result['ok'] and result['error']['owner'] == 'user':
             decision = 'stop'
-        return Invocation(result, decision, reason)
+        if call_id is not None:
+            self._journal(journal, 'record_tool_result', call_id, result)
+        return Invocation(result, decision, reason, artifact_receipt)

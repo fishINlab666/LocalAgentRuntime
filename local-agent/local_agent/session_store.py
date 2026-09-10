@@ -221,6 +221,9 @@ class RunJournal:
             raise StoreError("JOURNAL_STORE_ERROR")
         return value
 
+    def close_thread_connection(self) -> None:
+        self._store.close_thread_connection()
+
     @contextmanager
     def _write(self):
         try:
@@ -442,6 +445,10 @@ class RunJournal:
     def record_tool_result(self, call_id: str, result: dict) -> str:
         result = _json_object(result)
         succeeded = result.get("ok") is True
+        error = result.get("error") if not succeeded else None
+        outcome_unknown = (
+            isinstance(error, dict) and error.get("code") == "WRITE_OUTCOME_UNKNOWN"
+        )
         with self._write() as connection:
             self._unfinished_run(connection)
             call = self._tool_call(connection, call_id)
@@ -468,14 +475,19 @@ class RunJournal:
                 validation="valid",
             )
             stage = (
-                "skipped"
-                if skipped_result
-                else ("succeeded" if succeeded else "failed")
+                "unknown" if outcome_unknown else (
+                    "skipped" if skipped_result else (
+                        "succeeded" if succeeded else "failed"
+                    )
+                )
             )
             connection.execute(
-                """UPDATE tool_calls SET stage=?, result_message_id=?
+                """UPDATE tool_calls SET stage=?, result_message_id=?,
+                       publication_state=CASE WHEN ? THEN 'unknown' ELSE publication_state END,
+                       recovery_state=CASE WHEN ? THEN 'outcome_unknown' ELSE recovery_state END
                    WHERE run_id=? AND call_id=?""",
-                (stage, message_id, self.run_id, call_id),
+                (stage, message_id, outcome_unknown, outcome_unknown,
+                 self.run_id, call_id),
             )
             connection.execute(
                 "UPDATE runs SET state='running', phase='tool_result_committed' WHERE id=?",
@@ -659,7 +671,10 @@ class RunJournal:
     def finish_run(self, result: dict) -> None:
         result = _json_object(result)
         state = result.get("state")
-        if state not in {"completed", "failed", "validation_failed", "cancelled"}:
+        if state not in {
+            "completed", "failed", "validation_failed", "cancelled",
+            "unable", "timed_out", "max_steps",
+        }:
             raise StoreError("JOURNAL_PAYLOAD_INVALID")
         stop_reason = result.get("stop_reason")
         if stop_reason is not None and not isinstance(stop_reason, str):

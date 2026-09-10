@@ -29,12 +29,19 @@ def redact(value):
 
 
 class Trace:
-    def __init__(self, directory: Path, workspace: Path, debug_content: bool = False):
+    def __init__(self, directory: Path, workspace: Path, debug_content: bool = False,
+                 *, run_id: str | None = None):
         directory, workspace = Path(directory).resolve(), Path(workspace).resolve()
         if directory == workspace or directory.is_relative_to(workspace):
             raise ValueError('Trace directory must be outside the readable workspace')
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.run_id = uuid.uuid4().hex
+        if run_id is not None and (
+                not isinstance(run_id, str) or not run_id
+                or len(run_id) > 128
+                or any(not (char.isascii() and (char.isalnum() or char in '-_'))
+                       for char in run_id)):
+            raise ValueError('Run ID must be a safe nonempty identifier')
+        self.run_id = run_id or uuid.uuid4().hex
         self.path = directory / (self.run_id + '.jsonl')
         fd = self._open_log(create=True)
         try:
