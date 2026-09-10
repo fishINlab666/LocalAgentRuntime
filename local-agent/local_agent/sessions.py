@@ -1,6 +1,6 @@
 """Session lifecycle and atomic, idempotent run submission."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import base64
 import hashlib
 import json
@@ -13,7 +13,7 @@ import time
 from typing import Callable, Literal
 import uuid
 
-from .session_store import SessionStore, StoreError
+from .session_store import RunJournal, SessionStore, StoreError
 
 
 class SessionError(Exception):
@@ -76,6 +76,7 @@ class PreparedRun:
     session_id: str
     created: bool
     submission: RunSubmission
+    journal: RunJournal = field(compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -598,7 +599,19 @@ class SessionService:
                 existing[7],
             )
             stored = self._run_from_row(run_row)
-            return PreparedRun(stored.id, session_id, False, stored.submission)
+            return PreparedRun(
+                stored.id,
+                session_id,
+                False,
+                stored.submission,
+                RunJournal(
+                    self.store,
+                    session_id,
+                    stored.id,
+                    clock=self._clock,
+                    id_factory=self._new_id,
+                ),
+            )
         if submission.scope != session_scope:
             raise SessionError("SESSION_SCOPE_MISMATCH")
         if submission.task_type == "files":
@@ -664,7 +677,19 @@ class SessionService:
                SET revision=revision+1, updated_at=? WHERE id=?""",
             (now, session_id),
         )
-        return PreparedRun(run_id, session_id, True, submission)
+        return PreparedRun(
+            run_id,
+            session_id,
+            True,
+            submission,
+            RunJournal(
+                self.store,
+                session_id,
+                run_id,
+                clock=self._clock,
+                id_factory=self._new_id,
+            ),
+        )
 
     def submit(
         self, session_id: str, submission: RunSubmission
