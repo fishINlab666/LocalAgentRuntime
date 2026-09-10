@@ -5,6 +5,7 @@ const vm = require('node:vm');
 
 class Element {
   constructor() { this.children = []; this.listeners = {}; this.value = ''; this.hidden = false; }
+  get firstElementChild() { return this.children[0] || null; }
   set textContent(value) { this.text = String(value); this.children = []; }
   get textContent() { return (this.text || '') + this.children.map(child => child.textContent).join(''); }
   append(...children) { this.children.push(...children); }
@@ -16,6 +17,7 @@ class Element {
 const html = fs.readFileSync('local_agent/static/index.html', 'utf8');
 const source = fs.readFileSync('local_agent/static/app.js', 'utf8');
 const elements = Object.fromEntries([...html.matchAll(/\bid="([^"]+)"/g)].map(match => [match[1], new Element()]));
+elements['session-select'].append(new Element());
 const requests = [], timers = new Map();
 let nextTimer = 0, respond;
 const config = {workspace: '/synthetic', ready: true, provider: {simulated: true}};
@@ -32,6 +34,9 @@ const context = vm.createContext({
   fetch: async (path, options) => {
     requests.push({path, ...options});
     if (path === '/api/config') return {ok: true, json: async () => config};
+    if (path === '/api/sessions' || path === '/api/sessions?archived=1') {
+      return {ok: true, json: async () => ({sessions: [], next_cursor: null})};
+    }
     return respond(path, options);
   },
 });
