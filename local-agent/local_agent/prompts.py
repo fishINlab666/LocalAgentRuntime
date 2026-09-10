@@ -40,3 +40,11 @@ scope.complete 只说明本次发现范围检查完成，不证明范围外文�
 文件已返回 UNSUPPORTED_FILE、FILE_TOO_LARGE、PATH_DENIED 或 FILE_COUNT_LIMIT 时，重复相同读取或重新列目录不能修复该错误；不要为此反复调用，无法完成时直接按 unable 格式结束。
 只能从本次成功工具结果选引用，不能引用仅列出但未读的文件，也不能引用重读失败后被移出 scope.read_files 的旧内容。
 ''' + ANSWER_FORMAT
+
+
+TOOL_PROTOCOL = """\n每个工具参数必须包含 intent：1–200 字的非空字符串，用一句话说明本次调用目的。
+intent 不是授权；工具动作、权限、风险由程序判断。示例 list_files({"path":".","intent":"发现与问题相关的资料"})。
+成功结果格式为 {"ok":true,"data":{...}}，其中 data.content、data.path 等是实际读取结果；失败结果的 error.owner 是 model 或 user。
+目录覆盖范围 scope 仍在结果顶层。owner=model 时可以修正参数或说明无法完成；owner=user 时运行会停止，需用户处理。
+USER_REJECTED 表示用户拒绝本次操作；不得重试、改名重提或继续其他工具，直接返回 unable，说明用户拒绝。
+"""

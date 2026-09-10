@@ -14,10 +14,10 @@ class DemoProvider:
         if messages[-1]['role'] != 'tool':
             return ModelReply({'role': 'assistant', 'content': None, 'tool_calls': [{
                 'id': 'demo_read', 'type': 'function', 'function': {'name': 'read_file',
-                    'arguments': json.dumps({'path': task['file']})}}]})
+                    'arguments': json.dumps({'path': task['file'], 'intent': '读取演示资料'})}}]})
         result = json.loads(messages[-1]['content'])
         if result['ok']:
-            content = result['content']
+            content = result['data']['content']
             lines = list(content.values()) if isinstance(content, dict) else content.splitlines()
             answer = {'status': 'answered', 'answer': '\n'.join(lines), 'citations': [{
                 'path': task['file'], 'start_line': 1, 'end_line': len(lines)}]}
@@ -39,8 +39,8 @@ class DemoProvider:
             elif scope['unread_files']:
                 calls = [('read_file', path) for path in scope['unread_files'][:4]]
             else:
-                current = {result['path']: result['content'] for result in results
-                           if 'content' in result and result['path'] in scope['read_files']}
+                current = {result['data']['path']: result['data']['content'] for result in results
+                           if 'content' in result['data'] and result['data']['path'] in scope['read_files']}
                 sections, citations = [], []
                 for path, content in current.items():
                     lines = list(content.values()) if isinstance(content, dict) else content.splitlines()
@@ -55,6 +55,6 @@ class DemoProvider:
         if calls:
             return ModelReply({'role': 'assistant', 'content': None, 'tool_calls': [
                 {'id': f'demo_{len(messages)}_{index}', 'type': 'function',
-                 'function': {'name': name, 'arguments': json.dumps({'path': path})}}
+                 'function': {'name': name, 'arguments': json.dumps({'path': path, 'intent': '发现并读取演示资料'})}}
                 for index, (name, path) in enumerate(calls)]})
         return ModelReply({'role': 'assistant', 'content': json.dumps(answer, ensure_ascii=False)})

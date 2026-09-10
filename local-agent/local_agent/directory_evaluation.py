@@ -35,13 +35,14 @@ def context_checks(events: list[dict]) -> dict:
             for completed in pending:
                 call_id, raw = completed['id'], completed['result']
                 numbered = copy.deepcopy(raw)
-                if raw.get('ok') and isinstance(raw.get('content'), str):
-                    numbered['content'] = {str(i): line for i, line in enumerate(raw['content'].splitlines(), 1)}
+                data = numbered.get('data', numbered)
+                if raw.get('ok') and isinstance(data.get('content'), str):
+                    data['content'] = {str(i): line for i, line in enumerate(data['content'].splitlines(), 1)}
                 round_trip &= call_id in declarations and returned.get(call_id) in (raw, numbered)
             pending = []
     try:
         first_is_list = (first_call is not None and first_call['name'] == 'list_files'
-                         and json.loads(first_call['arguments']) == {'path': '.'})
+                         and json.loads(first_call['arguments']).get('path') == '.')
     except (ValueError, TypeError, RecursionError):
         first_is_list = False
     return {'first_tool_is_root_listing': first_is_list,

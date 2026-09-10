@@ -12,7 +12,7 @@ from unittest.mock import patch
 def call_message(call_id='c1', path='a.md', name='read_file', arguments=None):
     return {'role': 'assistant', 'content': None, 'tool_calls': [{
         'id': call_id, 'type': 'function', 'function': {'name': name,
-        'arguments': arguments if arguments is not None else json.dumps({'path': path})}}]}
+        'arguments': arguments if arguments is not None else json.dumps({'path': path, 'intent': '核对文件证据'})}}]}
 
 
 def final_message(status='answered', quote='代号：orange-731'):
@@ -78,7 +78,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn('orange-731', json.dumps(p.requests[0]))
         self.assertEqual([m['role'] for m in p.requests[1]], ['system', 'user', 'assistant', 'tool'])
         self.assertEqual(p.requests[1][-1]['tool_call_id'], 'c1')
-        numbered = json.loads(p.requests[1][-1]['content'])['content']
+        numbered = json.loads(p.requests[1][-1]['content'])['data']['content']
         self.assertIsInstance(numbered, dict)
         self.assertEqual(numbered['1'], '代号：orange-731')
         self.assertEqual(events[-1]['event'], 'run.ended')
@@ -94,13 +94,13 @@ class RuntimeTests(unittest.TestCase):
         result, provider, events = self.run_script([call_message(), final], debug=True)
         self.assertEqual(result['state'], 'completed')
         payload = json.loads(provider.requests[1][-1]['content'])
-        self.assertEqual(payload['content'], {
+        self.assertEqual(payload['data']['content'], {
             '1': '# 记录', '2': '', '3': '来源', '4': '说明', '5': '',
             '6': '1  00:19:24  ', '7': '先发 input，再等 output。  ',
             '8': '\t下一步读文件。', '9': '结束'})
-        self.assertEqual(payload['line_count'], 9)
+        self.assertEqual(payload['data']['line_count'], 9)
         snapshot = next(e['data']['result'] for e in events if e['event'] == 'tool.completed')
-        self.assertEqual(snapshot['content'], source.replace('\r\n', '\n'))
+        self.assertEqual(snapshot['data']['content'], source.replace('\r\n', '\n'))
         self.assertEqual(result['answer']['citations'][0]['quote'], quote)
 
     def test_numbered_lines_do_not_allow_wrong_line_or_paraphrased_quote(self):
@@ -127,7 +127,7 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(result['state'], 'completed')
                 self.assertEqual(result['model_calls'], 2)
                 returned = [json.loads(m['content']) for m in provider.requests[1] if m['role'] == 'tool']
-                self.assertEqual([r['content'] for r in returned], [source] * reads)
+                self.assertEqual([r['data']['content'] for r in returned], [source] * reads)
                 requested = [e['data'] for e in events if e['event'] == 'model.requested'][1]
                 self.assertEqual(requested['messages'], provider.requests[1])
                 request = {key: requested[key] for key in ('messages', 'tools')}

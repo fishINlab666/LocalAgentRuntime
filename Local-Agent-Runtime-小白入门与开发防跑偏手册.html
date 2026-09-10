@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <link rel="icon" href="data:image/svg+xml,%3Csvg viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Cpath d='M8 9h16v3H8zm0 6h12v3H8zm0 6h16v3H8z' fill='white'/%3E%3C/svg%3E">
-  <title>Local Agent Runtime｜入门与开发防跑偏手册</title>
+  <title>Local Agent Runtime｜学习与开发工作手册 · 优化版</title>
   <style>
     :root {
       --bg: #f6f7f9;
@@ -425,6 +425,11 @@
       padding: 0;
       color: inherit;
       font-size: inherit;
+    }
+
+    pre.lesson-example {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
 
     .meta-grid,
@@ -1065,6 +1070,45 @@
       }
     }
 
+    .chapter-bridge {
+      margin: 1rem 0 1.5rem;
+      padding-left: 1rem;
+      border-left: 3px solid var(--border-strong);
+      color: var(--text-muted);
+    }
+
+    .lesson-nav, .chapter-pager {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1rem;
+      margin: 1.25rem 0;
+    }
+
+    .lesson-nav a, .chapter-pager a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+    }
+
+    .chapter-pager {
+      justify-content: space-between;
+      border-top: 1px solid var(--border);
+      padding-top: 0.75rem;
+    }
+
+    .answer-key {
+      background: var(--surface);
+      border-left: 3px solid var(--accent);
+    }
+
+    .answer-key > summary {
+      color: var(--accent-dark);
+    }
+
+    [id^="runtime-"] {
+      scroll-margin-top: 6rem;
+    }
+
     @media (prefers-reduced-motion: reduce) {
       html {
         scroll-behavior: auto;
@@ -1104,8 +1148,14 @@
       #nav-scrim,
       #sidebar,
       #back-to-top,
+      .lesson-nav,
+      .chapter-pager,
       .skip-link {
         display: none !important;
+      }
+
+      .chapter.search-hidden {
+        display: block !important;
       }
 
       #main-content {
@@ -1203,6 +1253,15 @@
       }
     }
   </style>
+  <noscript>
+    <style>
+      .mobile-header, .search-row, .search-label, #search-status,
+      #mobile-nav-close, #print-handbook, #back-to-top { display: none !important; }
+      @media screen and (max-width: 900px) {
+        #sidebar { position: static; width: 100%; max-height: none; transform: none; box-shadow: none; }
+      }
+    </style>
+  </noscript>
 </head>
 <body>
   <a class="skip-link" href="#main-content">跳到正文</a>
@@ -1236,15 +1295,15 @@
       <a href="#start" aria-current="location">00 使用说明与学习地图</a>
       <a href="#project">01 项目究竟做什么</a>
       <a href="#model-to-agent">02 从大模型到 Agent</a>
-      <a href="#context">03 Context</a>
-      <a href="#tool">04 Tool</a>
-      <a href="#agent-loop">05 Agent Loop</a>
-      <a href="#runtime">06 Runtime / Harness</a>
+      <a href="#context">03 模型这一轮看见什么</a>
+      <a href="#tool">04 工具怎样真实执行</a>
+      <a href="#agent-loop">05 结果怎样回到循环</a>
+      <a href="#runtime">06 谁管理整个运行</a>
       <a href="#first-slice">07 第一步做什么</a>
       <a href="#guardrails">08 防跑偏检查表</a>
 
       <p class="toc-group">2–3 小时深挖</p>
-      <a href="#deep-dives">深挖导读</a>
+      <a href="#deep-dives">09 深挖导读</a>
       <a href="#session-memory">10 Session、Context、Memory</a>
       <a href="#context-compression">11 上下文压缩</a>
       <a href="#long-term-memory">12 长期记忆与知识库</a>
@@ -1275,14 +1334,21 @@
   <main id="main-content" tabindex="-1">
     <section id="start" class="chapter hero" data-searchable data-nav-target>
       <p class="kicker">LOCAL AGENT RUNTIME · 学习与开发手册</p>
-      <h1>先把 Agent 的骨架看懂，再写第一行项目代码</h1>
-      <p class="lead">这不是一份泛泛的 Agent 科普，而是把当前项目设计方案与两次会议逐字记录重新编排成一条能执行的学习路径。你读完主线，应当知道项目为什么做、核心怎样运行、第一步验证什么，以及哪些诱人的功能现在不要做。</p>
+      <h1>从一次读文件任务，看懂 Agent 如何工作</h1>
+      <p class="lead">把设计方案与两份会议记录接成一条学习路径：先看程序实际做了什么，再认识它的名字，最后确定开发边界。适合开工前学习，也适合闭环已跑通后对照代码复盘。</p>
+      <p class="small-note">教学优化版 · 2026-09-10 · 第 10–16 章重编：先看具体任务 → 跟着步骤理解 → 自己回答 → 展开解析。原始资料保持不变。</p>
 
       <div class="meta-grid" aria-label="手册阅读信息">
         <div><strong>主线</strong><span>60–90 分钟主线</span></div>
         <div><strong>完整阅读</strong><span>约 2–3 小时</span></div>
-        <div><strong>唯一事实来源</strong><span>1 份设计文档 + 2 份会议记录</span></div>
+        <div><strong>原始项目依据</strong><span>1 份设计文档 + 2 份会议记录</span></div>
         <div><strong>最终落点</strong><span>单 Provider + 单 read_file 的真实 Loop</span></div>
+      </div>
+
+      <div class="callout teaching" id="current-stage">
+        <p class="callout-label">现在读到哪里 · 2026-09-09 状态补充</p>
+        <p><strong>最小闭环已验证，受限目录发现的真实固定组已通过。</strong>这证明主链成立，尚不等于所有回答准确、用户收益已测量或完整 M1 完成。已有输出保真失败记录保留，新版真实复测已后置，没有要求你重启或重跑的活动任务。</p>
+        <p>此段是原始材料之外的日期化进度补充；后续状态只以<a href="local-agent/trial/directory-check.md">当前阶段记录</a>为准。第 07 章仍解释“最初如何验证”，不要求重做已完成阶段。</p>
       </div>
 
       <div class="source-strip" aria-label="来源标签说明">
@@ -1299,7 +1365,9 @@
 
       <h2>怎么读，摩擦最小</h2>
       <ol class="reading-path">
-        <li><strong>今天只想开工：</strong>依次读第 01–08 章，最后照“第一垂直切片验收单”执行。</li>
+        <li><strong>首次学习：</strong>依次读第 01–08 章；每章先口头回答自检，再展开“参考答案与判断依据”。</li>
+        <li><strong>第 06 章容易卡住：</strong>直接从<a href="#runtime-story">一项读文件任务</a>开始；认识职责后再看架构，不必先背术语表。</li>
+        <li><strong>闭环已经跑通：</strong>对照<a href="#current-stage">当前阶段</a>和自己的运行记录复盘，按新目标选择深挖章节。</li>
         <li><strong>想建立完整认知：</strong>主线后继续读第 10–19 章，再用术语表和来源矩阵复核。</li>
         <li><strong>遇到术语不确定：</strong>先查附录 A；看到会议转写中的怪词，查附录 B，不要自行脑补。</li>
         <li><strong>担心遗漏原话：</strong>附录 E 将设计文档十大主题、会议 01 七个时段、会议 02 六个时段逐一映射。</li>
@@ -1382,7 +1450,8 @@
         </div>
       </div>
 
-      <h3>当前项目必须能展示的能力</h3>
+      <h3>完整项目的目标能力（分阶段建设）</h3>
+      <p>以下是设计方案的完整目标，不是第一切片必须一次实现的清单，也不是这些功能已经全部完成的声明。</p>
       <ul class="check-list">
         <li>完整 Agent Loop，而非单轮聊天封装。</li>
         <li>统一 Tool Runtime，让模型安全操作外部环境。</li>
@@ -1409,6 +1478,14 @@
           <li>这个项目与“套一个聊天页面”的根本区别是什么？</li>
           <li>为什么企业交付不能先假设产品一定是对话框？</li>
           <li>用户不偏好 CLI，会不会改变 Runtime 的核心验收？为什么？</li>
+        </ol>
+      </details>
+      <details class="answer-key" data-source="教学解释">
+        <summary>参考答案与判断依据 · 先自己回答，再展开</summary>
+        <ol>
+          <li>聊天页面提供交互入口。这个项目还要证明模型能提出动作、程序受控执行、真实结果回填并驱动后续判断；同一运行系统可以换不同界面。</li>
+          <li>企业交付要匹配已有流程、数据和权限，可能嵌入表单、审批或后台任务。界面形态应由业务使用方式决定。</li>
+          <li>不改变核心的工具执行、回填、停止和证据验收。原设计 Phase 1 仍写 CLI；若改入口应明确记录选择，不能把教学建议冒充原设计。</li>
         </ol>
       </details>
 
@@ -1451,7 +1528,7 @@
         </article>
         <article>
           <p class="mini-label">02 没有天然状态与记忆</p>
-          <p>独立 API 请求互不相识。应用必须把历史消息重新放入下一次 Context。</p>
+          <p>在本项目自行组装请求的方式下，历史需要由应用重新带入。服务端也可以代管会话，但最终仍需把有关材料送入本轮推理；不是模型本体永久记忆。</p>
         </article>
         <article>
           <p class="mini-label">03 不能亲自做事</p>
@@ -1485,6 +1562,14 @@
           <li>本地文件真正由谁读取：模型还是工具代码？</li>
         </ol>
       </details>
+      <details class="answer-key" data-source="教学解释">
+        <summary>参考答案与判断依据 · 模型本体的边界</summary>
+        <ol>
+          <li>独立模型调用只处理本轮输入。应用或服务端会话机制要把历史带入下一轮，才有连续性；不因“同一个 Agent”就自动共享全部历史。</li>
+          <li>Web Search 获取可访问的外部网页信息，包括新发布和既有资料，补充训练知识的时效与覆盖局限。它不自动解决长期记忆，也不能读取所有私有数据。</li>
+          <li>读取由工具代码完成。模型生成请求，Runtime 校验和执行，结果回填后模型才获得文件内容。</li>
+        </ol>
+      </details>
 
       <div class="source-note">
         <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
@@ -1501,6 +1586,8 @@
         <p class="chapter-question">本章问题：无状态 API 为什么能表现得像“记得前文”？</p>
       </div>
 
+      <p class="chapter-bridge">承接第 02 章：模型本轮能用的信息来自本轮输入。现在只解决一件事——程序怎样把前文和工具结果放进这份输入；暂时不需要实现长期记忆或摘要。</p>
+
       <div class="callout conclusion">
         <p class="callout-label">一句话结论</p>
         <p><strong>不是模型在后台偷偷记住你，而是应用在每轮调用前重新组装 Context。</strong></p>
@@ -1508,6 +1595,15 @@
 
       <h3>从单个 Input 扩展成 Context</h3>
       <p>会议 01 先用两轮对话解释：第一轮问某人的新闻，第二轮只问“他今年多大”，如果第二次只发送这一句，模型不知道“他”是谁；若把第一轮 User、Assistant 和第二轮 User 依序放进 Message List，模型就能从本次请求里解析指代。</p>
+
+      <div class="callout teaching">
+        <span class="source-badge source-teaching" data-source="教学解释">教学解释</span>
+        <p><strong>先用原文追加就能产生短期连续性。</strong>第一轮发送“请读取项目设计文档”；第二轮把原问题、模型的读取请求和工具返回的内容一起发送。模型从本次输入得知刚才发生了什么。压缩用于历史太长时节省空间，不是连续性的起点。</p>
+        <pre><code>第 1 次模型请求：规则 + 用户问题 + 可用工具定义
+第 2 次模型请求：规则 + 用户问题 + 工具调用请求 + 工具返回结果 + 可用工具定义</code></pre>
+        <p>Tool List 是本轮可选动作的说明；已经用过的工具及其结果属于消息历史。工具定义可能通过 API 的单独字段发送，仍属于本轮模型可见材料。</p>
+      </div>
+      <p class="small-note">下面是目标架构可能组装的材料。Skill、摘要、长期 Memory 只在具备对应能力且本轮需要时加入，不是每轮的必填项。</p>
 
       <div class="context-stack" role="img" aria-label="Context 的组成结构">
         <div><strong>System Prompt</strong><span>身份、目标、规则</span></div>
@@ -1536,6 +1632,19 @@
       <h3>Context 不是数据库，也不是 Session</h3>
       <p>Context 是<strong>某一轮请求实际送给模型的集合</strong>；Session 是保存连续交互、运行、工具调用、Artifact 和摘要的容器；Memory 是被保存、加工、检索，并在需要时重新放进 Context 的信息。数据库负责持久化这些对象，但数据库里的所有内容不会每轮全部塞给模型。</p>
 
+      <h3>Session 有 100 条历史，这次到底选哪些？</h3>
+      <p>可能全部选中，也可能只选一部分；“存有 100 条”本身无法回答。决定因素包括模型输入预算、当前目标、近期往返、相关资料，以及必须保留的用户约束和工具调用关系。具体策略由 Context Builder 的程序逻辑制定，原材料没有确认唯一算法。</p>
+      <div class="callout teaching">
+        <span class="source-badge source-teaching" data-source="教学解释">教学解释 · 最小选择策略示意</span>
+        <ol>
+          <li>先保留本次目标、关键限制和本轮可用工具。</li>
+          <li>保留最近的交互，尤其是还要用到的工具请求与结果，并按原调用 ID 配对。</li>
+          <li>有余量再加入相关旧消息或检索结果；空间不足时才裁剪较旧内容或生成摘要。</li>
+          <li>相关事实放不下时应明确缺失、再按需读取，不能用摘要替代未经验证的原文事实。</li>
+        </ol>
+        <p>Session 在交互过程中持续保存；Context Builder 在每次模型请求前组装；压缩通常在预算不足时介入；长期记忆在需要跨会话信息时保存或检索。短历史的第一个 Loop 可以完全不触发后两项。</p>
+      </div>
+
       <h3>成本为什么会增长</h3>
       <p>会议 01 指出，每次调用若都追加完整历史，Context 会不断累积，模型处理量与成本随之增大，最终触及上下文窗口限制。后续的裁剪、摘要和压缩，不是“可有可无的智能增强”，而是长会话迟早要面对的工程问题；但它不是第一垂直切片的前置条件。</p>
 
@@ -1555,6 +1664,14 @@
           <li>Message List 如何制造短期连续性？</li>
           <li>Tool List 为什么属于 Context，而工具实现本身不属于？</li>
           <li>Session 中有 100 条历史，是否代表模型本轮看见 100 条？</li>
+        </ol>
+      </details>
+      <details class="answer-key" data-source="教学解释">
+        <summary>参考答案与判断依据 · 不必先压缩才有连续性</summary>
+        <ol>
+          <li>把上一轮相关消息再次发送，模型就能在本轮输入里读到前文。短历史可直接追加；摘要和压缩用于历史变长后的预算管理。</li>
+          <li>Tool List 描述本轮可选工具及其调用方式，因此必须让模型看见；实际执行代码留在运行系统中。Tool List 不是使用记录。</li>
+          <li>不代表。模型看到的是本轮实际选中的材料；100 条可能全部放得下，也可能需要筛选。选择依据包括目标、预算、近期往返和调用/结果配对，原设计未规定唯一算法。</li>
         </ol>
       </details>
 
@@ -1617,6 +1734,11 @@
 
       <h3>描述与 Schema 为什么影响效果</h3>
       <p>会议 01 指出，模型要调得准，必须知道三件事：有哪些工具、何时使用、具体怎样传参。描述含糊会导致选错工具；参数 Schema 不清会导致调用失败。模型自身是否具备可靠 Tool Calling 能力也会影响参数生成，但 Runtime 仍不能因此省略校验。</p>
+      <div class="callout teaching">
+        <span class="source-badge source-teaching" data-source="教学解释">教学解释</span>
+        <p><strong>描述帮助选工具；Schema 帮助填参数。</strong>“需要本地文本内容时调用 read_file”告诉模型什么时候用；“path 必填且是字符串”告诉模型怎么填写。只有描述，可能选对工具却填错参数；只有参数格式，可能不知道何时该选它。上方 inputSchema 是便于阅读的简写，不是可直接复制使用的完整 JSON Schema。</p>
+        <p><strong>参数正确也不等于获得授权。</strong>文件存在，仍可能位于禁止访问的目录；函数能够执行，仍可能有删除或发送消息的副作用。Tool Runtime 要执行参数、权限和运行边界检查。需要批准的操作，应在执行前取得批准。</p>
+      </div>
 
       <div class="callout warning">
         <p class="callout-label">常见误区</p>
@@ -1636,6 +1758,14 @@
           <li>为什么一个函数存在，不代表 Agent 就能安全使用它？</li>
         </ol>
       </details>
+      <details class="answer-key" data-source="教学解释">
+        <summary>参考答案与判断依据 · 区分请求、执行与授权</summary>
+        <ol>
+          <li>Agent Core 解析并路由 ToolCall，Tool Runtime 校验、授权和调用工具代码。结果先回到运行历史，再进入下一轮模型请求，不一定直接呈现为用户最终答案。</li>
+          <li>描述回答“什么时候选它”；Schema 回答“参数如何填写”。二者帮助模型选对、填对，但不能替代程序校验。</li>
+          <li>函数存在只说明有可执行代码。安全使用还需要注册、参数与路径检查、权限控制、必要审批、超时和取消。文件存在或参数正确不代表有权操作。</li>
+        </ol>
+      </details>
 
       <div class="source-note">
         <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
@@ -1652,6 +1782,8 @@
         <p class="chapter-question">本章问题：一次 ToolCall 为什么还不算 Agent？</p>
       </div>
 
+      <p class="chapter-bridge">第 04 章把一个动作交给工具执行；本章接着解释执行后如何继续。同一个读文件任务中，模型可能被调用两次：先请求读取，再根据回填内容回答。</p>
+
       <div class="callout conclusion">
         <p class="callout-label">一句话结论</p>
         <p>真正的闭环是：模型决定直接回答或请求工具；Runtime 执行；<strong>工具结果回填</strong>到消息历史；模型基于新证据再次决定，直到满足停止条件。</p>
@@ -1660,7 +1792,7 @@
       <div class="diagram loop-diagram" role="img" aria-label="Agent Loop 从模型判断到工具结果回填的循环">
         <div class="diagram-node diagram-core">Model：判断</div>
         <div class="branch-row">
-          <div class="branch"><span>Final Response</span><strong>保存并结束</strong></div>
+          <div class="branch"><span>Final Response</span><strong>检查完成条件 → 满足后结束</strong></div>
           <div class="branch"><span>ToolCall</span><strong>校验 → 权限 → 执行</strong></div>
         </div>
         <div class="diagram-arrow" aria-hidden="true">工具结果 / 错误 ↓</div>
@@ -1678,7 +1810,13 @@
         <li>模型看到目标和全部结果，判断是否可以给最终回答。</li>
       </ol>
 
+      <h3>回填的作用：把行动变成模型可见的证据</h3>
+      <p>模型只看见 ToolCall 时，最多知道“曾请求读取”，不能据此确认执行成功，更不知道文件内容。如果连请求记录也没有进入本轮 Context，它也不知道自己请求过。Runtime 要把成功或错误按原调用 ID 关联，并交给 Context Builder 带入下一轮。</p>
+      <p>例如，读取返回“文件不存在”，模型才有依据修正路径、请求列目录或说明无法完成。给模型的错误应保留可恢复信息并脱敏；给开发者的诊断日志可以记录更完整的内部细节。回填首先服务于下一步判断，也服务于复盘。</p>
+      <p><strong>分叉有两个责任：</strong>模型基于 Context 生成最终回答或工具请求；Agent Core 解析结果并执行相应分支。Context 是判断材料，Loop 是控制流程，二者不应混叫。</p>
+
       <h3>第一版可采用的伪代码</h3>
+      <p class="small-note">教学解释：下面表示职责与分支，不是仓库里可直接调用的函数或已确认 API。单轮可能含多个工具请求；本例顺序执行。重试也须受次数、时间和取消约束。</p>
       <pre><code>function runAgent(task, session, cancellationSignal):
   run = createAgentRun(task, session)
 
@@ -1687,28 +1825,52 @@
       return finish(run, "cancelled")
 
     context = buildContext(session, run, availableTools)
-    modelResult = provider.chat(context, timeout=modelTimeout)
+    modelResult = callModelWithBoundedRetry(context, modelTimeout, cancellationSignal)
 
-    if modelResult.isFinalResponse:
-      if completionPolicy.requiresValidation(run):
-        appendValidationRequest(session, run)
-        continue
-      return finish(run, "completed", modelResult.text)
+    if cancellationSignal.cancelled:
+      return finish(run, "cancelled")
+    if modelResult.isError:
+      return finish(run, "failed", modelResult.error)
 
-    if modelResult.isToolCall:
-      checkedCall = validateSchemaAndPermission(modelResult.toolCall)
-      toolResult = toolRuntime.execute(checkedCall, cancellationSignal)
-      appendToolCallAndResult(session, run, checkedCall, toolResult)
+    if modelResult.hasToolCalls:
+      appendAssistantToolCalls(session, modelResult.toolCalls)
+      for call in modelResult.toolCalls:
+        # 校验失败、权限拒绝、超时和执行失败都产生标准化结果
+        # 若已取消，剩余请求标记为未执行，不继续启动工具
+        result = executeCheckedToolOrError(call, cancellationSignal, toolTimeout)
+        appendToolResult(session, toolCallId=call.id, result=result)
+      if cancellationSignal.cancelled:
+        return finish(run, "cancelled")
       continue
 
-    if modelResult.isError:
-      if retryPolicy.canRetry(modelResult):
+    if modelResult.isFinalResponse:
+      verdict = completionPolicy.checkEvidence(run, modelResult)
+      if verdict.passed:
+        return finish(run, "completed", modelResult.text)
+      if verdict.canContinue:
+        appendConcreteValidationRequest(session, verdict.missingEvidence)
         continue
-      return finish(run, "failed", modelResult.error)
+      return finish(run, "incomplete", verdict.reason)
+
+    return finish(run, "failed", "unrecognized_model_result")
 
   return finish(run, "max_rounds_reached")</code></pre>
 
-      <p>伪代码明确写出四个防失控点：<strong>最大轮数</strong>、模型/工具超时、用户<strong>取消</strong>、以及完成前验证。设计文档还要求处理 Approval Required、重试、降级、暂停与恢复；第一垂直切片可以先保留清晰接口与状态，不必一次实现所有策略。</p>
+      <p><code>executeCheckedToolOrError</code> 在这里代表校验、权限、必要的用户确认和受控执行；可恢复错误与成功内容都按调用 ID 返回。取消后仍保存已知结果与未执行状态，但不为“继续回填”而再调用模型。审批等待也要能取消或超时。</p>
+      <p><code>checkEvidence</code> 依据本次实际结果更新判断：验证通过才结束，缺证据且可继续才请求具体检查；后续修改使旧证据失效时应重新检查。完成验证和错误恢复都占用总运行预算，不能反复注入同一句“请检查”却永远不记录检查结果。设计还要求 Approval Required、重试、降级、暂停与恢复；完整策略分阶段实现。</p>
+
+      <div class="table-wrap">
+        <table>
+          <caption>四种运行保护各防什么</caption>
+          <thead><tr><th>机制</th><th>防的风险</th><th>例子</th></tr></thead>
+          <tbody>
+            <tr><td>最大轮数</td><td>持续重复、成本无限增长</td><td>同一个错误路径反复读取，到预算上限明确停止</td></tr>
+            <tr><td>超时</td><td>一次调用卡住，轮数却不增加</td><td>模型或工具长时间无返回，按时限结束等待</td></tr>
+            <tr><td>取消</td><td>用户要停时无法停止</td><td>停止后续动作，尽可能中断当前执行；已发生的副作用不会自动撤销</td></tr>
+            <tr><td>完成验证</td><td>过早结束、只有“我做好了”没有证据</td><td>检查文件实际内容或测试结果；通过固定验收后收口</td></tr>
+          </tbody>
+        </table>
+      </div>
 
       <h3>停止不是一句“我做好了”</h3>
       <p>会议 01 的关键追问是：模型声称任务完成，但可能没有按照项目文档检验，甚至“骗我”，怎么办？工程师的回答分两层：第一，模型能力会影响判断；第二，更可控的是 Context 和 Runtime。编码场景可以在模型准备结束时强制插入检查：重新读文件、运行代码、渲染页面或截图，再把验证结果送回主 Loop，让模型基于证据复判。</p>
@@ -1732,6 +1894,15 @@
           <li>Tool 执行报错后，为什么错误本身也应作为 Observation 回填？</li>
         </ol>
       </details>
+      <details class="answer-key" data-source="教学解释">
+        <summary>参考答案与判断依据 · 请求不等于执行成功</summary>
+        <ol>
+          <li>若请求记录仍在本轮 Context，模型最多知道自己请求过读取；不知道实际执行状态和正文。若请求记录也未带入，连这个请求也看不到。</li>
+          <li>模型生成最终回答或工具请求；Agent Core 解析并执行分支。Context 提供材料，本身不控制流程。</li>
+          <li>最大轮数防无休止循环；取消让用户主动停止；完成验证防过早自报完成。超时另用于约束一次调用长时间不返回。</li>
+          <li>错误也是环境反馈。模型看到真实失败才能修正参数、寻找资料、请求帮助或合理结束；日志则另用于开发者排查。禁止越权的错误不能成为绕过权限的理由。</li>
+        </ol>
+      </details>
 
       <div class="source-note">
         <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
@@ -1743,17 +1914,102 @@
 
     <section id="runtime" class="chapter" data-searchable data-nav-target>
       <div class="chapter-head">
-        <p class="chapter-number">06 · 约 10 分钟</p>
-        <h2>Runtime / Harness：让一次 AgentRun 真正跑起来</h2>
-        <p class="chapter-question">本章问题：Loop 之外，哪些工程机制是一运行就离不开的？</p>
+        <p class="chapter-number">06 · 约 15 分钟</p>
+        <h2>Runtime / Harness：谁管理整次任务？</h2>
+        <p class="chapter-question">沿着一次读文件任务，认识后台程序的分工；先有动作，再给动作命名。</p>
       </div>
 
+      <p class="chapter-bridge">第 05 章讲“判断 → 行动 → 看结果 → 再判断”；第 06 章讲“哪些程序负责组织、保存和约束这个过程”；第 07 章再挑出最先验证的一小条路径。Runtime 贯穿循环，不是循环结束后的下一步。</p>
       <div class="callout conclusion">
-        <p class="callout-label">一句话结论</p>
-        <p>Runtime 是承载 AgentRun 的核心工程机制；Harness 是会议中描述模型外部框架/脚手架的宽泛用词，本项目正式名称统一为 Local Agent Runtime。</p>
+        <p class="callout-label">先认识它做的事</p>
+        <p>把要求发给模型、按规则执行工具、保存结果、处理取消并展示进度，都需要模型外部的程序。<strong>Local Agent Runtime 是本项目给这套运行系统起的名字。</strong>Loop 是其中反复执行的核心流程。</p>
       </div>
 
-      <p>会议 02 明确提醒：Runtime 的定义在不同人之间不完全一致。工程师给出的个人定义是“在一次 Agent 运行过程中一定需要、少一个就跑不起来的模块”。设计文档把这个概念具体化为 Agent Core、状态与策略、Context、Provider、Tool Runtime，再由 Session、Security、Observability 等横向能力支撑。</p>
+      <nav class="lesson-nav" aria-label="第 06 章小节导航">
+        <a href="#runtime-story">一项任务</a><a href="#runtime-identity">任务身份与状态</a>
+        <a href="#runtime-context">两种 Context</a><a href="#runtime-connections">模型与工具</a>
+        <a href="#runtime-records">过程与产物</a><a href="#runtime-extensions">统一入口</a>
+        <a href="#runtime-map">回看架构</a>
+      </nav>
+
+      <h3 id="runtime-story">先经历一次任务</h3>
+      <div class="callout teaching">
+        <span class="source-badge source-teaching" data-source="教学解释">教学解释 · 贯穿实例</span>
+        <p>你提出：“读取项目设计文档，告诉我 Phase 1 的完成标准。”这次只要求读取和回答，不要求生成新文件。</p>
+        <ol class="step-list">
+          <li><strong>接收要求：</strong>页面或命令行把你的任务交给后台程序。</li>
+          <li><strong>准备输入：</strong>程序把任务、规则和 read_file 的说明发给模型，暂不提供文件正文。</li>
+          <li><strong>取得判断：</strong>模型生成读取设计文档的工具请求。</li>
+          <li><strong>真实读取：</strong>程序检查参数、路径与权限，再执行读取函数。</li>
+          <li><strong>回填结果：</strong>程序保存请求与结果，把内容带入下一次模型调用。</li>
+          <li><strong>回答并结束：</strong>模型依据原文回答；程序检查完成条件、记录结束状态并交给界面展示。</li>
+        </ol>
+        <p>设计原文的 Phase 1 完成标准是：用户提出任务后，Agent 可以连续调用一个或多个工具并给出最终答案。这里的回答必须来自真实读取，不能仅因模型“看起来知道”而省略工具证据。</p>
+      </div>
+
+      <h3 id="runtime-identity">1. 哪项任务正在进行：AgentRun 与状态</h3>
+      <p>同一段会话里，你可以先要求总结设计，再要求比较会议建议。程序需要分清各项执行的开始、完成、失败和取消。<strong>一次具体的任务执行叫 AgentRun</strong>；其中可以调用模型多轮、执行多个工具。一次模型请求并不等于一次完整任务。</p>
+      <p>配置好的助手叫 Agent，描述用哪个模型、哪些提示词、工具和策略；保存这段连续交互的容器叫 Session。同一个 Agent 可执行多次 AgentRun，同一个 Session 也可保存多次运行。</p>
+      <pre><code>Agent：助手使用的模型、提示词、工具与策略配置
+Session：围绕项目的连续交互
+  ├─ AgentRun A：读取设计并回答（可能包含多轮模型调用）
+  └─ AgentRun B：比较会议建议（有自己的运行记录）</code></pre>
+      <p>“正在运行、等待审批、已完成、失败”等是运行状态（Run State）的教学例子。记录状态后，页面能显示进度，用户取消时也能定位具体任务。暂停后继续同一任务、失败后重试一次动作、重启后恢复会话是不同能力；原设计没有规定全部状态枚举和断点恢复细节。</p>
+
+      <h3>2. 谁推动下一步：Agent Core 与策略</h3>
+      <p><strong>Agent Core 是任务总控程序。</strong>它推进 Loop：先组织模型请求，再解析返回类型；遇到工具请求就交给执行侧，收到结果就保存并准备下一轮。模型选择行动，总控执行流程分支。</p>
+      <p>“策略（Policy）”可以先理解为处理规则：Stop Policy 规定何时停，Retry Policy 规定哪些失败能再试，Approval Policy 规定何时先问用户。它们由程序执行，不能仅靠模型自觉遵守。四种保护的区别见<a href="#agent-loop">第 05 章</a>。</p>
+
+      <h3 id="runtime-context">3. 程序手里的信息与模型看见的信息</h3>
+      <p>处理任务时，程序需要知道属于哪个 Session、允许访问哪里、用了什么配置、当前状态是什么。<strong>RunContext 汇总本次执行所需的会话、配置、权限和状态。</strong>它是运行用的信息集合，不是一份必须原样发给模型的长提示词。</p>
+      <p>真正发给模型的材料叫 Context。Context Builder 根据本次目标和预算选择消息、规则、工具定义和必要资料。例如第二轮加入读取结果，模型才有原文可参考。</p>
+      <div class="table-wrap">
+        <table>
+          <caption>同一次读取中，两种 Context 的用途</caption>
+          <thead><tr><th>信息集合</th><th>谁使用</th><th>例子</th></tr></thead>
+          <tbody>
+            <tr><td>RunContext</td><td>后台程序执行任务</td><td>当前会话、权限、配置、运行状态</td></tr>
+            <tr><td>模型 Context</td><td>模型作出本轮判断</td><td>用户问题、选中的历史、工具定义、文件结果</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>程序收到取消信号，要执行停止逻辑；不能只把“请取消”发给模型后等待它配合。权限同理：必要限制可告诉模型，但实际路径仍须由程序检查。保存过的信息是否进入下一轮，取决于组装过程，见<a href="#context">第 03 章</a>。</p>
+
+      <h3 id="runtime-connections">4. 总控分别连接模型和工具</h3>
+      <p>不同模型 API 的消息、工具格式和返回可能不同。<strong>Provider 是模型服务适配层</strong>：把总控的统一请求转换成具体服务要求的格式，再把响应转回统一格式。因此更换模型服务时，不应要求重写整个 Loop。</p>
+      <p><strong>Tool Runtime 管理工具执行。</strong>它按工具名查找实现，校验参数、权限和路径，必要时等待批准，再执行并返回标准化结果；也负责超时、取消、结果长度和调用记录。read_file 函数承担实际文件读取。</p>
+      <pre><code>Agent Core（任务总控）
+  ├─ Provider → 模型服务 → 返回判断 / 工具请求
+  └─ Tool Runtime → read_file 等工具代码 → 返回实际结果 / 错误</code></pre>
+      <p>本例中，工具内容保存到 Session，再进入下一轮模型 Context。模型给出最终回答后，总控按完成策略判断是否可以结束；缺少必要证据时继续或合理终止，不把一句“完成了”直接当作成功。</p>
+
+      <h3 id="runtime-records">5. 怎么知道过程：Event、Trace 与 Artifact</h3>
+      <p>后台开始读取后，界面需要知道“正在读”，出现错误时也需要显示原因。程序因此发布<strong>事件（Event）</strong>，记录某一刻发生的事情；关联同一次运行的事件、模型与工具记录，就能形成<strong>执行轨迹（Trace）</strong>。任务生成并保存的报告或文件，则叫<strong>Artifact，交付物</strong>。</p>
+      <div class="table-wrap">
+        <table>
+          <caption>三者在同一个实例里的区别</caption>
+          <thead><tr><th>对象</th><th>内容</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td>Event</td><td>tool.completed：一次工具执行结束</td><td>记录变化、更新界面；是否成功仍需看结果状态</td></tr>
+            <tr><td>Trace</td><td>请求了什么文件、实际返回什么、为何结束</td><td>复盘整次任务、定位错误和耗时</td></tr>
+            <tr><td>Artifact</td><td>如果另外要求保存报告，写出的文件才是产物</td><td>供用户后续打开或使用</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>本次只读取并回答，可以没有新 Artifact。可观测性（Observability）就是让人能看见运行证据；事件分发机制（Event Bus）把记录送到界面或日志等接收方。结构化事件有固定字段含义，便于程序关联任务；不是必须先搭一个复杂消息系统。</p>
+      <p>设计给出的事件包括 <code>run.started</code>、<code>context.built</code>、<code>model.started</code>、<code>model.delta</code>、<code>model.completed</code>、<code>tool.requested</code>、<code>approval.required</code>、<code>tool.started</code>、<code>tool.completed</code>、<code>run.completed</code>、<code>run.failed</code>。具体字段和更多事件名仍需实现时确定。</p>
+
+      <h3 id="runtime-extensions">6. 换成定时任务，为什么仍走同一条路？</h3>
+      <p>假设以后希望每天早上自动读取项目记录。定时器（Cron）负责在时间到达时发起任务；这一类启动来源叫 Trigger。它创建 AgentRun，交给既有总控，就能复用同一套状态、权限、预算和记录。</p>
+      <pre><code>页面 / CLI / API / Cron / 未来 Webhook → AgentRun → 同一个 Agent Core
+不同模型服务 → 各自 Provider 适配 → Core 使用统一模型接口
+内置工具 / 用户工具 / MCP 外部工具 → 统一 Tool → Tool Runtime</code></pre>
+      <p>MCP 是连接外部工具的标准方式之一，在本项目通过适配器进入内部工具系统；Skill 补充任务方法、约束和工具依赖；知识库提供可检索资料；Hooks 在约定节点加入处理。它们增强已有主链，不各自复制一套 Loop，细节放在<a href="#extensions">第 16 章</a>。</p>
+      <p><strong>UI 同时有输入和展示职责。</strong>它接收任务、批准、拒绝和取消，再消费事件显示进度；“不编排 Loop”是指不自行决定下一步调用哪个工具。否则页面、命令行和定时任务可能各有不同的权限和停止规则。</p>
+
+      <h3 id="runtime-map">7. 已经知道分工，再回看原架构</h3>
+      <p>会议 02 提醒 Runtime 的定义因人而异，工程师的个人定义是“一次 Agent 运行中一定需要、少一个就跑不起来的模块”。Harness 是会议对模型外部框架/脚手架的宽泛叫法，不是本项目要额外实现的另一个模块。</p>
+      <p><strong>三个范围要分开：</strong>Local Agent Runtime 是整个项目名称；图中的 Agent Runtime 层是 Core、Loop、状态、策略、Context Builder 所在的较窄控制层；Tool Runtime 专管工具，和 Provider 一起由控制层调用。下图按职责分组，不表示从上到下依次执行。</p>
 
       <div class="architecture-map" role="img" aria-label="Local Agent Runtime 分层架构">
         <div class="layer"><strong>接入层</strong><span>CLI / Desktop UI / API / Trigger</span></div>
@@ -1776,17 +2032,13 @@
             <tr><td>Agent</td><td>模型、提示词、工具与策略的配置主体</td><td>不是某一次具体运行</td></tr>
             <tr><td>AgentRun</td><td>可完成、失败、取消、暂停或恢复的一次任务</td><td>不是整段会话本身</td></tr>
             <tr><td>RunContext</td><td>本次运行所需会话、配置、权限与状态</td><td>不等于只发给模型的文本</td></tr>
-            <tr><td>Event / Trace</td><td>状态变化与完整执行链路的结构化记录</td><td>不只是终端里的一行日志</td></tr>
+            <tr><td>Event / Trace</td><td>单件运行事件 / 一次任务的关联执行轨迹</td><td>事件结束不等于执行成功，也不等于任务产物</td></tr>
             <tr><td>Artifact</td><td>报告、文件或其他持久化产物</td><td>不等于最终聊天回复</td></tr>
           </tbody>
         </table>
       </div>
 
-      <h3>扩展为什么不能侵入 Core</h3>
-      <p>设计原则要求：不同来源的工具最终都转换为统一 Tool 定义；来自 CLI、Cron 或未来 Webhook 的任务最终都转换为统一 AgentRun。MCP 是 Tool Runtime 的外部适配器，Cron 是 Trigger，Skill 注入方法与依赖。这样新增入口或扩展时，不必复制一套 Loop。</p>
-
-      <h3>可观测性不是最后补日志</h3>
-      <p>模型请求、工具调用、用户确认、错误恢复与最终结果都应形成结构化事件。设计文档给出的事件包括 <code>run.started</code>、<code>context.built</code>、<code>model.started</code>、<code>tool.requested</code>、<code>approval.required</code>、<code>tool.completed</code>、<code>run.completed</code>、<code>run.failed</code>。会议 01 也把工具调用轨迹作为理解执行链路和产品展示的重要部分。</p>
+      <p>横向能力贯穿多处：Configuration 保存运行设置，Storage 保存数据，Security 约束访问与执行，Event Bus / Observability 提供过程信息。SQLite 是后续持久化的一种实现；第一个 Loop 可先在内存保存消息。职责存在，不代表首日就要建设所有模块、长期记忆或重启恢复。</p>
 
       <div class="callout warning">
         <p class="callout-label">常见误区</p>
@@ -1795,15 +2047,23 @@
 
       <div class="checkpoint">
         <h3>开发检查点</h3>
-        <p>新增能力前，明确它落入哪条统一通道：模型差异走 Provider；动作走 Tool；外部工具走 MCP→Tool；定时任务走 Trigger→AgentRun；界面只消费 Event。</p>
+        <p>新增能力前，明确它落入哪条统一通道：模型差异走 Provider；动作走 Tool；外部工具走 MCP→Tool；定时任务走 Trigger→AgentRun；界面提交用户操作并消费 Event，不自行编排 Loop。</p>
       </div>
 
       <details open class="self-check">
         <summary>自检：Runtime 的边界在哪里？</summary>
         <ol>
           <li>Cron 到点后为什么不应该拥有另一套 Agent Loop？</li>
-          <li>UI 为什么只消费事件，不直接决定下一步调用哪个工具？</li>
+          <li>UI 可以提交哪些操作？为什么不直接决定下一步调用哪个工具？</li>
           <li>Event 与 Artifact 的区别是什么？</li>
+        </ol>
+      </details>
+      <details class="answer-key" data-source="教学解释">
+        <summary>参考答案与判断依据 · 用一次任务检验理解</summary>
+        <ol>
+          <li>Cron 负责到点发起任务，再交给统一 AgentRun 和 Loop；共用权限、状态、停止条件与记录，避免另一套规则。</li>
+          <li>UI 可以提交任务、批准、拒绝和取消，并展示事件。模型提出动作，Core 管理流程，工具执行由 Tool Runtime 约束；换界面不应复制调度逻辑。</li>
+          <li>Event 记录过程中的一件事，Trace 关联整次运行，Artifact 是实际生成并保存的文件或报告。只读取并回答时可以没有新 Artifact。</li>
         </ol>
       </details>
 
@@ -1812,7 +2072,12 @@
         <p>第 2–5 节：设计原则、总体架构、核心对象与核心模块。</p>
         <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
         <p>00:11–00:13：Runtime 的个人定义，以及 Skill、MCP、知识库作为可选外围扩展。</p>
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
+        <p>00:01–00:03：Harness 与产品外壳；00:08–00:10：事件流、工具轨迹和学习前置概念的困惑。</p>
+        <span class="source-badge source-teaching" data-source="教学解释">教学解释</span>
+        <p>本章按单次读取任务重新排序。例子、状态举例与三种范围的对照服务于理解，不新增项目 API 或确认未实现能力。</p>
       </div>
+      <nav class="chapter-pager" aria-label="主线前后章"><a href="#agent-loop">← 第 05 章：循环如何继续</a><a href="#first-slice">第 07 章：先验证哪一小步 →</a></nav>
     </section>
 
     <section id="first-slice" class="chapter" data-searchable data-nav-target>
@@ -1903,6 +2168,15 @@
           <li>什么时候才应把工具扩到 2–3 个？</li>
         </ol>
       </details>
+      <details class="answer-key" data-source="教学解释">
+        <summary>参考答案与判断依据 · 区分连通、闭环与里程碑</summary>
+        <ol>
+          <li>“你好”证明 API 连通，没有证明模型自主请求工具、程序真实执行与结果回填。</li>
+          <li>初始输入没有正文；模型的原始 ToolCall；实际成功或错误；按 ID 关联的下一轮输入；有依据的答案；权限与停止记录。</li>
+          <li>保存错误及调用 ID，检查下一轮请求确实收到错误，模型随后说明缺失或采取获准的恢复动作；不能伪造读取内容。</li>
+          <li>单工具固定样例通过，并有真实任务需要第二类动作时再扩展。2–3 是 Phase 1 的原始工具规模建议，不能替代实际验收。</li>
+        </ol>
+      </details>
 
       <div class="source-note">
         <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
@@ -1986,11 +2260,21 @@
           <li>你能列出当前明确不做的五类能力吗？</li>
         </ol>
       </details>
+      <details class="answer-key" data-source="教学解释">
+        <summary>参考答案与判断依据 · 主线毕业</summary>
+        <ol>
+          <li>Model 生成判断；Agent 描述配置的模型、提示词、工具和策略。Agent Loop 是判断—行动—反馈的循环，Runtime 的程序负责运行、保存和约束它。</li>
+          <li>每次调用把有关历史重新放进 Context；保存到 Session 和被模型看见是两步。</li>
+          <li>模型输出带 ID 的请求 → Runtime 校验执行 → 成功或错误按 ID 回填 → 再组装请求 → 模型继续。</li>
+          <li>第一切片证明单工具闭环；M1 覆盖 Phase 0–1 的更多交付，如 2–3 工具与流式输出。已验证闭环不自动等于完整 M1 或发布质量。</li>
+          <li>首切片暂缓长期记忆、MCP/Skill、Cron、多 Provider、复杂规划/多 Agent及大而全 UI。当前是否进入后续能力，需看已授权新目标，不能照旧待办自动开工。</li>
+        </ol>
+      </details>
 
       <div class="next-action-panel">
-        <p class="mini-label">读完主线后的唯一下一步</p>
-        <h3>准备一个固定文本文件和一个只有该文件能回答的问题，开始验证单 Provider + 单 read_file Loop。</h3>
-        <p>先完成可复现验收，再决定是扩到第二个工具，还是修正 Context、ToolCall、错误结构或停止逻辑。</p>
+        <p class="mini-label">读完主线后，按自己所处阶段行动</p>
+        <h3>从零练习时，用一个固定文本文件验证单工具 Loop；已有闭环证据时，用它复盘分工。</h3>
+        <p>当前项目已按最小闭环目标收口，见<a href="local-agent/trial/directory-check.md">当前阶段记录</a>。先确认下一项真实任务及固定验收，再选择第二个工具或后续能力；不自动重跑、不无限追加样例。</p>
       </div>
 
       <div class="source-note">
@@ -2004,124 +2288,211 @@
     </section>
 
     <section id="deep-dives" class="chapter section-divider" data-searchable data-nav-target>
-      <p class="chapter-number">PART II · 选读深挖</p>
+      <p class="chapter-number">09 · PART II · 选读深挖</p>
       <h2>把主线扩展成 2–3 小时完整学习</h2>
-      <p>下面十章不改变第一步的范围，而是帮助你在后续阶段做正确设计。建议在对应阶段开始前阅读；每章都默认展开，离线或禁用 JavaScript 时也不会丢失正文。</p>
+      <p>下面十章不改变第一步的范围，而是帮助你在后续阶段做正确设计。第 10–16 章用“整理项目周报”连续展开：每章先看遇到了什么问题，再跟着程序走一遍，最后对照自检解析。不需要先记住所有缩写，也不要求读完就立即开发全部模块。</p>
+      <p>建议分三次读：<a href="#session-memory">10–12：记录怎样留下、缩短、再次用上</a>；<a href="#tool-runtime">13–14：动作怎样受控、完成怎样核实</a>；<a href="#provider-models">15–16：模型怎样更换、扩展接在哪里</a>。正文默认展开，技术补充和答案可按需展开；保留离线阅读与打印全文。</p>
     </section>
 
     <section id="session-memory" class="chapter deep-chapter" data-searchable data-nav-target>
       <div class="chapter-head">
-        <p class="chapter-number">10 · 深挖</p>
-        <h2>Session、Context 与 Memory：三个常被混用的概念</h2>
-        <p class="chapter-question">先理解数据装在哪里，再讨论模型这一轮看见什么。</p>
+        <p class="chapter-number">10 · 把一次任务接着做</p>
+        <h2>Session、Context 与 Memory：保存了，不等于本轮看见了</h2>
+        <p class="chapter-question">昨天整理到一半的周报，今天说“继续”，程序怎样知道从哪里接上？</p>
       </div>
-
+      <nav class="lesson-nav" aria-label="第 10 章小节导航">
+        <a href="#session-story">从周报开始</a><a href="#session-request">拼出本轮请求</a><a href="#session-storage">记录存在哪里</a><a href="#session-layers">四类记忆</a>
+      </nav>
       <div class="callout conclusion">
-        <p class="callout-label">边界结论</p>
-        <p><strong>Session 是连续交互的容器，Context 是一轮模型请求的可见集合，Memory 是被保存、加工、检索并重新注入的信息。</strong></p>
+        <p class="callout-label">先记住三个动作</p>
+        <p><strong>保存记录 → 选出本次需要的材料 → 发给模型。</strong>这是三件事。程序保存过的信息，只有被选中并实际发出，才会成为模型这一轮的依据。</p>
       </div>
 
-      <div class="diagram comparison-diagram" role="img" aria-label="Session、Memory 和 Context 的关系">
-        <div class="diagram-node"><strong>Session / Storage</strong><span>messages · runs · toolCalls · artifacts · summary</span></div>
-        <div class="diagram-arrow" aria-hidden="true">筛选 / 裁剪 / 摘要 / 检索 ↓</div>
-        <div class="diagram-node"><strong>Memory</strong><span>短期 · 会话 · 长期 · Workspace</span></div>
-        <div class="diagram-arrow" aria-hidden="true">Context Builder 组装 ↓</div>
-        <div class="diagram-node diagram-core"><strong>Context</strong><span>本轮真正发给模型的内容</span></div>
+      <h3 id="session-story">① 先做一件具体的事：整理项目周报</h3>
+      <p><span class="source-badge source-teaching" data-source="教学解释">教学解释</span>第 10–16 章用下面这个假想任务贯穿。路径、内容和运行记录只为解释原理，不是仓库里的真实文件，也不是新增开发要求。</p>
+      <blockquote>“根据本周计划和会议记录整理周报。只读已授权的资料，不要改动原文；预算没有依据就标成待确认，不要猜。先给我预览，确认后再保存为 reports/weekly.md。”</blockquote>
+      <p>假设你在一个叫“本周周报”的对话中提出要求。程序依次记下：</p>
+      <ol class="step-list">
+        <li><strong>你说了什么：</strong>上面的任务和限制。</li>
+        <li><strong>模型要求做什么：</strong>请求读取计划文件，而不是直接编一份周报。</li>
+        <li><strong>程序实际做成了什么：</strong>工具读到了计划；会议记录还没读完；预算文件读取失败。</li>
+        <li><strong>目前停在哪里：</strong>预览还没整理好，没有获得保存确认，更没有生成周报文件。</li>
+      </ol>
+      <p>这一整段连续交互及其记录，属于一个<strong>会话（Session）</strong>。一次“继续整理”的执行过程叫一次 <strong>Run</strong>；同一个会话可以有多次 Run。你看到的聊天文字只是会话的一部分，工具请求、执行结果和任务状态也要留下。</p>
+      <p>现在你说“继续”。模型不会因为对话框标题没变，就天然知道前面四件事。<strong>程序必须把相关记录放进新的请求。</strong>放进去的这份材料，就是本轮的 <strong>Context（上下文）</strong>。</p>
+
+      <h3 id="session-request">② 亲手拼一次请求：保存 100 条，可能只取其中一部分</h3>
+      <p>假设会话已经保存了 100 条记录，其中有早期闲聊、重复读文件结果，也有当前周报要求。负责挑选和组装材料的那段程序叫 <strong>Context Builder</strong>，意思就是“本轮材料组装器”。它不是模型自带的永久记忆。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>程序保存或配置了什么</th><th>本轮怎样处理（教学策略）</th><th>为什么</th></tr></thead>
+          <tbody>
+            <tr><td>用户本次要求与“不要改原文”等限制</td><td>保留原意，放入请求</td><td>否则可能完成了错误的任务</td></tr>
+            <tr><td>刚才的工具请求与返回内容</td><td>关联保留；必要时裁剪过长正文</td><td>让模型知道查到了什么、哪里失败，避免孤立的工具结果</td></tr>
+            <tr><td>很早的重复讨论</td><td>预算允许可保留；太长时用有依据的摘要替代</td><td>为继续工作需要的信息腾出空间</td></tr>
+            <tr><td>另一个会话里的聊天</td><td>不自动混入</td><td>会话需要隔离，不能串任务；跨会话使用要有明确的相关性与权限</td></tr>
+            <tr><td>系统规则、可用工具说明和参数格式</td><td>随本轮配置加入</td><td>告诉模型要遵守什么、有哪些动作可以请求</td></tr>
+          </tbody>
+        </table>
       </div>
+      <pre class="lesson-example"><code>本轮发送的材料（示意，不是某个 API 的精确报文）
+├─ 系统规则与本次 Agent 配置
+├─ 用户任务：整理周报；不改原文；预算不猜；确认后才能保存
+├─ 当前状态：计划已读；会议记录未读完；预算读取失败；尚未保存
+├─ 相关近期消息、工具请求及对应结果
+└─ 本轮可用工具：用途说明 + 参数格式
 
-      <h3>Session 承载什么</h3>
-      <pre><code>Session
-├── metadata
-├── messages
-├── runs
-├── toolCalls
-├── artifacts
-└── summary</code></pre>
-      <p>设计文档把 Session 定义为“一段连续交互及其元数据”。会议 01 在结束前补充：个人助手需要管理自己的多个会话，每个会话的上下文隔离，本质上需要一套数据库管理。Phase 2 再用 SQLite 持久化 Session、Message、ToolCall 和 AgentRun，让程序重启后仍能查看与继续。</p>
-
-      <h3>Memory 的四层建议</h3>
-      <ul>
-        <li><strong>Short-term Memory：</strong>当前上下文窗口里的近期消息。</li>
-        <li><strong>Session Memory：</strong>当前会话摘要与任务状态。</li>
-        <li><strong>Long-term Memory：</strong>跨会话的用户偏好和稳定事实。</li>
-        <li><strong>Workspace Memory：</strong>某个本地项目的约定、背景与经验。</li>
-      </ul>
-      <p>会议 02 将短期记忆解释为不断追加的 Message List，把跨会话或跨周期信息归为长期记忆。设计文档更细地拆为四层。二者并不冲突：会议是入门二分法，设计文档是项目落地分层。</p>
-
-      <h3>存储策略的阶段边界</h3>
-      <p>第一版建议 SQLite 保存结构化数据，Artifact 单独放在 Workspace 目录；向量检索不是首期必需。第一个单工具 Loop 可以先使用内存中的消息列表，直到 Phase 2 才要求程序重启后恢复。接口命名要为 Session 与 AgentRun 留出边界，但不能因为未来要持久化，就提前把第一切片做成完整数据库项目。</p>
-
+如果需要，也可加入：
+相关的会话摘要、长期记忆、项目约定、Skill 方法说明</code></pre>
+      <p>选取标准由项目代码和配置决定：<strong>相关性、继续任务的必要性、权限边界、可容纳的长度</strong>都要考虑。不是固定“只选最后 10 条”，也不是一定不能发送全部 100 条。如果全部相关且放得下，可以全发；只有检查实际请求，才知道这一轮究竟看见了什么。</p>
       <div class="callout warning">
-        <p class="callout-label">常见误区</p>
-        <p>把所有历史都叫 Memory，或把 Memory 当成一个永远自动正确的文件。记忆价值取决于抽取、保留、检索和重新注入策略；原文会话记录通常仍需单独保留。</p>
+        <p class="callout-label">不要把这一步想复杂</p>
+        <p>短对话可以直接把 Message List（按顺序保存的消息列表）继续发给模型，形成短期连续性，<strong>不需要先做摘要，也不需要先建立长期记忆</strong>。历史太长才进入第 11 章的问题。</p>
       </div>
 
-      <details open>
-        <summary>阶段检查：何时需要实现哪一层</summary>
-        <ul>
-          <li>第一垂直切片：进程内 Message List 足以证明结果回填。</li>
-          <li>Phase 2：Session、Message、ToolCall、AgentRun 持久化和简单摘要。</li>
-          <li>Phase 7：完善长期记忆的查看、编辑、删除，以及更完整的可观测性。</li>
-        </ul>
+      <h3 id="session-storage">③ 今天关闭程序，明天还能继续吗？取决于有没有保存到磁盘</h3>
+      <p>只放在运行中程序内存里的消息，程序结束后可能就没有了。写入数据库等磁盘存储，才有机会在重启后重新加载。<strong>重新加载后仍须组装请求，不是数据库直接把记忆塞进模型。</strong></p>
+      <p>设计文档的 Session 结构可以这样读：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>原设计字段</th><th>白话意思</th><th>周报例子</th></tr></thead>
+          <tbody>
+            <tr><td><code>metadata</code></td><td>这段会话的基本资料</td><td>会话编号、标题、创建时间</td></tr>
+            <tr><td><code>messages</code></td><td>交互内容</td><td>你的要求、模型回复、工具返回</td></tr>
+            <tr><td><code>runs</code></td><td>每次执行的记录</td><td>昨天开始整理、今天继续整理</td></tr>
+            <tr><td><code>toolCalls</code></td><td>调用了什么工具及其结果</td><td>读哪个文件、参数、成功还是失败</td></tr>
+            <tr><td><code>artifacts</code></td><td>实际生成的交付物索引</td><td>周报生成后，记录它的文件路径；生成前不能假装已有</td></tr>
+            <tr><td><code>summary</code></td><td>便于续做的会话摘要</td><td>哪些已完成、哪些没做、下一步是什么</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>Artifact</strong> 在这里就是生成出来的文件等交付物，不是一个神秘模块。设计建议 SQLite（本地文件型数据库）保存结构化记录，交付物文件单独放在 Workspace（项目工作目录）中，记录里保存它的索引或路径。</p>
+
+      <h3 id="session-layers">④ 为什么还会出现四种 Memory？它们是在给“保留哪些信息”分类</h3>
+      <p><strong>Memory（记忆）是让信息以后还能被利用的机制。</strong>既包括近期消息，也可以包括加工后的摘要和跨会话事实；不是要求所有信息先经过一个叫 Memory 的程序再进入 Context。</p>
+      <ul>
+        <li><strong>Short-term Memory，短期记忆：</strong>这轮带上的近期消息，例如刚才读文件的结果。</li>
+        <li><strong>Session Memory，会话记忆：</strong>“本周周报”会话的摘要和任务状态，例如还差会议记录没读完。</li>
+        <li><strong>Long-term Memory，长期记忆：</strong>以后其他会话也可能有用的稳定信息，例如你明确要求周报先列风险。</li>
+        <li><strong>Workspace Memory，工作区记忆：</strong>这个项目的约定和经验，例如周报统一放在哪个目录。</li>
+      </ul>
+      <p>会议 02 用“短期 / 长期”两类方便入门，设计文档分成以上四层方便实现，粗细不同，并不冲突。<strong>Session 回答“记录属于哪段交互”，Memory 回答“哪些信息以后如何复用”，Context 回答“本轮实际发了什么”。</strong>它们不是三个互斥的文件夹。</p>
+      <div class="checkpoint">
+        <h3>到这里，你应当能指认三样东西</h3>
+        <p>在执行记录中找出会话保存的内容；在请求记录中找出模型本轮收到的内容；说明二者为什么不一定相同。第一切片用内存消息就能验证回填；Phase 2 再验收 Session、Message、ToolCall、AgentRun 的持久化、恢复与简单摘要；Phase 7 完善长期记忆的查看、编辑、删除。向量检索不属于首期必需。</p>
+      </div>
+      <details open class="self-check">
+        <summary>自检：先用周报例子回答</summary>
+        <ol>
+          <li>会话保存 100 条记录，模型是否一定看到了 100 条？</li>
+          <li>没有压缩、没有 memory.md，还能继续上一次对话吗？</li>
+          <li>周报文件已经存在，是否代表新会话里的模型知道它写了什么？</li>
+        </ol>
       </details>
-
+      <details class="answer-key">
+        <summary>展开答案与原因</summary>
+        <ol>
+          <li><strong>不一定。</strong>保存量和发送量是两件事；要看组装器选了什么，以及最终请求是否真的包含这些材料。也不能反过来断言“100 条绝不会全发”。</li>
+          <li><strong>可以。</strong>程序直接把相关的历史消息和工具往返带进新请求即可。压缩解决太长，长期记忆解决跨周期复用，都不是短期连续性的必经步骤。</li>
+          <li><strong>不代表。</strong>知道路径不等于看过正文。程序需要在授权范围内读取或检索有关内容，并放进本轮请求，模型才有依据使用它。</li>
+        </ol>
+      </details>
       <div class="source-note">
-        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
-        <p>5.5、Phase 2、Phase 7。</p>
-        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
-        <p>00:47–结束：多会话、Context 上限、会话隔离与数据库管理。</p>
-        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
-        <p>00:00–00:01：短期与长期记忆的入门区分。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span><p>5.5 会话、Context Builder 与记忆；Phase 2、Phase 7。字段沿用设计，周报填充值为教学示意。</p>
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span><p>00:47–结束：长会话、窗口上限、多会话隔离与数据库管理。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span><p>00:00–00:01：Message List 提供短期连续性。</p>
       </div>
+      <nav class="chapter-pager" aria-label="第 10 章前后章节"><a href="#deep-dives">← 阅读路线</a><a href="#context-compression">下一章：材料太多装不下 →</a></nav>
     </section>
 
     <section id="context-compression" class="chapter deep-chapter" data-searchable data-nav-target>
       <div class="chapter-head">
-        <p class="chapter-number">11 · 深挖</p>
-        <h2>上下文压缩：不是把聊天随便缩成一段话</h2>
-        <p class="chapter-question">怎样在窗口快满时保留继续工作所需的状态？</p>
+        <p class="chapter-number">11 · 历史太长时继续做</p>
+        <h2>上下文压缩：留下能接着工作的交接单</h2>
+        <p class="chapter-question">对话越来越长，删掉一部分之后，怎样不把“还没做”误当成“做完了”？</p>
       </div>
-
+      <nav class="lesson-nav" aria-label="第 11 章小节导航">
+        <a href="#compression-why">为什么要压缩</a><a href="#compression-good-summary">对比两份摘要</a><a href="#compression-how">程序怎样处理</a><a href="#compression-test">怎样验收</a>
+      </nav>
       <div class="callout conclusion">
-        <p class="callout-label">一句话结论</p>
-        <p>压缩的目标不是“越短越好”，而是在 Token 预算内保住任务目标、已采取行动、当前进度、关键结果、未完成事项和经验。</p>
+        <p class="callout-label">这章不是教你写得更短</p>
+        <p><strong>压缩是在有限的请求长度里，保住下一步做事的依据。</strong>好的摘要像一份可以接班的交接单：目标没变、进度没乱、限制还在、已知与未知分得开。</p>
       </div>
 
-      <h3>会议中的示意阈值</h3>
-      <p>会议 02 用一个非固定参数的例子说明：每轮调用前先计算上下文占比，达到<strong>约 80%</strong>时触发压缩，再要求一个模型把历史压到<strong>约 30%</strong>。这两个数字是讲解示例，不是已经确认的项目配置；真正阈值要结合模型窗口、任务质量、成本与评测决定。</p>
+      <h3 id="compression-why">① 沿着上一章：不是数据库满了，是下一轮请求装不下了</h3>
+      <p>你为了整理周报，反复补充资料、读文件、纠正内容。会话可以保存很多记录，但模型一次能接收的内容有长度上限，叫<strong>上下文窗口</strong>。衡量文本长度常用 <strong>Token</strong>，可暂时理解为模型处理文字的小单位；它不严格等于一个字或一个词。</p>
+      <p>所以问题不是“把数据库清空”，而是“这次给模型的材料怎样缩小”。<strong>原始记录通常继续保留；下一轮请求可以改为较早记录的摘要，加上必要的近期消息。</strong>摘要也占长度，系统规则、工具说明和其他材料也要算进去，还要按模型接口的限制为输出留空间。</p>
+      <p>会议 02 建议每次请求前估算占用，并举了达到<strong>约 80%</strong>时压缩到<strong>约 30%</strong>的例子。两者都不是已确认的项目配置，且原话没有明确“30%”以原文长度还是窗口总量为分母。不能据此直接写死生产参数。</p>
 
-      <div class="diagram inline-flow" role="img" aria-label="上下文压缩处理流程">
-        <div class="diagram-node">历史消息</div>
-        <div class="diagram-arrow" aria-hidden="true">→</div>
-        <div class="diagram-node">计算占比</div>
-        <div class="diagram-arrow" aria-hidden="true">→ 达到阈值</div>
-        <div class="diagram-node diagram-core">压缩 LM / Loop</div>
-        <div class="diagram-arrow" aria-hidden="true">→</div>
-        <div class="diagram-node">结构化摘要</div>
-      </div>
-
-      <h3>比“总结成一段话”更可靠的结构</h3>
-      <pre><code>TaskSummary
-├── goal          # 用户原目标
-├── actions       # 已采取行动与工具
-├── progress      # completed / in_progress / not_started
-├── results       # 关键产物与已验证结果
-├── blockers      # 错误、拒绝、缺失信息
-├── nextSteps     # 继续执行所需动作
-└── lessons       # 已验证的经验与约束</code></pre>
-
-      <p>会议建议按任务拆分历史，并分别记录目标、行动、进度与经验。已完成任务可多保留最终结果与沉淀经验；进行中和未完成任务要保留更多上下文，便于之后续接。结构化格式比连续摘要更容易被 Context Builder 选取，也更容易测试“关键状态有没有丢”。</p>
-
-      <h3>方法论必须回到工程实践</h3>
-      <p>用户追问压缩策略来自模型交互还是人类经验。工程师回答“两者都有”，但最终要回到工程实践和评测基准：行业经验可以提出候选策略，模型可以执行摘要，真正决定好坏的是任务能否继续、关键事实是否保留、错误是否减少。若评测基准歪了，就可能“实际更差，但自以为更好”。</p>
-
+      <h3 id="compression-good-summary">② 摘要好不好，看接班的人会不会做错下一步</h3>
+      <p><span class="source-badge source-teaching" data-source="教学解释">教学解释</span>仍是第 10 章的假想周报。先把压缩前的关键事实列出来：</p>
+      <pre class="lesson-example"><code>用户要求：先预览，确认后保存；不得改原文；预算缺依据就待确认。
+工具返回：计划已读取；会议记录只读取了前半部分。
+工具报错：预算文件不存在。
+任务状态：正在收集会议依据；尚未生成完整预览。
+文件状态：reports/weekly.md 只是计划保存路径，尚未创建。
+下一步：读完会议记录，再整理预览；预算仍标待确认。</code></pre>
       <div class="callout warning">
-        <p class="callout-label">压缩风险</p>
-        <p>摘要一旦把“尚未完成”写成“已完成”，或者删除了用户约束，后续模型会在错误状态上继续。压缩输出需要结构校验、关键字段检查，并保留可回溯的原始会话。</p>
+        <p class="callout-label">坏摘要：短了，却改变了事实</p>
+        <p>“已整理项目资料，周报基本完成，预算后补，接下来保存 reports/weekly.md。”</p>
+        <p>这句话把“会议只读一半”藏掉了，把“预览还没完成”变成“基本完成”，还跳过了用户确认。模型如果只看到它，很可能直接请求写文件。</p>
       </div>
+      <p>可续做的摘要不一定漂亮，但必须把这些区别写清楚：</p>
+      <pre class="lesson-example"><code>任务：本周项目周报（以下字段为教学示意，不是已定接口）
 
-      <details open>
-        <summary>后续验收题</summary>
+goal / 目标：
+  基于本周计划和会议记录整理周报，先给用户预览。
+
+constraints / 用户限制：
+  只读授权资料；不改原文；预算无依据则待确认；
+  未获用户确认，不保存。
+
+actions / 已采取行动：
+  已读计划；会议记录读到一半；尝试读取预算文件。
+
+progress / 分项进度：
+  已完成：读取计划。
+  进行中：收集会议依据，剩余部分未读。
+  未开始：完整预览、用户确认后的保存。
+
+results / 已确认结果与产物：
+  计划内容已取得；完整周报尚未生成。
+  目标路径是 reports/weekly.md，文件尚不存在。
+
+blockers / 失败与缺口：
+  预算文件不存在；目前没有可用于填写预算的依据。
+
+nextSteps / 下一步：
+  读完会议记录 → 整理预览；预算标待确认；
+  用户确认后才可进入保存步骤。
+
+lessons / 继续时要避免：
+  不重复把“找不到预算文件”当作预算为零；
+  不把目标路径当成已经生成的文件。</code></pre>
+      <p>这里的“结构化”只是<strong>把不同性质的信息分栏写清楚</strong>，不是要求你先学一种复杂格式。目标、行动、进度、结果、阻塞、下一步、经验对应 <code>goal/actions/progress/results/blockers/nextSteps/lessons</code>；教学中单列 <code>constraints</code>，是为了不把用户限制埋在长段落里。</p>
+      <p>如果历史里有“周报、报销、客户回复”三个具体任务，应分别交接，不能只按“写作类、财务类”粗分。会议强调的是<strong>按具体任务，不是按任务类型</strong>。已完成任务可侧重最终结果与经验；进行中、未完成任务要多保留续做所需的上下文。</p>
+
+      <h3 id="compression-how">③ 程序不是按下“压缩”就算完了，而是做这五步</h3>
+      <ol class="step-list">
+        <li><strong>组装前算一算：</strong>程序估算本轮所有材料的长度，判断是否接近预定上限。尚未接近时，不必每轮都摘要。</li>
+        <li><strong>划清压缩范围：</strong>哪些较早记录交给摘要，哪些近期工具往返和限制直接保留。不能把所有内容不加区别地截掉尾巴。</li>
+        <li><strong>请求模型写交接单：</strong>把要压缩的记录和要求一起发给模型，例如“逐任务区分已完成、进行中、未开始；保留限制、错误和路径”。会议说简单时可用一次模型调用，复杂时也可以用一个有步骤的 Loop 完成。</li>
+        <li><strong>检查交接单：</strong>程序可以检查字段是否存在；关键事实和进度是否正确，还要与原记录对照。字段齐全不代表语义正确。发现缺漏，应补回有关原文或修正摘要，不能盲用。</li>
+        <li><strong>再发下一轮请求：</strong>把通过检查的摘要、必要近期消息、规则和工具定义组装成新 Context。模型据此继续读会议记录，而不是从头猜发生过什么。</li>
+      </ol>
+      <p>也就是说，<strong>压缩发生在下一次模型请求之前，影响的是模型接下来收到的材料。</strong>它不是在改模型的大脑。需要排查错误时，应能回到原始会话，找到摘要究竟漏了哪条事实。</p>
+
+      <h3 id="compression-test">④ “节省了多少”与“还能不能做对”要分开算</h3>
+      <p>下面只演示算术，不解释会议里 30% 的分母：假设同一轮已组装输入从 <strong>8,000 Token 变成 3,000 Token</strong>，输入减少了 5,000 Token，节省比例是 5,000 ÷ 8,000 = <strong>62.5%</strong>。这不是测得的项目结果。</p>
+      <p>但写摘要本身也会调用模型、花时间和 Token。因此“下一轮输入变少”不等于“整个任务总费用同样下降 62.5%”。还要统计摘要调用、后续重复读取、修错等成本。</p>
+      <p>然后做一次<strong>同题对照</strong>：把同一个任务停在压缩点，一次用原材料继续，一次用摘要继续。检查是否都去补读会议记录、是否保留预算待确认、是否仍等用户确认再保存。这里的“下一步一致”是<strong>任务方向和状态一致</strong>，不要求回复逐字相同；同样合理的工具顺序可以不同。</p>
+      <p>会议中，用户追问策略来自人类经验还是模型探索，工程师回答两者都有，最后要靠工程实践与评测。<strong>评测基准（Benchmark）</strong>就是用于稳定比较的同一组任务和判定标准。如果只奖励“摘要短”，漏掉重要限制的坏摘要反而可能拿高分。</p>
+      <div class="checkpoint">
+        <h3>这一章的验收不是“压缩器跑通了”</h3>
+        <p>至少同时记录：输入节省、总调用成本、关键事实保留、分项进度是否正确，以及任务能否继续完成。有限样例不能保证未来零损失；也不能没验证就宣称成功率不受影响。发现某策略明显伤害任务成功，应调整或暂不采用，而不是为了省 Token 强行上线。</p>
+      </div>
+      <details open class="self-check">
+        <summary>后续验收题：现在用这份交接单回答</summary>
         <ol>
           <li>同一长任务压缩前后，下一步行动是否一致？</li>
           <li>已完成、进行中、未开始三类任务是否被正确区分？</li>
@@ -2129,338 +2500,572 @@
           <li>压缩节省了多少 Token，是否以任务成功率为代价？</li>
         </ol>
       </details>
-
+      <details class="answer-key">
+        <summary>展开答案：每道题到底在检查什么</summary>
+        <ol>
+          <li><strong>检查能否在同一个位置接着做。</strong>本例应补读会议记录，而不是直接保存。核对目标、已做动作和真实结果；“摘要说下一步没变”不算证据，还要观察继续执行的实际选择。</li>
+          <li><strong>检查每个具体子任务，而不是整件事笼统写“处理中”。</strong>读取计划已完成；会议依据收集中；预览和保存未开始。一次工具成功，不等于整个周报完成。</li>
+          <li><strong>检查防止走错路的三类信息。</strong>限制是“不改原文、先确认”；失败原因是“预算文件不存在”，不是“预算为零”；Artifact 路径是交付物的实际位置。本例只有目标路径，必须注明未生成；若已生成，还要保留真实路径和是否核验。</li>
+          <li><strong>检查节省与质量两笔账。</strong>示例中单轮输入节省 62.5%，但要另计摘要成本，再用相同任务比较成功情况。不能把“最短”当唯一目标，也不能只凭一份看起来不错的摘要保证成功率。</li>
+        </ol>
+      </details>
       <div class="source-note">
-        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
-        <p>00:01–00:07：上下文占比、80%/30% 示例、结构化任务摘要、进度差异、工程实践与评测基准。</p>
-        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
-        <p>Phase 2 简单裁剪与摘要；10.7 关键任务状态丢失风险。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span><p>00:01–00:07：占用、80%/30% 举例、模型或 Loop 压缩、按任务整理、进度差异、方法来源与评测。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span><p>Phase 2 简单裁剪与摘要；10.7 裁剪丢失关键任务状态。周报摘要、字段展开与算术是教学解释，不是已确认实现或测试结果。</p>
       </div>
+      <nav class="chapter-pager" aria-label="第 11 章前后章节"><a href="#session-memory">← 保存与本轮可见</a><a href="#long-term-memory">下一章：下周怎样复用 →</a></nav>
     </section>
 
     <section id="long-term-memory" class="chapter deep-chapter" data-searchable data-nav-target>
       <div class="chapter-head">
-        <p class="chapter-number">12 · 深挖</p>
-        <h2>长期记忆与知识库：存储、加工、检索、再注入</h2>
-        <p class="chapter-question">把信息写进 memory.md 后，为什么还不算“记住了”？</p>
+        <p class="chapter-number">12 · 下周不必全部重说</p>
+        <h2>长期记忆：哪些事值得留下，下次又怎样取出来</h2>
+        <p class="chapter-question">新开一个会话说“按我习惯的格式写周报”，为什么有时知道，有时不知道？</p>
       </div>
-
+      <nav class="lesson-nav" aria-label="第 12 章小节导航">
+        <a href="#memory-story">跨周发生了什么</a><a href="#memory-write">怎样写入</a><a href="#memory-read">怎样取回</a><a href="#memory-knowledge">与知识库的区别</a>
+      </nav>
       <div class="callout conclusion">
-        <p class="callout-label">一句话结论</p>
-        <p>长期记忆和知识库都要解决四步：保存什么、怎样加工、何时检索、如何放回 Context；文件只是载体，不是完整机制。</p>
+        <p class="callout-label">这次解决的是另一个问题</p>
+        <p>第 11 章解决“当前任务太长，如何接着做”；这一章解决“未来别的会话，如何复用有用信息”。<strong>长期记忆不是保存一次就自动生效，而是保存后，还要按需取回并送进模型请求。</strong></p>
       </div>
 
-      <h3>会议中的 <code>memory.md</code> 做法</h3>
+      <h3 id="memory-story">① 下周的新会话，不能直接继承上周整个对话</h3>
+      <p><span class="source-badge source-teaching" data-source="教学解释">教学解释</span>假设周报已经在你的确认后完成。你补充一句：“以后周报都先写风险，再写进度，尽量简洁。”下周新开会话，你只说“整理本周周报”。</p>
+      <p>有三种不同的信息，不应混在一起：</p>
+      <ul>
+        <li><strong>值得跨周保留的偏好：</strong>你明确表达的“先风险、后进度，尽量简洁”。</li>
+        <li><strong>属于上周的事实：</strong>上周预算文件缺失、上周周报的路径。可以留档、按日期检索，但不能冒充本周仍然如此。</li>
+        <li><strong>不能当成事实的猜测：</strong>“用户应该不关心预算”。这是推断，不是你说过的话，更不能据此长期删掉预算信息。</li>
+      </ul>
+      <p>会议 02 提到一种起步方法：将用户偏好、画像和客观事实整理到本地 <code>memory.md</code>。它就是一个可读的 Markdown 文件，不是特殊的大脑文件。<strong>画像也必须有依据，不能因为叫“记忆”就把猜测写成真相。</strong></p>
+
+      <h3 id="memory-write">② 第一次留下记忆：从原记录到 memory.md</h3>
       <ol class="step-list">
-        <li>在某个周期性事件或会话阶段结束后，调用模型读取相关记录。</li>
-        <li>提示模型抽取用户偏好、用户画像与稳定客观事实。</li>
-        <li>把结果持续写入本地 <code>memory.md</code>，而非只写一次。</li>
-        <li>在后续 Context 中加入该文件内容，例如注入 System Prompt。</li>
-        <li>信息多起来后，提供记忆搜索工具，按任务检索相关片段。</li>
+        <li><strong>选时机：</strong>一段会话告一段落，或到达约定的周期事件时，由程序启动整理；并非每句话都必须触发。</li>
+        <li><strong>给材料：</strong>程序把有关会话记录交给模型，要求提取值得以后复用的信息。没有提供的记录，模型不能凭空看见。</li>
+        <li><strong>产出候选条目：</strong>模型提出“周报先风险后进度”等内容；暂时性事实保留时间和来源，未确认的内容不能升级为稳定事实。</li>
+        <li><strong>检查再写入：</strong>按设定的规则检查依据、敏感性和冲突，再由受控工具代码保存。不能因为是记忆文件，就跳过正常文件权限。</li>
+        <li><strong>持续维护：</strong>你以后更改偏好，要能更新或删除旧条目。会议确认这是持续写入和整理，不是只生成一次文件。</li>
       </ol>
+      <pre class="lesson-example"><code>memory.md 的教学条目（不是已确定的存储格式）
 
-      <h3>“总结本周工作”的完整例子</h3>
-      <p>用户要求总结本周工作时，Agent 可以调用记忆搜索工具，从 <code>memory.md</code> 或所有会话记录中检索本周信息，再组织报告。会议还提到混合检索、向量检索和可能的关键词/图结构匹配，但转写词存在歧义，因此这里只保留“可组合多种检索策略”的结论，不把具体算法当作已确定方案。</p>
+偏好：周报先风险，后进度；文字简洁。
+依据：用户在“本周周报”会话中明确提出。
+适用范围：周报编排。
+备注：后续若用户改口，以新要求为准。
 
-      <div class="diagram inline-flow" role="img" aria-label="长期记忆与知识库的共同机制">
-        <div class="diagram-node">原始会话 / 文档</div>
-        <div class="diagram-arrow" aria-hidden="true">→</div>
-        <div class="diagram-node">加工与结构化</div>
-        <div class="diagram-arrow" aria-hidden="true">→</div>
-        <div class="diagram-node">持久化</div>
-        <div class="diagram-arrow" aria-hidden="true">→</div>
-        <div class="diagram-node">检索</div>
-        <div class="diagram-arrow" aria-hidden="true">→</div>
-        <div class="diagram-node diagram-core">注入 Context</div>
-      </div>
+不应写成：
+“用户不关心预算，以后都可以省略。”</code></pre>
+      <p>原始会话记录一般仍保留原文，便于核查“这条记忆是从哪里来的”。摘要、提取结果与原始记录不是互相替代关系。</p>
 
-      <h3>知识库与个人记忆的共同点和不同点</h3>
-      <p>会议将二者归纳为同一套“数据的存储、加工、检索机制”。共同点是最后都必须回到 Loop：要么被 Context Builder 直接加入，要么由模型请求检索工具。不同点是信息来源与治理：长期记忆偏用户偏好、事实与任务经验；知识库偏外部领域材料，通常需要切分、结构化、权限与版本管理。</p>
-
+      <h3 id="memory-read">③ 下次使用记忆：两条路，最后都要回到本轮 Context</h3>
+      <p><strong>办法 A：程序在请求之前取出相关条目。</strong>新任务是写周报，程序选出周报偏好，和用户新要求一起发送。模型本轮看到了偏好，才可能按它组织内容。会议举过放入系统提示词的做法；实际设计仍应区分可信规则与提取的资料，不能把未经核实的记忆提升成无条件命令。</p>
+      <p><strong>办法 B：让模型按需请求“搜索记忆”工具。</strong>数据多时，不把全部历史塞进请求，而是告诉模型有一个可搜索的工具：</p>
+      <ol class="step-list">
+        <li>你要求“总结我本周做了哪些工作”。模型看到任务和搜索工具说明。</li>
+        <li>模型输出搜索条件，例如本周日期范围、项目名称、“周报”等关键词。</li>
+        <li>Runtime 校验请求，工具代码搜索 <code>memory.md</code> 或已授权的原会话记录。</li>
+        <li>工具返回相关片段及来源；程序把结果接回原工具调用，加入下一轮请求。</li>
+        <li>模型根据实际返回的本周记录总结；没有查到的部分说明缺口，不能把上周事实拼成这一周的成果。</li>
+      </ol>
       <div class="callout warning">
-        <p class="callout-label">当前范围</p>
-        <p>设计文档明确“向量检索不是首期必需能力”；会议 02 也说在先跑 Loop 的顺序里 Memory 可以先不管。不要用“以后需要知识库”阻塞单工具闭环。</p>
+        <p class="callout-label">请区分“在哪里”和“写了什么”</p>
+        <p>如果搜索只返回一个文件路径，模型仍没有看到正文。还要进一步读取所需内容，或让搜索工具直接返回有用片段。<strong>保存 → 检索 → 返回 → 加入请求</strong>，缺一环都可能表现成“明明记过，怎么又不知道”。</p>
       </div>
+      <p>会议用“本周工作总结”解释混合检索：搜索记忆文件，也可以搜索这个周期的原会话。转写里的 <code>grape</code> 紧接“关键词匹配”，疑似指 <code>grep</code>（按文本关键词查找的命令），<strong>尚未核实音频，不应断定，更不能解释成图检索算法</strong>。先理解“找回有关记录”，不必从向量数据库开始。</p>
 
-      <details open>
-        <summary>长期记忆实现前要回答的问题</summary>
-        <ul>
-          <li>哪些信息是稳定事实，哪些只是一次对话中的临时猜测？</li>
-          <li>用户能否查看、编辑和删除记忆？</li>
-          <li>怎样避免把敏感信息无差别放进模型 Context？</li>
-          <li>检索不到、检索错误和记忆冲突时怎样处理？</li>
-        </ul>
+      <h3 id="memory-knowledge">④ 知识库也在找资料，但通常不是在记你的偏好</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>比较</th><th>个人长期记忆</th><th>项目知识库</th></tr></thead>
+          <tbody>
+            <tr><td>主要来自哪里</td><td>你的交互、明确偏好、经核实的长期事实</td><td>项目文档、规范、产品资料等原始材料</td></tr>
+            <tr><td>这次为什么需要</td><td>知道你希望周报怎么写</td><td>知道项目本周实际发生了什么</td></tr>
+            <tr><td>都要做什么</td><td colspan="2">保存资料 → 必要的加工整理 → 检索相关部分 → 放入本轮请求</td></tr>
+            <tr><td>分别要防什么</td><td>把一次偏好永久化、把猜测当画像、跨会话过度暴露</td><td>旧版本混用、片段失去来源、越权读取、遗漏相关材料</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>这里的分类帮助分清用途，不代表两套技术绝对不能共用。会议认为两者在存储、加工和检索上相似；工程上仍要管理来源、拆分方式、权限与版本。第 16 章再解释“查到资料后再回答”为什么被叫作 RAG。</p>
+      <div class="checkpoint">
+        <h3>先验证可用，再增加复杂度</h3>
+        <p>可以先问：一条明确偏好保存后，新会话是否真的收到它？改掉偏好后旧内容是否失效？查错时间、找不到记录、事实冲突时能否说明问题？Phase 7 要支持查看、编辑、删除；秘密和无关隐私不应为了个性化一并放入请求。会议明确 Memory 可以后做，首个 Loop 不以完整记忆或向量检索为前提。</p>
+      </div>
+      <details open class="self-check">
+        <summary>自检：存了，为什么还可能用不上？</summary>
+        <ol>
+          <li>memory.md 写着周报偏好，本轮没有读取或加入它，模型能保证知道吗？</li>
+          <li>“上周预算文件缺失”适合变成“这个项目一直没有预算”吗？</li>
+          <li>总结本周工作，只拿到长期偏好是否足够？</li>
+        </ol>
       </details>
-
+      <details class="answer-key">
+        <summary>展开答案与原因</summary>
+        <ol>
+          <li><strong>不能保证。</strong>存储发生在程序外部的文件里，不会自动修改模型。检查本轮请求有没有实际包含那条记忆，才知道是不是成功取回了。</li>
+          <li><strong>不适合。</strong>“某次没找到文件”有时间和适用范围，不是永久事实。保留当时记录及来源；以后需要预算时重新核实，不能靠旧记忆下永久结论。</li>
+          <li><strong>不够。</strong>偏好只告诉它怎样写，原会话或项目资料才提供这一周做过什么。还要按本周时间范围检索事实，并把搜索结果回填。</li>
+        </ol>
+      </details>
       <div class="source-note">
-        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
-        <p>00:07–00:11：memory.md、持续写入、Context 注入、记忆搜索、周报例子和知识库共性。</p>
-        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
-        <p>5.5 Memory 分层；Phase 7 长期记忆可查看、编辑和删除。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span><p>00:07–00:11：memory.md、周期整理与持续更新、Context 注入、记忆搜索、本周总结、关键词与混合检索、知识库类比；00:20 左右：Memory 后置。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span><p>5.5 四层记忆与首期存储选择；Phase 7 查看、编辑、删除。条目格式、冲突例子和逐步展开为教学解释。</p>
       </div>
+      <nav class="chapter-pager" aria-label="第 12 章前后章节"><a href="#context-compression">← 太长时怎样交接</a><a href="#tool-runtime">下一章：谁能读、写、删除 →</a></nav>
     </section>
 
     <section id="tool-runtime" class="chapter deep-chapter" data-searchable data-nav-target>
       <div class="chapter-head">
-        <p class="chapter-number">13 · 深挖</p>
-        <h2>Tool Runtime 与权限：工具越多，越不能各自为政</h2>
-        <p class="chapter-question">如果有 100 个工具，谁负责让它们以同一套规则运行？</p>
+        <p class="chapter-number">13 · 让动作受到约束</p>
+        <h2>Tool Runtime 与安全：模型想做，不代表程序可以直接做</h2>
+        <p class="chapter-question">同一份周报，读取、写入、删除，为什么要走不同的检查？</p>
       </div>
-
+      <nav class="lesson-nav" aria-label="第 13 章小节导航">
+        <a href="#tool-runtime-story">保存周报的六步</a><a href="#tool-runtime-registry">工具怎样登记</a><a href="#tool-runtime-permission">两种模式别混淆</a><a href="#tool-runtime-boundaries">边界怎样落实</a>
+      </nav>
       <div class="callout conclusion">
-        <p class="callout-label">一句话结论</p>
-        <p>Tool Runtime 把不同来源的工具统一注册、发现、校验、授权、执行、取消、截断、报错和记录；安全边界必须走这条主链。</p>
+        <p class="callout-label">先从分工理解名字</p>
+        <p><strong>模型提出动作请求；工具代码做实际动作；中间的程序统一检查、安排执行和收回结果。</strong>这段统一管理工具调用的程序，就是 Tool Runtime（工具运行层）。</p>
       </div>
 
-      <h3>从“一个函数”升级为“可控执行系统”</h3>
-      <ul class="check-list">
-        <li>注册、发现、命名去重与能力声明。</li>
-        <li>依据 JSON Schema 校验模型参数。</li>
-        <li>权限策略与用户确认。</li>
-        <li>执行、取消、超时和并发边界。</li>
-        <li>结果长度控制、截断与 Artifact 化。</li>
-        <li>成功/错误统一结构。</li>
-        <li>ToolCall 日志、事件与 Trace。</li>
-      </ul>
+      <h3 id="tool-runtime-story">① 周报预览已经好了，现在能直接保存吗？</h3>
+      <p><span class="source-badge source-teaching" data-source="教学解释">教学解释</span>上一章提前看了下周如何复用信息；现在回到上周周报保存之前，拆开看看这一步怎样发生。还记得第 10 章的限制吗？“先预览，确认后再保存”。模型即使已经写出完整内容，也不能替你把这句要求取消。</p>
+      <ol class="step-list">
+        <li><strong>模型提出请求：</strong>例如写入 <code>reports/weekly.md</code>，并给出内容。这只是请求，还不是文件已存在。</li>
+        <li><strong>程序找到对应工具：</strong>检查是否有这个工具、是否允许在当前任务使用；不能凭一个名字执行任意函数。</li>
+        <li><strong>检查参数和实际目标：</strong>路径和内容类型是否符合要求？解析后的真实路径是否在允许范围？写入会不会覆盖原文件？</li>
+        <li><strong>检查权限与本次确认：</strong>如果还没有用户确认，不能越过“先预览再保存”。界面展示将写到哪里、会做什么，由程序记录确认结果；拒绝就不执行。</li>
+        <li><strong>受控执行：</strong>满足条件后才调用实际写文件代码；等待超过时限或用户取消，要按约定中止，不能无限挂住。</li>
+        <li><strong>如实返回：</strong>成功返回实际路径等结果；失败返回原因。程序将结果关联到原调用编号，加入后续消息，让模型知道到底发生了什么，并留下可检查的记录。</li>
+      </ol>
+      <p>工具结果回到第 05 章的同一个 Loop。模型可以根据“写入成功”继续核对，或者根据“用户拒绝”停止保存；<strong>不能把“已经发出写入请求”当成“已经生成文件”。</strong></p>
 
-      <h3>读、写、删不是同一种风险</h3>
+      <h3 id="tool-runtime-registry">② 工具多了，为什么不能把函数堆在一起就算完成？</h3>
+      <p>会议 01 举例：有 100 个工具，各自对应不同函数。程序需要一张统一的登记表，说明“这个名字对应哪段代码、用途是什么、需要哪些参数”。这张表叫 <strong>Registry（工具注册表）</strong>。</p>
       <div class="table-wrap">
         <table>
-          <caption>设计文档建议的权限等级</caption>
-          <thead><tr><th>风险</th><th>示例</th><th>默认策略</th><th>会议中的直观解释</th></tr></thead>
+          <thead><tr><th>登记的信息</th><th>给谁用</th><th>解决什么问题</th></tr></thead>
           <tbody>
-            <tr><td>低</td><td>查看目录、读取允许目录内文件</td><td>可自动执行</td><td>read_file 通常可较自由使用</td></tr>
-            <tr><td>中</td><td>写文件、安装依赖、访问网络</td><td>按策略确认</td><td>write 多数时候先请求审批</td></tr>
-            <tr><td>高</td><td>删除、危险 Shell、发送外部消息</td><td>必须确认</td><td>delete 应逐次向用户确认</td></tr>
+            <tr><td>名称、用途描述、参数格式（Schema）</td><td>相关部分进入模型请求</td><td>知道何时选工具、怎样填写参数；不是过去用过哪些工具的日志</td></tr>
+            <tr><td>名称对应的真实执行函数</td><td>程序内部使用</td><td>模型说“读文件”之后，知道调用哪段代码</td></tr>
+            <tr><td>风险、权限、来源、执行限制</td><td>程序执行前及执行中检查</td><td>参数写对了也不等于有权执行</td></tr>
           </tbody>
         </table>
       </div>
+      <p>同名工具要检查和消歧，不能默默覆盖。内置、自定义、MCP 接入的工具，以及 Skill 所依赖的工具，都要在相应能力接入后按统一规则暴露和管理，不能因为来源不同就走一条没有检查的旁路。</p>
+      <p><strong>工具描述回答“这件工具用来干什么”，Schema 回答“参数有哪些、各是什么类型、哪些必须填”。</strong>例如“读取已授权文本文件”是用途；“path 必须是字符串”是参数格式。它们帮助模型提出请求，真实函数实现仍由程序执行，不必把整个函数源代码放进 Context。</p>
+      <p>登记之外，统一运行层还负责执行、取消、超时与并发限制，控制返回长度、必要时截断并指向完整 Artifact，统一成功/错误结果，以及日志、事件与 Trace。<strong>Trace 就是能按时间和调用编号还原过程的记录。</strong>结果被截断时应说明，不让模型误以为看到了全文。</p>
 
-      <p>会议还用 Read Only、Workspace Write、Full Access 三档解释工具权限，与某些产品的“极简/标准/其他 Harness 模式”不是一回事：前者决定工具能执行到哪里，后者可能改变 System Prompt 和 Tool List 的整体配置。</p>
-
-      <h3>极简与标准 Harness 的会议例子</h3>
-      <p>工程师举例：极简模式可能只有 Bash 和编辑类两个工具，System Prompt 也很短，因此速度快、适合在简洁内核上二次扩展；标准模式会有更完整的工具集，例如网络搜索。该段是在解释“框架配置模式”，不是本项目已确认要复制的产品规格。</p>
-
-      <h3>Security 还包括什么</h3>
+      <h3 id="tool-runtime-permission">③ “能做哪些动作”和“配了多少能力”，是两条不同的轴</h3>
+      <p>先看设计文档中的风险分级，不是把所有动作一律弹窗：</p>
       <ul>
-        <li>Workspace 访问边界和真实目标展示。</li>
-        <li>命令参数展示与危险操作审批。</li>
-        <li>Secret 与模型 Context 隔离。</li>
-        <li>Built-in、User Tool、MCP Tool 的来源与信任状态。</li>
-        <li>敏感输出脱敏、运行取消和超时保护。</li>
+        <li><strong>低风险：</strong>例如列目录、读取允许范围的文件，可以自动执行。这里的“可自动”不等于可以读任意路径。</li>
+        <li><strong>中风险：</strong>例如写文件、安装依赖、网络请求，根据设定策略决定是否确认；本例用户额外要求先确认保存，就必须遵守。</li>
+        <li><strong>高风险：</strong>例如删除文件、执行危险 Shell 命令、发送外部消息，设计要求必须明确确认。确认不能绕过其他硬性权限限制。</li>
       </ul>
-
-      <div class="callout warning">
-        <p class="callout-label">常见误区</p>
-        <p>把权限提示只做在 UI 上。UI 可以显示确认，但真正的拒绝必须发生在 Tool Runtime 执行前；否则换一个入口或后台 Trigger 就可能绕过。</p>
+      <p>会议用“读通常可用、写大部分时候先审批、删除每次审批”帮助理解风险差异；设计文档则给出上述三级策略。具体产品应把策略说明白，而不是让模型临时猜哪些危险。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>会议里的两组名字</th><th>实际在回答什么</th><th>怎样理解</th></tr></thead>
+          <tbody>
+            <tr><td>Read Only / Workspace Write / Full Access</td><td>允许动作到哪里？</td><td>只读 / 工作区内写入 / 更宽的访问权限；名称本身不能代替具体边界</td></tr>
+            <tr><td>极简模式 / 标准模式</td><td>这一套 Agent 配了什么？</td><td>工具数量、提示词、框架能力等配置差异；会议称为 Harness 模式</td></tr>
+          </tbody>
+        </table>
       </div>
+      <p><strong>Harness</strong> 在这段讨论里，可先理解为围绕模型配置起来的一整套工具、指令和运行安排。会议的极简例子只有 Bash（执行命令）和编辑两个工具，配短系统提示词；工程师认为这类设计快、便于二次扩展。标准模式则可能带更多工具，包括 Web Search。</p>
+      <p>这些是会议中的产品例子与工程观点，不是本项目必须提供两种模式的承诺，更不是“工具少就安全、工具多就一定更好”。一个命令执行工具也可能有很大权限；工具数量和权限大小不是同一回事。</p>
 
-      <details open>
-        <summary>Phase 3 完成标准</summary>
-        <p>危险操作必须确认；工具失败后，Agent 能读到标准化错误并调整下一步行为；Workspace 边界、超时、取消、结果截断与统一记录均可验证。</p>
+      <h3 id="tool-runtime-boundaries">④ “请小心”不是权限控制，真正的拦截发生在执行之前</h3>
+      <p>假设模型请求改写原始会议纪要，虽然路径存在、参数正确，也违反了用户“不改原文”的限制。正确结果是程序阻止写入并说明原因，<strong>而不是先写完，再在界面提醒你</strong>。</p>
+      <ul>
+        <li><strong>工作区边界：</strong>检查真实目标，不能只看路径字符串表面是否以某个目录开头。</li>
+        <li><strong>动作透明：</strong>需要确认时展示关键参数、目标和影响；不要只弹一句“是否允许使用工具”。</li>
+        <li><strong>凭据隔离：</strong>API Key 等秘密由安全配置提供，不混进提示词、文件结果或日志；必要的日志要脱敏。</li>
+        <li><strong>来源与会话隔离：</strong>外部工具返回和文件正文是资料，不能自己变成新增授权；一个任务的结果不能串到另一个任务。</li>
+        <li><strong>执行有边界：</strong>设置超时、取消、并发和结果大小限制。界面取消后，不能继续悄悄执行新的危险动作。</li>
+      </ul>
+      <p>这些约束属于程序和运行环境的责任。定时任务、后台任务也应走同一套限制，不能因为用户当时没有盯着界面就自动获得更大权限。</p>
+      <div class="checkpoint">
+        <h3>本章先学会判断，不要求现在做完全部工具平台</h3>
+        <p>你应能区分“模型请求被拒绝”和“工具执行后失败”，并确认两者都没有伪装成功。设计的 Phase 3 再系统验收危险操作确认、工作区边界、超时取消、错误后调整、长结果处理和统一记录。是否进入该阶段，以当前授权和阶段记录为准。</p>
+      </div>
+      <details open class="self-check">
+        <summary>自检：换成读、写、删，再走一遍</summary>
+        <ol>
+          <li>模型输出写文件参数后，文件是否已经生成？</li>
+          <li>界面给了“拒绝”按钮，是否就证明实际权限安全？</li>
+          <li>极简模式只有两个工具，是否等于 Read Only？</li>
+          <li>工具返回“文件不存在”后，要不要让模型看到这个错误？</li>
+        </ol>
       </details>
-
+      <details class="answer-key">
+        <summary>展开答案与原因</summary>
+        <ol>
+          <li><strong>没有。</strong>还需要找到工具、校验参数与权限、必要时确认、执行并取得结果。只有实际写入成功才能报告文件已生成；内容是否达标还要看第 14 章。</li>
+          <li><strong>不能。</strong>还要验证拒绝后实际执行代码没有运行，真实目标没有越界。界面展示决定，程序落实决定，两者缺一不可。</li>
+          <li><strong>不等于。</strong>极简说的是能力配置，Read Only 说的是权限。即使只有 Bash 一个工具，如果没有限制，也可能执行写入或删除。</li>
+          <li><strong>要。</strong>错误是实际执行结果，要关联原调用回填。模型才能区分参数错误、权限拒绝和文件缺失，选择修正、询问或停止；不能无限重试同一个失败动作。</li>
+        </ol>
+      </details>
       <div class="source-note">
-        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
-        <p>2.3、5.4、5.9、Phase 3。</p>
-        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
-        <p>00:49–00:55：工具统一注册、权限边界、读写删除、权限档位与 Harness 模式差异。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span><p>5.4 Tool Runtime、5.9 权限与安全；Phase 3。</p>
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span><p>00:49–00:55：100 工具登记、读写删审批、权限三档与 Harness 模式、极简两工具和标准模式。周报调用过程为教学解释，未引入 0910 新工具协议。</p>
       </div>
+      <nav class="chapter-pager" aria-label="第 13 章前后章节"><a href="#long-term-memory">← 记忆怎样读写</a><a href="#completion-evaluation">下一章：怎样证明做完 →</a></nav>
     </section>
 
     <section id="completion-evaluation" class="chapter deep-chapter" data-searchable data-nav-target>
       <div class="chapter-head">
-        <p class="chapter-number">14 · 深挖</p>
-        <h2>完成条件、验证与评测基准：防止“模型说做完了”</h2>
-        <p class="chapter-question">怎样把“我觉得完成”变成可核验的完成？</p>
+        <p class="chapter-number">14 · 证明做完，而不是说做完</p>
+        <h2>完成验证与评测：怎样知道这次真的交付了</h2>
+        <p class="chapter-question">Agent 说“周报已完成”，你应该找哪几条证据，而不是只看这句话？</p>
       </div>
-
+      <nav class="lesson-nav" aria-label="第 14 章小节导航">
+        <a href="#completion-story">四个不同状态</a><a href="#completion-loop">完成前怎样核对</a><a href="#completion-tests">测试证明什么</a><a href="#completion-stop">什么时候停止</a>
+      </nav>
       <div class="callout conclusion">
-        <p class="callout-label">一句话结论</p>
-        <p>任务完成要尽量绑定外部证据；优化策略要绑定能代表真实质量的评测基准。</p>
+        <p class="callout-label">先定义完成，再让程序检查</p>
+        <p><strong>模型说“完成”是一个判断，不是完成的证据。</strong>要把用户要求翻译成可检查的条件，再核对实际文件、工具返回或运行结果；没做的检查，就不能写成已经通过。</p>
       </div>
 
-      <h3>完成判断受两类因素影响</h3>
-      <ol>
-        <li><strong>模型本身能力：</strong>不同模型在推理、Tool Calling 和代码任务上的可靠性不同。</li>
-        <li><strong>模型实际看见的 Context：</strong>目标、规则、结果、错误和验收标准是否被清楚放入。</li>
-      </ol>
-      <p>模型能力不是 Runtime 能直接改变的，但可以通过 Provider 的能力声明选择合适模型；Context、停止策略和验证注入则是项目可控的工程空间。</p>
-
-      <h3>会议中的“结束前强制检查”</h3>
-      <p>工程师以编码任务举例：主模型准备结束时，Runtime 可以强制插入验证请求，让它重新读取写出的文件、运行代码，前端任务还可以渲染页面并截图检查。验证产物回填同一主 Loop，模型重新判断是否真的完成。也可以先用小模型做任务分类，只在 Coding 场景启用对应验证策略；这是高级优化示例，不是首切片必需。</p>
-
-      <div class="diagram inline-flow" role="img" aria-label="完成前验证门禁流程">
-        <div class="diagram-node">模型拟结束</div>
-        <div class="diagram-arrow" aria-hidden="true">→</div>
-        <div class="diagram-node diagram-core">Completion Policy</div>
-        <div class="diagram-arrow" aria-hidden="true">→</div>
-        <div class="diagram-node">运行 / 复读 / 渲染</div>
-        <div class="diagram-arrow" aria-hidden="true">→</div>
-        <div class="diagram-node">证据回填</div>
-        <div class="diagram-arrow" aria-hidden="true">→ 再判断</div>
-      </div>
-
-      <h3>三层测试策略</h3>
+      <h3 id="completion-story">① 同一句“好了”，可能掩盖四个完全不同的状态</h3>
+      <p><span class="source-badge source-teaching" data-source="教学解释">教学解释</span>继续周报案例。假设你已看过预览，并明确同意保存。</p>
       <div class="table-wrap">
         <table>
-          <caption>设计文档建议的测试分层</caption>
-          <thead><tr><th>层级</th><th>重点对象</th><th>本项目例子</th></tr></thead>
+          <thead><tr><th>实际发生的事</th><th>目前能说什么</th><th>还不能据此说什么</th></tr></thead>
           <tbody>
-            <tr><td>Unit Test</td><td>状态机、Schema、权限、Context Builder</td><td>越界路径被拒绝；最大轮数状态正确</td></tr>
-            <tr><td>Integration Test</td><td>Provider、工具、SQLite、MCP</td><td>真实/模拟 ToolCall 能完整回填</td></tr>
-            <tr><td>Scenario Test</td><td>从用户任务到 Artifact</td><td>读取项目资料后生成有证据的报告</td></tr>
+            <tr><td>模型输出写文件请求</td><td>“准备保存”</td><td>不能说文件已经写入</td></tr>
+            <tr><td>工具返回写入成功</td><td>“文件已写入指定位置”</td><td>不能仅凭这个断言内容完整、准确</td></tr>
+            <tr><td>重新读取文件，并对照本周资料检查</td><td>“已核对这些具体要求”</td><td>没检查的要求不能冒充通过</td></tr>
+            <tr><td>本次约定的完成条件都有证据</td><td>“本次任务完成”，说明剩余限制</td><td>不能扩大成“系统处理所有任务都可靠”</td></tr>
           </tbody>
         </table>
       </div>
+      <p>本例可以预先约定：本周计划和会议记录都已读取；周报包含有依据的进度和风险；预算仍标待确认；原文没有改动；已获保存确认；文件确实在指定路径。这里是教学条件，不是要求所有任务都跑同一组检查。</p>
+      <p>如果用户只要求预览，那么完成预览就可能已经满足任务，<strong>不能擅自增加写文件来“证明做事”</strong>。验证动作也不能越过授权。</p>
 
-      <h3>风险优先级</h3>
-      <ol>
-        <li>Loop 是否正确结束，是否会无限循环。</li>
-        <li>ToolCall 参数、权限和错误是否正确。</li>
-        <li>Session 中断后是否能恢复。</li>
-        <li>Provider 的消息和 Tool Schema 是否一致。</li>
-        <li>MCP 断线或工具失败是否拖垮主进程。</li>
-        <li>Cron 是否重复、漏执行或并发冲突。</li>
-        <li>Context 裁剪是否丢关键任务状态。</li>
+      <h3 id="completion-loop">② 在准备结束时，插入一次有目标的核对</h3>
+      <p>会议 01 讨论了一个可选增强：主模型准备结束时，程序把检查要求加入同一个主循环，让它带着实际证据再判断一次。用周报来理解：</p>
+      <ol class="step-list">
+        <li><strong>先有完成条件：</strong>明确本次要检查哪些内容，不等最后才无限添加标准。</li>
+        <li><strong>模型提出结束：</strong>比如准备回复“已保存周报”。这时程序检查，本次需要的核验是否已经完成。</li>
+        <li><strong>如果证据还缺，追加具体检查：</strong>例如“请读取刚生成的文件，核对会议依据和预算标记”，而不是空泛地说“再检查一下”。</li>
+        <li><strong>执行相应工具：</strong>实际读取文件或运行已获授权的验证动作；成功或失败都回到同一个消息链。</li>
+        <li><strong>据证据作分叉：</strong>通过则记录“已核验”，允许结束；发现缺漏且仍在授权和预算内则修正；缺资料或权限则说明无法完成的部分。</li>
+        <li><strong>停止条件仍有效：</strong>达到轮数/时间/费用限制，或用户取消，就按规则终止，明确未完成检查。不能因为叫“验证”就无限循环。</li>
       </ol>
+      <p><strong>已通过的核验要有状态记录。</strong>否则每次模型准备结束，程序都再插入同一句检查，就会永远结束不了。也不是必须另请一个模型才叫验证；工具结果与明确条件才是关键。</p>
+      <details>
+        <summary>会议的完整进阶例子：代码任务怎样加检查？</summary>
+        <ol class="step-list">
+          <li>请求先到一个小模型，识别是不是 Coding（编写代码）任务；其他任务可走别的策略。</li>
+          <li>主模型处理代码任务，实际编辑或写入文件。</li>
+          <li>当主模型准备结束时，程序追加针对代码的检查要求。</li>
+          <li>可能重新读取文件、实际运行代码；涉及前端时，还可渲染页面并查看截图。</li>
+          <li>这些检查结果回到原主 Loop；模型再判断是否有问题，程序按状态和预算允许结束、修正或如实停止。</li>
+        </ol>
+        <p>这是会议讨论的进阶设计思路，<strong>小模型分类、结束前检查都不是第一切片的前提</strong>，也不是已经确认有一个通用准确率。不能把这段例子缩成“接一个验证模型就解决了”。</p>
+      </details>
+      <p>会议还指出，判断效果受两件事影响：<strong>模型本身的能力</strong>，以及<strong>这次实际看见什么</strong>。应用可以选择合适模型、改进 Context，却不能通过改 Runtime 就直接改掉模型本体的能力。不给目标、限制、结果和错误，模型很难凭空判断是否完成；给齐材料也不是绝对正确的保证。</p>
 
-      <div class="callout warning">
-        <p class="callout-label">评测基准风险</p>
-        <p>错误基准会把系统带向错误方向：可能指标更高，真实任务却更差。先定义“用户任务是否完成、证据是否充分、是否越权、能否恢复”，再优化提示词、压缩或模型选择。</p>
+      <h3 id="completion-tests">③ 一次完成验证，和比较系统有没有进步，不是同一件事</h3>
+      <p>刚才检查的是“这次周报是否达标”。<strong>评测</strong>则是用一组事先确定的任务和标准，比较不同版本的整体表现。设计文档把测试分成三层：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>原设计名称</th><th>用周报说人话</th><th>通过后能证明什么</th></tr></thead>
+          <tbody>
+            <tr><td>Unit，单元测试</td><td>单独给权限检查函数一个越界路径，确认它拒绝；给参数校验错误类型；检查状态和 Context 组装</td><td>这一个小部件在这些条件下正常，不代表真实模型会做完整任务</td></tr>
+            <tr><td>Integration，集成测试</td><td>把 Provider、工具、数据库或 MCP 的连接部分接起来，检查调用和结果能传递</td><td>被测连接能协作；用模拟返回的测试，不证明真实服务效果</td></tr>
+            <tr><td>Scenario，场景测试</td><td>从用户提出周报要求，一直观察到回答或文件交付，以及缺失信息时的处理</td><td>该代表性任务在所测条件下能完成；仍需注明模拟还是实际运行</td></tr>
+          </tbody>
+        </table>
       </div>
-
-      <details open>
-        <summary>最小完成门禁</summary>
-        <p>首切片至少检查：文件确实由工具读取；答案中关键事实能在固定文件找到；越界路径不执行；达到最大轮数有明确失败；Trace 能复现每一步。</p>
+      <p>例如两个压缩策略：A 的摘要极短，但丢了“不覆盖原文”；B 稍长，却保住限制。若只考“摘要短不短”，A 得分更高；若考“最终是否正确且遵守限制”，A 就失败。<strong>错误的 Benchmark（固定比较题及标准）会让你以为更好了，实际却更差。</strong>这是会议特别提醒的问题，不是已测得的 A/B 实验结论。</p>
+      <details>
+        <summary>保留原设计的七项风险顺序：后续按阶段使用</summary>
+        <ol>
+          <li>Agent Loop 能否正确结束。</li>
+          <li>工具参数、权限和错误能否正确处理。</li>
+          <li>会话重启后能否恢复。</li>
+          <li>不同 Provider 的消息和 Tool Schema 是否保持一致。</li>
+          <li>MCP 断线、超时和外部进程异常。</li>
+          <li>Cron 重复、漏触发与并发冲突。</li>
+          <li>上下文裁剪是否丢失关键任务状态。</li>
+        </ol>
+        <p>它们对应完整路线的风险，不是现在必须一次做完的清单。没进入 MCP 或 Cron 阶段，不应为了读懂本章就新增开发阻塞。</p>
       </details>
 
-      <div class="source-note">
-        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
-        <p>00:37–00:45：完成准确性、模型与 Context、任务分类、编码场景强制检查。</p>
-        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
-        <p>00:05–00:07：工程实践与评测基准。</p>
-        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
-        <p>第 10 节测试与验收策略。</p>
+      <h3 id="completion-stop">④ 验收也要能结束：不要把三个结论混成一个</h3>
+      <ul>
+        <li><strong>闭环成立：</strong>模型自主请求工具，程序受控执行，真实结果回填，模型据此回答或合理结束，记录能还原过程。</li>
+        <li><strong>真实任务有用：</strong>代表性真实任务的结果准确、完整、值得使用，需要相应任务证据。</li>
+        <li><strong>达到发布质量：</strong>要看既定使用范围内的稳定性、安全和体验，不是一个成功例子就证明。</li>
+      </ul>
+      <p>第一切片关心实际读取、工具请求来源、权限、原调用关联的成功/错误回填、下一轮收到结果、回答有原文依据、轮数/超时/取消边界与 Trace。固定样例通过、关键证据齐全，就关闭那个范围；后续质量问题如实记录，不能悄悄扩成无止境的原阶段验收。</p>
+      <div class="checkpoint">
+        <h3>你要能追问的不是“测了多少”，而是“这条结论由什么支持”</h3>
+        <p>保存成功看工具结果；内容准确看原文对照；模型确实看到结果看实际请求。模拟、离线重放、真实 API 运行、AI 复核和用户验收要分别标明。当前项目阶段以<a href="local-agent/trial/directory-check.md">当前阶段记录</a>为准，本章教学不要求重跑已完成里程碑。</p>
       </div>
+      <details open class="self-check">
+        <summary>自检：哪句话需要哪条证据？</summary>
+        <ol>
+          <li>write_file 返回成功，就能说周报内容完全正确吗？</li>
+          <li>为什么检查完还要把结果带回下一轮，而不是只在后台跑一下？</li>
+          <li>有一个小模型负责分类或检查，是否就能保证任务完成？</li>
+          <li>已完成固定验收，又发现一个新边界例子，是否必须无限继续？</li>
+        </ol>
+      </details>
+      <details class="answer-key">
+        <summary>展开答案与原因</summary>
+        <ol>
+          <li><strong>不能。</strong>写入成功证明动作完成；周报是否遗漏会议内容、是否乱填预算，还需要与任务要求和来源核对。正确描述“保存成功，但某项未核验”，比扩大结论可靠。</li>
+          <li><strong>因为模型必须知道核验的实际结果，才能基于证据继续或结束。</strong>后台跑过但没有回填，对下一轮模型等于没有提供信息；程序也需要记录通过、失败或未完成状态。</li>
+          <li><strong>不能。</strong>分类只是选策略，模型自检也会出错。还要有实际文件或运行证据、明确标准、权限约束，以及不会无限重复检查的终止规则。</li>
+          <li><strong>不必无限继续，也不能忽略真实核心缺陷。</strong>先看问题是否违反当前验收项及其实际影响；核心安全或结果回填缺陷必须处理，一般后续质量问题分级后置。新增范围要有新目标，不能用“再测一个”取代收口。</li>
+        </ol>
+      </details>
+      <div class="source-note">
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span><p>00:37–00:43：模型能力、Context、小模型分类、结束前重读/运行/渲染检查并回到同一 Loop。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span><p>00:06–00:07：工程实践与有效评测，避免错误基准造成虚假进步。</p>
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span><p>测试策略、验收标准及第 10 节七项风险。三个结论与止损边界承接 2026-09-09 手册修订及当前工作区规则；周报检查为教学解释，不是项目运行证据。</p>
+      </div>
+      <nav class="chapter-pager" aria-label="第 14 章前后章节"><a href="#tool-runtime">← 动作受到约束</a><a href="#provider-models">下一章：更换模型时谁变化 →</a></nav>
     </section>
 
     <section id="provider-models" class="chapter deep-chapter" data-searchable data-nav-target>
       <div class="chapter-head">
-        <p class="chapter-number">15 · 深挖</p>
-        <h2>Provider 与模型能力：API 能连通，不等于抽象完成</h2>
-        <p class="chapter-question">怎样让 Agent Core 不被某一家模型服务绑死？</p>
+        <p class="chapter-number">15 · 换模型，不重写整个助手</p>
+        <h2>Provider：把同一份任务接到不同模型服务</h2>
+        <p class="chapter-question">周报任务、工具权限和保存流程没变，换一家模型服务，为什么仍需要适配代码？</p>
       </div>
-
+      <nav class="lesson-nav" aria-label="第 15 章小节导航">
+        <a href="#provider-story">先分清四个东西</a><a href="#provider-roundtrip">走一趟来回</a><a href="#provider-duties">还要对齐什么</a><a href="#provider-phase">怎样分阶段验证</a>
+      </nav>
       <div class="callout conclusion">
-        <p class="callout-label">一句话结论</p>
-        <p>Provider 把不同模型服务的消息、Tool Calling、流式事件、错误、Usage 与能力声明转换成 Agent Core 的统一协议。</p>
+        <p class="callout-label">先理解它要挡住什么变化</p>
+        <p>不同模型服务可能用不同的请求和返回格式。<strong>Provider 适配层负责翻译这些差异，让核心循环仍按同一套方式收发消息、处理工具请求。</strong>它统一接口，不保证不同模型同样聪明或每次输出一样。</p>
       </div>
 
-      <pre><code>ModelProvider
-├── chat(request)
-├── stream(request)
-├── listModels()
-└── getCapabilities(model)</code></pre>
-
-      <h3>统一接口至少处理什么</h3>
-      <ul class="check-list">
-        <li>消息角色与格式转换。</li>
-        <li>Tool Calling Schema 与结果格式转换。</li>
-        <li>流式输出事件。</li>
-        <li>Usage、Token 与成本信息标准化。</li>
-        <li>错误、限流、超时与重试标准化。</li>
-        <li>模型能力声明，以及 API Key、Base URL 和参数管理。</li>
+      <h3 id="provider-story">① 先分清：模型、服务、API 和适配层</h3>
+      <ul>
+        <li><strong>模型：</strong>根据输入生成回答或工具请求的能力本体。不同模型的表现可能不同。</li>
+        <li><strong>模型服务：</strong>把模型运行起来，供外部程序调用的系统；可能是云服务，也可能在本地。</li>
+        <li><strong>API：</strong>程序与服务约定的调用入口和收发格式。你的程序按约定发送材料，服务按约定返回结果。</li>
+        <li><strong>Provider 适配层：</strong>你这个 Agent 项目里的连接代码，负责把内部格式和具体服务格式相互转换。不是模型本身，也不是聊天页面。</li>
       </ul>
+      <p>会议特别区分了两件事：在现成应用里切换模型，是使用别人已经接好的系统；自己做 Agent，则需要接 API，并自己负责历史、工具、权限与循环。接通一个 API 是起点，不是整个 Agent 已经完成。</p>
 
-      <h3>为什么先一个，再第二个</h3>
-      <p>设计文档建议先支持一个云端 Provider，跑通闭环后再加入一个 OpenAI-compatible 或本地模型 Provider。Phase 4 的完成标准是“不修改 Agent Core 即可切换 Provider”。如果第一天就适配多家，往往只得到一堆条件分支，却还没证明核心协议真的正确。</p>
-
-      <h3>依赖能力，不依赖模型名字</h3>
-      <p>会议 01 解释了 Tool Calling 是模型生成结构化工具参数的能力；不同模型会影响完成判断与调用质量。设计文档因此要求 Agent 查询 Capability，而不是用模型名称硬编码判断“这个能不能 Tool Calling”。</p>
-
-      <h3>应用层产品与构建层产品</h3>
-      <p>用户在会议 01 追问“自己接 API”和“在现成 Agent 产品里选模型”有什么区别。工程师区分了开箱即用的应用层产品与允许开发者接模型、做二次开发的构建层产品。本项目属于后者：必须自己理解模型 API 请求与响应，而不是只在某个已有界面中选择模型。</p>
-
-      <div class="callout warning">
-        <p class="callout-label">时效说明</p>
-        <p>会议 02 讨论了某具体模型 API 的价格与推荐。这是会议发生时的工程师观点，价格和产品状态会变化；本手册不把它改写成当前采购结论，也不替项目选择供应商。</p>
+      <h3 id="provider-roundtrip">② 同一个读文件请求，走一趟完整来回</h3>
+      <p><span class="source-badge source-teaching" data-source="教学解释">教学解释</span>还是周报任务。以下“服务 A / 服务 B”是假想服务，只说明格式差异，不对应任何厂商当前接口。</p>
+      <ol class="step-list">
+        <li><strong>核心先准备统一材料：</strong>用户要求、相关历史、当前进度、工具的说明和参数格式。</li>
+        <li><strong>适配层翻译后发出：</strong>选择服务 A，就按 A 的协议发送；换服务 B，就由 B 的适配器处理。比如两家服务的消息字段、工具字段、角色标记可能不同。</li>
+        <li><strong>模型服务返回：</strong>本轮可能是直接回答，也可能是“请求读取会议文件”。服务返回的包装格式也可能不同。</li>
+        <li><strong>适配层翻译回来：</strong>转成内部统一的文本回复或 ToolCall，保留工具名、参数和调用关联信息。</li>
+        <li><strong>核心继续原循环：</strong>如果是 ToolCall，就交给工具运行层校验与执行，再把结果送入下一轮；如果是可结束的回答，就按既定完成规则结束。</li>
+      </ol>
+      <div class="diagram inline-flow" role="img" aria-label="核心材料经过 Provider 适配后发送给模型服务，返回被转换为统一回答或工具请求，再交回原循环">
+        <div class="diagram-node"><strong>核心循环</strong><span>统一的消息与工具定义</span></div>
+        <div class="diagram-arrow" aria-hidden="true">⇄</div>
+        <div class="diagram-node diagram-core"><strong>Provider 适配</strong><span>双向转换协议</span></div>
+        <div class="diagram-arrow" aria-hidden="true">⇄</div>
+        <div class="diagram-node"><strong>模型服务</strong><span>按该服务的格式收发</span></div>
       </div>
+      <p>这里的 <strong>Agent Core</strong> 就是负责消息和决策循环的核心部分。目标是换服务时更换适配器和配置，不到核心里到处写“如果是 A 就这样，如果是 B 就那样”。<strong>工具权限、真实文件执行、结果回填和取消边界仍然属于你的 Runtime。</strong></p>
 
-      <details open>
-        <summary>Phase 4 验收</summary>
-        <p>同一个 Agent Core、同一个 Tool 定义和同一场景测试，在切换 Provider 后仍能完成；差异只留在适配层，错误与 Usage 采用统一结构。</p>
+      <h3 id="provider-duties">③ 为什么适配层不只是“填一个地址和 Key”？</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>要处理的差异</th><th>不处理会怎样</th></tr></thead>
+          <tbody>
+            <tr><td>消息、工具 Schema 和工具调用/结果格式</td><td>模型不认识工具，或返回的调用丢失关联，无法继续原任务</td></tr>
+            <tr><td>流式输出：把逐步到达的内容变成统一事件</td><td>界面和核心可能只能理解某一家服务；工具参数未接收完整就误执行</td></tr>
+            <tr><td>Usage、Token 和成本信息</td><td>难以比较总消耗；服务未提供的数据必须标未知，不能编造金额</td></tr>
+            <tr><td>错误、限流、超时、重试</td><td>网络失败被当成成功，或无限重试；模型请求失败不能假装工具已经执行</td></tr>
+            <tr><td>能力声明</td><td>把需要工具调用的任务交给不支持该能力的服务配置，直到运行时才出错</td></tr>
+            <tr><td>Key、Base URL、模型参数</td><td>凭据泄露或连接错环境；这些是程序配置，不该作为聊天正文发送</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>Base URL</strong> 是服务入口地址，<strong>Key</strong> 是访问凭据；本章不需要你填写，更不需要将它们贴进对话。重试也应有限次、有限时，并与取消规则配合。</p>
+      <details>
+        <summary>原设计的四个接口名，现在可以逐个读懂</summary>
+        <ul>
+          <li><code>chat(request)</code>：发送一次对话请求，取得统一结果；request 指本次请求材料。</li>
+          <li><code>stream(request)</code>：接收逐步返回的内容和事件，而不是等全部输出完才显示。</li>
+          <li><code>listModels()</code>：列出这个 Provider 可用的模型。</li>
+          <li><code>getCapabilities(model)</code>：说明指定模型/服务配置支持哪些能力，例如是否支持工具调用。</li>
+        </ul>
+        <p>这些是设计文档中的接口约定，不是让你照抄某家 SDK，也不表示仓库当前已全部实现。具体能力应按 Provider 声明与验证判断，不只按模型名称硬编码。</p>
       </details>
+      <p>“支持工具调用”意味着模型/接口能够按约定提出结构化工具请求，还需要你的运行层把请求执行并回填。适配器只能转换协议，<strong>不能把一个本来不具备的能力靠字段改名自动造出来</strong>。</p>
 
-      <div class="source-note">
-        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
-        <p>5.3 Provider Layer；Phase 4。</p>
-        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
-        <p>00:20–00:24、00:29–00:40：模型 API、应用层/构建层、Tool Calling 与模型差异。</p>
-        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
-        <p>00:17–00:19：首个 API 与当时的成本讨论。</p>
+      <h3 id="provider-phase">④ 分两步验证，别为了能换模型先把所有服务接一遍</h3>
+      <ol class="step-list">
+        <li><strong>先一个云端 Provider：</strong>确认 API 的输入输出，再接读文件和历史回填，让一条真实工具链路成立。不要一开始同时排查多个服务差异。</li>
+        <li><strong>Phase 4 再接第二个：</strong>可以是兼容云服务或本地服务；验收目标是无需修改 Agent Core 就能切换，同时正确处理各自能力与协议差异。</li>
+      </ol>
+      <p>对照时仍用相同的周报任务：两边都能正确提出工具请求、收到真实结果、按边界结束；输出文字不必完全一致。若 B 不支持必要能力，要明确报告不支持，不能静默丢掉工具定义却宣称切换成功。</p>
+      <div class="checkpoint">
+        <h3>这章学完，你应能画出“哪里变，哪里不变”</h3>
+        <p>改变：服务地址、凭据、模型配置、请求/返回适配。保持：任务目标、核心循环约定、工具权限、结果关联和完成标准。会议中的低成本 API、充值和具体价格属于当时建议，不是当前采购依据；本章不据此推荐购买。</p>
       </div>
+      <details open class="self-check">
+        <summary>自检：换一家服务再做同一份周报</summary>
+        <ol>
+          <li>换模型后，是否应该把读文件权限检查也重写一遍？</li>
+          <li>服务 B 的回复格式与 A 不同，应该优先在哪一层处理？</li>
+          <li>第二个 Provider 能正常聊天，就证明 Phase 4 通过了吗？</li>
+        </ol>
+      </details>
+      <details class="answer-key">
+        <summary>展开答案与原因</summary>
+        <ol>
+          <li><strong>通常不应该。</strong>换模型服务不改变用户允许读哪些文件。权限约束留在统一工具运行层；服务的协议差异由适配层处理。</li>
+          <li><strong>在 B 的 Provider 适配器。</strong>将返回转换成核心能理解的回答、ToolCall 或错误。若核心到处依赖 B 的专用字段，说明隔离还不充分。</li>
+          <li><strong>没有。</strong>还要检验无需修改 Core 的切换、工具请求和结果关联、能力差异，以及相关流式/错误等约定。普通文本聊天成功只证明了其中很小一部分。</li>
+        </ol>
+      </details>
+      <div class="source-note">
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span><p>5.3 Provider 抽象与四个接口；Phase 4 多模型切换。</p>
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span><p>模型 API、工具调用能力及模型能力对任务效果的影响。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span><p>00:17–00:20：API 起步、应用使用与构建层的区别、当时的成本建议。A/B 服务与周报流程为教学示意。</p>
+      </div>
+      <nav class="chapter-pager" aria-label="第 15 章前后章节"><a href="#completion-evaluation">← 怎样证明做完</a><a href="#extensions">下一章：四种扩展接在哪里 →</a></nav>
     </section>
 
     <section id="extensions" class="chapter deep-chapter" data-searchable data-nav-target>
       <div class="chapter-head">
-        <p class="chapter-number">16 · 深挖</p>
-        <h2>MCP、Skill、RAG/知识库和 Cron：都要回到统一主链</h2>
-        <p class="chapter-question">这些热门概念分别接在哪，为什么不属于第一最小闭环？</p>
+        <p class="chapter-number">16 · 有明确需要，再加能力</p>
+        <h2>MCP、Skill、RAG、Cron：四个不同问题，接回同一个流程</h2>
+        <p class="chapter-question">资料在外部、方法要复用、历史太多、希望定时做——分别该补哪一块？</p>
       </div>
-
+      <nav class="lesson-nav" aria-label="第 16 章小节导航">
+        <a href="#extensions-map">先认问题</a><a href="#extensions-mcp">外接能力</a><a href="#extensions-skill">复用方法</a><a href="#extensions-rag">先查资料</a><a href="#extensions-cron">定时发起</a>
+      </nav>
       <div class="callout conclusion">
-        <p class="callout-label">一句话结论</p>
-        <p>MCP 最终适配成内部 Tool/Resource，Skill 向 Context 和工具注册表注入方法与依赖，RAG 通过 Context 或检索 Tool 提供证据，Cron 作为 Trigger 创建 AgentRun。</p>
+        <p class="callout-label">不要同时背四个定义</p>
+        <p><strong>先指出当前缺什么，再决定加哪一块。</strong>它们并不是四个互相替代的 Agent，也不是必须全部具备，才能跑通一次模型调用工具的闭环。</p>
       </div>
 
+      <h3 id="extensions-map">① 仍然做周报，只是逐个增加现实需求</h3>
+      <p><span class="source-badge source-teaching" data-source="教学解释">教学解释</span>前面的周报已经能手动发起、读取本地资料、预览、确认并保存。现在分别遇到四个新问题：</p>
       <div class="table-wrap">
         <table>
-          <caption>四类扩展的边界</caption>
-          <thead><tr><th>概念</th><th>本质</th><th>进入主链的位置</th><th>没有它能否跑首个 Loop</th></tr></thead>
+          <thead><tr><th>你遇到的具体问题</th><th>补什么</th><th>接在原流程哪里</th></tr></thead>
           <tbody>
-            <tr><td>MCP</td><td>外部 Server 能力的协议与连接方式</td><td>MCP Client → Schema 转换 → Tool Registry</td><td>能</td></tr>
-            <tr><td>Skill</td><td>某类任务的方法、步骤、约束和依赖包</td><td>指令进入 Context，依赖工具进入 Registry</td><td>能</td></tr>
-            <tr><td>RAG / 知识库</td><td>外部知识的存储、加工与检索</td><td>检索结果直接进 Context，或通过检索 Tool 回填</td><td>能</td></tr>
-            <tr><td>Cron</td><td>按时间创建任务的 Trigger</td><td>Scheduler → AgentRun → 标准 Loop</td><td>能</td></tr>
+            <tr><td>项目进度在外部系统，本地工具不会查</td><td>MCP：按约定接入外部能力</td><td>进入工具运行层；可用工具定义进入请求，执行结果仍回填</td></tr>
+            <tr><td>每次都要重复解释“如何整理一份合格周报”</td><td>Skill：复用一套方法说明及所需材料</td><td>相关方法加入 Context；其中用到的工具仍走原运行层</td></tr>
+            <tr><td>资料成百上千页，不可能一次都发给模型</td><td>RAG：先找相关资料，再带着资料回答</td><td>请求前准备材料，或在循环内调用检索工具</td></tr>
+            <tr><td>不想每周手动输入同一句“请整理周报”</td><td>Cron：到约定时间发起任务</td><td>在入口触发一次 Run，后面继续同一个 Loop</td></tr>
           </tbody>
         </table>
       </div>
+      <p>同一项目可能需要其中几种，也可能暂时一种都不需要。接下来每次只增加一个需求，先看它为什么出现，再看名称。</p>
 
-      <h3>MCP：外部适配器，不侵入 Agent Core</h3>
-      <p>设计文档要求支持 Server 配置与启停、stdio/HTTP 等连接、Tools/Resources/Prompts 发现、Schema 转换、断线/超时/进程退出、信任等级、权限与日志。其关键不是“能连一个 Server”，而是外部能力转换成内部统一对象后，继续走相同 Tool Runtime。</p>
-
-      <h3>Skill：方法包，不是原子动作</h3>
-      <p>Skill 可以包含 <code>SKILL.md</code>、manifest、可选工具、提示词、脚本和参考资料。它负责告诉 Agent 一类任务该按什么步骤与约束完成，并声明所需能力。边界口诀是：<strong>Tool 是原子动作，Skill 是完成一类任务的方法，Agent 是执行目标与策略的主体。</strong></p>
-
-      <h3>RAG：最后仍是模型可见证据</h3>
-      <p>会议 01 用非常直接的方式解释：模型输出只有最终回答或工具参数；若知识检索不是事先注入 Context，就只能由模型请求检索工具，结果再回填。会议中的“reg”大概率指 RAG，但保留在转写纠错表，不把每个模糊词静默改写。</p>
-
-      <h3>Cron：改变触发时间，不改变执行内核</h3>
-      <p>会议 02 的“每天 8 点看金价”例子包含任务内容、时间、运行位置、所属会话和频率。时间到后，调度器把任务注入标准 Loop，可能带上定时任务标签或相应 System Prompt。设计文档进一步要求一次性/周期任务、启停、并发、超时、重试、历史与通知。未来 Webhook 也复用 Trigger → AgentRun。</p>
-
-      <div class="callout warning">
-        <p class="callout-label">范围判断</p>
-        <p>这些能力都很适合作为后续里程碑展示，但它们不能替代单 Provider、ToolCall、执行、回填和停止条件。先做扩展，会把尚未稳定的主链复制到更多入口。</p>
-      </div>
-
-      <details open>
-        <summary>扩展接入前检查</summary>
-        <ul>
-          <li>能否转换成统一 Tool、Context 信息或 AgentRun？</li>
-          <li>是否复用同一权限、错误、取消和事件机制？</li>
-          <li>卸载扩展后，Agent Core 是否仍能正常运行？</li>
-        </ul>
+      <h3 id="extensions-mcp">② MCP：别人做好的能力，怎样接进你的工具系统</h3>
+      <p>假设项目管理系统里有“查询本周事项”的能力，但你的 Runtime 只会读本地文件。你不想为每个外部系统重新设计一套连接方法，就可以考虑 <strong>MCP</strong>：一套让应用与外部能力服务按共同约定交互的协议。</p>
+      <p>先认识两端：对方提供能力的程序叫 <strong>MCP Server</strong>；你的项目中负责连接它的部分叫 <strong>MCP Client</strong>。这里 Client 是程序角色，不是你的客户。</p>
+      <ol class="step-list">
+        <li><strong>配置并连接：</strong>Runtime 按配置连接或启动外部服务，确认来源和允许范围。</li>
+        <li><strong>发现它提供什么：</strong>取得 Tools（可执行动作）、Resources（可读资料）、Prompts（可复用提示模板）。三者不同，不能全部当成可随意执行的函数。</li>
+        <li><strong>接入内部管理：</strong>外部工具的名字、用途和参数格式转换后登记进工具系统；同名冲突、可用性与权限需要处理。</li>
+        <li><strong>让模型看到可用工具：</strong>本轮请求带上相关工具说明，模型才能选择“查询本周事项”，并提出参数。</li>
+        <li><strong>执行并回填：</strong>统一工具运行层先校验，再通过 MCP Client 请求外部服务；取得结果后按原调用返回，模型才能据此写周报。</li>
+      </ol>
+      <p><strong>MCP 负责接通外部能力，不负责替你决定业务目标，也不会自动放宽权限。</strong>外部服务断线、超时或进程退出，要返回可解释错误并处理恢复，不能当作“事项列表为空”。发现工具、接通一次，也不等于它在真实任务中始终可用。</p>
+      <details>
+        <summary>原设计里的接入细节，现在怎样理解？</summary>
+        <p><code>stdio</code> 表示通过进程的标准输入/输出传递消息，常见于由本地启动的外部程序；<code>HTTP</code> 表示通过服务请求传递。项目设计要管理服务配置、启停、发现、适配，以及断线、超时、进程退出。来源信任、权限、日志仍归入统一边界，MCP 不直接侵入 Agent Core。</p>
+        <p>这些是目标设计项，并不表示本手册展示了一次已经完成的真实 MCP 接入。</p>
       </details>
 
-      <div class="source-note">
-        <span class="source-badge source-design" data-source="设计文档">设计文档</span>
-        <p>2.5、5.6–5.8、Phase 5–6。</p>
-        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span>
-        <p>00:45–00:47：RAG/知识库作为 Loop 外扩能力并回归工具。</p>
-        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span>
-        <p>00:10–00:16：知识库、外围扩展、Cron 调度与任务注入。</p>
+      <h3 id="extensions-skill">③ Skill：工具告诉它“能做什么”，方法包告诉它“怎么做好这类事”</h3>
+      <p>假设每周你都要说：“先看计划，再读会议；先列风险，再写进度；没依据的预算标待确认；检查来源后再交付。”把这套稳定做法整理起来，就是 <strong>Skill</strong> 的一种用途。</p>
+      <p>会议与设计讨论的 Skill 不是一个魔法函数，而是可加载的方法包。可以包含 <code>SKILL.md</code> 或清单、说明文字，也可带 <code>tools / prompts / scripts / references</code>，分别是所需工具、提示模板、脚本和参考资料。</p>
+      <ol class="step-list">
+        <li><strong>安装或放入方法包：</strong>记录名称、用途、版本、所需工具和环境。加载文字成功，不代表它需要的外部工具也安装好了。</li>
+        <li><strong>在合适任务触发：</strong>用户明确选择，或按设定规则匹配到“整理周报”这类任务，不是所有任务都加载全部方法。</li>
+        <li><strong>把相关步骤送给模型：</strong>方法说明进入本轮 Context，模型据此安排读资料、整理、检查等动作。</li>
+        <li><strong>动作仍受控：</strong>读文件和写周报继续走原工具运行层。方法包要求的权限若没有授权，不能自行提升。</li>
+        <li><strong>实际看结果：</strong>检查是否按约定结构完成、有无遗漏来源，而不是只确认“SKILL.md 已读取”。方法变更还要管理版本和依赖。</li>
+      </ol>
+      <p>用一句话区分：<strong>Tool 是一次具体动作；Skill 是完成一类任务的方法；Agent 是结合任务、方法与可用动作，循环推进的执行者。</strong>Skill 可以依赖工具，不等于工具本身；加载一个 Skill 也不是新建了另一个独立 Agent。</p>
+
+      <h3 id="extensions-rag">④ RAG：资料太多时，先找出相关的那几段再回答</h3>
+      <p>假设有一年会议记录，你只问“本周哪些事项延期”。一次塞入全年资料既长又容易干扰。先找本周及延期相关片段，再让模型据此回答，这种安排叫 <strong>RAG（检索增强生成）</strong>。“检索”就是找资料，“增强生成”就是把找到的资料作为回答依据。</p>
+      <p>它通常包含：保存原始资料 → 需要时切成便于查找的小段并保留来源 → 用日期、关键词等条件找相关内容 → 把片段放进请求 → 模型回答并说明依据。是否使用向量检索，是实现选择，不是理解 RAG 的前提。</p>
+      <p>有两种常见接法，别误以为只有一条：</p>
+      <ul>
+        <li><strong>程序先查：</strong>在调用模型前，程序按任务取出有关片段，Context Builder 把它们组装进去。模型第一次收到任务时，已带有查到的资料。</li>
+        <li><strong>模型决定再查：</strong>模型先看到任务与检索工具，输出查询参数；程序检索，将实际结果回填；下一轮模型带着片段回答。</li>
+      </ul>
+      <p>会议 01 转写中的 <code>reg</code> 结合上下文疑似指 RAG，未据音频核实；当时讲“通过工具参数”的例子，指的是<strong>模型自主请求检索</strong>这条路，不能推广为所有 RAG 都只能由模型调用工具。</p>
+      <p>回到第 12 章：“记忆 / 知识库”描述资料的来源与用途，“RAG”描述先找资料再回答的使用方式。<strong>记忆文件、会话记录、项目知识库，都可能成为被检索的对象。</strong>查到内容还要核对日期、版本、来源和权限；没搜到不等于事实不存在，返回路径也不等于返回正文。</p>
+
+      <h3 id="extensions-cron">⑤ Cron：把“用户现在发起”换成“到时间发起”</h3>
+      <p>如果你希望每周自动整理周报，需要一段按时间启动任务的程序，叫<strong>调度器</strong>；Cron 是这里讨论的定时任务机制。它先解决“什么时候开工”，不负责代替模型整理周报。</p>
+      <p>先保留会议原例：“<strong>每天早上 8 点查询黄金价格</strong>”。一条任务至少要把下面几件事说清楚：</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>要指定什么</th><th>金价例子怎样理解</th></tr></thead>
+          <tbody>
+            <tr><td>任务</td><td>查询黄金价格；实际用哪个报价来源和口径，需要明确，会议未定</td></tr>
+            <tr><td>时间与频率</td><td>每天早上 8 点；工程上还要明确时区，不能靠程序猜</td></tr>
+            <tr><td>运行地点</td><td>由哪个 Runtime / 工作环境执行，是否有需要的工具权限</td></tr>
+            <tr><td>会话</td><td>结果进入哪个会话，是复用还是新建，需要设定</td></tr>
+          </tbody>
+        </table>
       </div>
+      <ol class="step-list">
+        <li><strong>到达约定时间：</strong>调度器发现这条任务该执行了。</li>
+        <li><strong>创建一次运行：</strong>把任务内容送入指定 Runtime 和会话，作为一个触发来源；可附“定时任务”标签，必要时加入适合该场景的系统指令。</li>
+        <li><strong>进入原 Loop：</strong>模型决定使用查询工具；程序照常检查权限、执行查询、回填结果。</li>
+        <li><strong>根据实际结果交付：</strong>有数据才报告所查口径的价格；失败要如实说明，不把昨日结果冒充今日结果。</li>
+        <li><strong>记录并通知：</strong>保存本次执行状态和历史，按通知策略把结果送给用户；不等于重新训练模型。</li>
+      </ol>
+      <p>因此 <strong>Cron 是 Trigger（触发来源），不是另一套 Agent Loop</strong>。把任务换成每周周报，也仍要遵守你“先预览、确认后保存”的要求。定时启动本身不代表可以绕过用户确认。</p>
+      <details>
+        <summary>定时任务为什么还要有这些配置？</summary>
+        <p>原设计还列出 <strong>Cron 表达式</strong>，即把“什么时候执行”写成程序可解析的时间规则。先明确每天 8 点、时区和频率，再由调度配置表达；读懂这里不需要先背表达式语法。</p>
+        <ul>
+          <li><strong>一次性 / 周期、启用 / 停用：</strong>避免你停掉了任务，它仍继续运行。</li>
+          <li><strong>并发：</strong>上一轮还没结束时，下一次到点如何处理，避免重复写入或互相覆盖。</li>
+          <li><strong>超时与重试：</strong>服务失败可以按策略有限重试；不能不断重发并造成重复副作用。</li>
+          <li><strong>历史与通知：</strong>区分未触发、运行中、失败、完成，让用户知道实际状态。</li>
+        </ul>
+        <p>未来 Webhook（外部系统发生事件后发来通知）也可作为 Trigger，经同一入口创建 AgentRun。不是收到外部通知就接受其中任意指令或权限。</p>
+      </details>
+      <div class="checkpoint">
+        <h3>读到这里，用四句中文替代四个缩写</h3>
+        <p><strong>MCP：接外部能力；Skill：复用做事方法；RAG：先找依据再回答；Cron：按时间发起任务。</strong>设计的 Phase 5、6 等后续阶段再落实相应扩展。共同底线是复用原有权限、错误回填、取消、事件和记录；不是重做四套各自独立的运行系统。</p>
+      </div>
+      <details open class="self-check">
+        <summary>自检：你会把需求放到哪一层？</summary>
+        <ol>
+          <li>外部项目管理系统提供了可查询工具，接入后模型会自动知道怎么用吗？</li>
+          <li>Skill 写着“先读会议再写周报”，是谁实际读取文件？</li>
+          <li>RAG 是否必须让模型发一次工具请求，才算检索？</li>
+          <li>Cron 到点发起周报任务，是否可以跳过确认直接保存？</li>
+        </ol>
+      </details>
+      <details class="answer-key">
+        <summary>展开答案与原因</summary>
+        <ol>
+          <li><strong>不会仅凭接通就自动知道。</strong>还要发现并适配工具，登记用途和参数格式，再把相关定义放入模型请求。执行时依然经过权限校验，结果也必须回填。</li>
+          <li><strong>受控工具代码读取。</strong>Skill 提供方法，模型据此提出动作，Runtime 检查并执行。文字要求不是已经发生的文件操作。</li>
+          <li><strong>不是。</strong>程序也可以在请求前先检索再组装材料；模型自主发起检索是另一种接法。两者都要让实际找到的资料进入模型请求。</li>
+          <li><strong>不可以。</strong>到点只改变发起方式，不改变原授权。仍需按任务规则生成预览、等待确认；无人确认时就不能擅自越过这一步。</li>
+        </ol>
+      </details>
+      <div class="source-note">
+        <span class="source-badge source-design" data-source="设计文档">设计文档</span><p>2.5 Trigger；5.6 MCP、5.7 Skill、5.8 Cron；Phase 5–6。接口与阶段是设计目标，不是本章证明的实现状态。</p>
+        <span class="source-badge source-meeting-1" data-source="会议 01">会议 01</span><p>00:45–00:47：扩展围绕核心 Loop；模型自主检索的工具接法。</p>
+        <span class="source-badge source-meeting-2" data-source="会议 02">会议 02</span><p>00:10–00:16：知识库与可选扩展、Cron 定义、每天 8 点金价例、任务/时间/运行地点/会话/频率与标签。新增周报实例和步骤展开均为教学解释。</p>
+      </div>
+      <nav class="chapter-pager" aria-label="第 16 章前后章节"><a href="#provider-models">← 更换模型服务</a><a href="#product-enterprise">下一章：回到企业交付 →</a></nav>
     </section>
 
     <section id="product-enterprise" class="chapter deep-chapter" data-searchable data-nav-target>
@@ -2538,7 +3143,7 @@
           <thead><tr><th>阶段</th><th>目标</th><th>关键交付</th><th>完成标准</th></tr></thead>
           <tbody>
             <tr><td>Phase 0</td><td>工程骨架与约束</td><td>目录、核心接口、配置、日志、基础测试、AgentRun 状态、简短架构决策</td><td>项目可启动，依赖方向清晰</td></tr>
-            <tr><td>Phase 1</td><td>最小 Agent Loop</td><td>最薄交互入口、单 Provider、流式输出、Tool Calling、2–3 工具、轮数/超时/取消、日志</td><td>连续调用一个或多个工具并最终回答</td></tr>
+            <tr><td>Phase 1</td><td>最小 Agent Loop</td><td>原设计：CLI 对话、单 Provider、流式输出、Tool Calling、2–3 工具、轮数/超时/取消、日志</td><td>连续调用一个或多个工具并最终回答</td></tr>
             <tr><td>Phase 2</td><td>会话与持久化</td><td>SQLite、Session 切换/恢复、Message/ToolCall/Run 持久化、简单裁剪摘要、Artifact 目录</td><td>重启后可查看并继续会话</td></tr>
             <tr><td>Phase 3</td><td>Tool Runtime 与安全</td><td>Registry、Schema、统一结果/错误、超时/取消/截断、权限、审批、Workspace 边界</td><td>危险操作确认；失败后 Agent 能调整</td></tr>
             <tr><td>Phase 4</td><td>Provider 抽象</td><td>统一接口、第二 Provider、能力声明、错误/Usage/流标准化、切换与重试/降级</td><td>不改 Agent Core 即可换 Provider</td></tr>
@@ -2669,13 +3274,17 @@
             <tr><td>Agent</td><td>一组模型、提示词、工具和策略配置所描述的执行主体。</td><td>不是某一次任务运行。</td></tr>
             <tr><td>AgentRun</td><td>一次从任务开始到完成、失败、取消或暂停的具体运行。</td><td>同一 Session 可有多个 Run。</td></tr>
             <tr><td>Agent Loop</td><td>模型判断、行动、观察结果并再次判断的循环。</td><td>必须有停止、超时与取消。</td></tr>
-            <tr><td>Runtime</td><td>让一次 AgentRun 能真实运行所需的核心工程机制。</td><td>不同团队定义可能有宽窄差异。</td></tr>
+            <tr><td>Runtime</td><td>组织模型调用、动作执行、状态和运行保护的工程机制。</td><td>区分项目整体、Agent Runtime 控制层与 Tool Runtime，见第 06 章。</td></tr>
             <tr><td>Harness</td><td>会议中用于描述模型外部工程框架或脚手架的词。</td><td>本项目正式名称统一为 Local Agent Runtime。</td></tr>
             <tr><td>Context</td><td>一轮模型调用可见的提示词、消息、工具、记忆和运行状态集合。</td><td>不等于数据库全部内容。</td></tr>
             <tr><td>Session</td><td>连续交互及其消息、运行、工具调用、产物和摘要的容器。</td><td>不同 Session 的 Context 应隔离。</td></tr>
-            <tr><td>Memory</td><td>被保存、压缩、检索并重新放入 Context 的信息。</td><td>文件或向量库只是载体。</td></tr>
+            <tr><td>Memory</td><td>支持连续工作的记忆机制与信息；包括近期消息、会话摘要、长期与 Workspace 信息。</td><td>近期消息可直接追加，不必先压缩或建立长期记忆库。</td></tr>
             <tr><td>Tool</td><td>Agent 可以请求执行的一项原子操作。</td><td>不同于一整套任务方法。</td></tr>
-            <tr><td>ToolCall</td><td>模型对某个工具及其参数的一次调用请求与结果记录。</td><td>请求不等于已经执行成功。</td></tr>
+            <tr><td>ToolCall</td><td>本手册流程中指模型提出的工具调用请求，包含工具名、参数与调用 ID。</td><td>原设计对象表用广义“调用及结果记录”；教学流程拆开请求与结果以免混淆。</td></tr>
+            <tr><td>ToolResult / Observation</td><td>ToolResult 是执行产生的成功或错误结果；它回到模型可见输入后，作为环境反馈（Observation）供再次判断。</td><td>结果按原调用 ID 关联；只有保存而未带入本轮输入，模型仍看不见。</td></tr>
+            <tr><td>Schema</td><td>参数的结构要求，例如名称、类型、必填和取值约束。</td><td>帮助模型填写，同时用于程序校验；不代表已获执行授权。</td></tr>
+            <tr><td>RunContext</td><td>程序执行本次任务所需的会话、配置、权限与运行状态集合。</td><td>与本轮实际发给模型的 Context 区分。</td></tr>
+            <tr><td>Agent Core / Policy</td><td>任务总控程序 / 停止、重试、审批等处理规则。</td><td>由程序执行流程和边界，不能只依赖模型自觉。</td></tr>
             <tr><td>Tool Runtime</td><td>负责工具注册、校验、权限、执行、取消、错误和日志的系统。</td><td>所有工具来源最终走统一主链。</td></tr>
             <tr><td>Skill</td><td>完成某类任务的方法、约束和能力依赖包。</td><td>不等同于原子 Tool。</td></tr>
             <tr><td>MCP</td><td>将外部 Server 的 Tool、Resource 或 Prompt 适配进内部系统的协议与连接方式。</td><td>不应直接侵入 Agent Core。</td></tr>
@@ -2715,7 +3324,7 @@
             <tr><td>open cloud / harmony / hermes</td><td>某些 Agent 构建层产品名称</td><td>产品名转写不稳定，但讨论重点是“构建层而非开箱应用”。</td><td>低</td></tr>
             <tr><td>color code / cloud code / colas / collect / Codeless</td><td>某个编码 Agent 产品名称</td><td>用于“开发项目、选择模型、定时任务”等例子，具体品牌无法仅凭转写可靠确定。</td><td>低</td></tr>
             <tr><td>oppos / oppo 5</td><td>某个主模型名称</td><td>与“小模型做任务分类”对比，但型号转写不足以定论。</td><td>低</td></tr>
-            <tr><td>grape</td><td>图检索或关键词/混合检索相关术语</td><td>出现在记忆搜索的混合检索例子中。</td><td>低</td></tr>
+            <tr><td>grape</td><td>疑似 grep，未核实</td><td>会议 02 00:09:52 紧接“这类关键词匹配”；不能由此确认图检索。</td><td>中低</td></tr>
             <tr><td>PDC 跟创造</td><td>无法可靠判断</td><td>只出现一次，且说话者明确暂不展开。</td><td>低</td></tr>
           </tbody>
         </table>
@@ -2769,7 +3378,7 @@
             <tr><td>用户问题 / 偏好</td><td>不偏好 CLI；关心企业交付、完成准确性、知识库位置、压缩方法、学习方式。</td><td>在对应章节显式保留。</td></tr>
             <tr><td>教学示例</td><td>天气、新闻指代、read_file、写文档、代码验证、周报、金价 Cron。</td><td>附录 C 建立索引。</td></tr>
             <tr><td>未来设想</td><td>第二 Provider、MCP、Skill、Cron、Memory、Webhook、复杂优化与 UI。</td><td>按路线图延后，不进入首切片。</td></tr>
-            <tr><td>未决事项</td><td>具体语言/框架、数据库实现细节、首个 Provider、最终 UI 形态、压缩阈值、检索算法。</td><td>不擅自替项目作决定。</td></tr>
+            <tr><td>原始材料当时未决</td><td>具体语言/框架、数据库实现细节、首个 Provider、最终 UI 形态、压缩阈值、检索算法。</td><td>这是会议与设计当时的记录，不是当前待办；现阶段以阶段记录及相应方案为准。</td></tr>
             <tr><td>非实质内容</td><td>寒暄、连线/共享屏幕、画图工具操作、口吃与无信息重复。</td><td>不进入教学正文，覆盖矩阵注明已排除。</td></tr>
           </tbody>
         </table>
@@ -2841,13 +3450,13 @@
         <p class="chapter-number">附录 F</p>
         <h2>源文件版本快照</h2>
       </div>
-      <p>以下三份文件是本手册内容的唯一事实来源。供应商价格、行业产品状态等易变化信息没有通过互联网改写，只按会议当时观点记录。</p>
+      <p>以下三份文件是原始项目目标与会议观点的依据。覆盖矩阵核对实质主题，不能替代逐字原文；有疑问请打开源文件。2026-09-09 当前阶段补充独立引用阶段记录，教学新增例子与答案标记为“教学解释”。供应商价格、行业产品状态等只按会议当时观点记录。</p>
       <div class="table-wrap">
         <table>
           <caption>只读源文件与 SHA-256</caption>
           <thead><tr><th>源文件</th><th>行数</th><th>字节数</th><th>SHA-256</th></tr></thead>
           <tbody>
-            <tr><td><a href="个人本地智能助手-Agent项目设计方案.md">个人本地智能助手-Agent项目设计方案.md</a></td><td>768</td><td>23,713</td><td><code>3c1c322affc8056295a6810f4f6db6c6c0a208a9b9ea163564856e105e2f3779</code></td></tr>
+            <tr><td><a href="0-个人本地智能助手-Agent项目设计方案.md">0-个人本地智能助手-Agent项目设计方案.md</a></td><td>768</td><td>23,713</td><td><code>3c1c322affc8056295a6810f4f6db6c6c0a208a9b9ea163564856e105e2f3779</code></td></tr>
             <tr><td><a href="meeting/0829/会议录制：agent-meeting01.md">会议录制：agent-meeting01.md</a></td><td>1,151</td><td>59,156</td><td><code>6ba6fb17d6dc83ae5335c6af210b4b68df63154c1fe8c424add755bad2d8d670</code></td></tr>
             <tr><td><a href="meeting/0829/会议录制：agent-meeting02.md">会议录制：agent-meeting02.md</a></td><td>464</td><td>22,506</td><td><code>f33607087582a429eace0e19b919aa83a7911befc398b7e33b0b295608fef4a5</code></td></tr>
           </tbody>
@@ -2857,7 +3466,7 @@
     </section>
 
     <footer class="document-footer">
-      <p>本手册是三份本地源材料的教学性整合。源文件保持不变；教学新增内容均以“教学解释”标记。</p>
+      <p>教学优化版 · 2026-09-10。第 10–16 章已按连续实例与分步教学重编，保留三份源材料、原章节与覆盖依据；新增内容按“原始依据 / 教学解释 / 日期化阶段状态”区分。原始材料和历史失败记录保持不变。</p>
       <a href="#start">返回开头</a>
     </footer>
   </main>
@@ -2905,6 +3514,7 @@
         navToggle.setAttribute("aria-expanded", String(shouldOpen));
         navScrim.setAttribute("aria-hidden", String(!shouldOpen));
         setSidebarAccessibility(shouldOpen);
+        main.inert = shouldOpen;
 
         if (shouldOpen) {
           window.requestAnimationFrame(() => navClose.focus());
@@ -2918,6 +3528,7 @@
           setMobileNav(false, false);
         } else {
           body.classList.remove("nav-open");
+          main.inert = false;
           navToggle.setAttribute("aria-expanded", "false");
           navScrim.setAttribute("aria-hidden", "true");
           sidebar.setAttribute("aria-hidden", "false");
@@ -2935,20 +3546,58 @@
         if (event.key === "Escape" && body.classList.contains("nav-open")) {
           setMobileNav(false, true);
         }
+        if (event.key === "Tab" && body.classList.contains("nav-open")) {
+          const controls = Array.from(sidebar.querySelectorAll('a[href], button, input'))
+            .filter((node) => !node.disabled && node.getClientRects().length > 0);
+          const first = controls[0];
+          const last = controls[controls.length - 1];
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last?.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first?.focus();
+          }
+        }
       });
 
-      navLinks.forEach((link) => {
-        link.addEventListener("click", () => {
-          if (mobileQuery.matches) {
-            const targetId = decodeURIComponent(link.hash.slice(1));
-            const target = document.getElementById(targetId);
-            setMobileNav(false, false);
-            if (target) {
-              target.setAttribute("tabindex", "-1");
-              window.requestAnimationFrame(() => target.focus({ preventScroll: true }));
-            }
+      function revealAnchor(target) {
+        if (target.closest(".search-hidden")) {
+          window.clearTimeout(searchTimer);
+          searchInput.value = "";
+          runSearch();
+        }
+        let parent = target.parentElement;
+        while (parent) {
+          if (parent.tagName === "DETAILS") parent.open = true;
+          parent = parent.parentElement;
+        }
+      }
+
+      document.addEventListener("click", (event) => {
+        const link = event.target.closest('a[href^="#"]');
+        if (!link || !link.hash) return;
+        const target = document.getElementById(decodeURIComponent(link.hash.slice(1)));
+        if (!target) return;
+        revealAnchor(target);
+        const section = target.closest("[data-nav-target]");
+        if (section) setActiveSection(section.id);
+        if (mobileQuery.matches) {
+          setMobileNav(false, false);
+          target.setAttribute("tabindex", "-1");
+          window.requestAnimationFrame(() => target.focus({ preventScroll: true }));
+        }
+      });
+
+      window.addEventListener("hashchange", () => {
+        const target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+        if (target) {
+          const wasHidden = Boolean(target.closest(".search-hidden"));
+          revealAnchor(target);
+          if (wasHidden) {
+            target.scrollIntoView({ behavior: "auto", block: "start" });
           }
-        });
+        }
       });
 
       if (typeof mobileQuery.addEventListener === "function") {
@@ -3008,6 +3657,7 @@
         } else {
           searchStatus.textContent = `找到 ${visibleCount} 个相关章节。清除搜索可恢复全文。`;
         }
+        requestScrollUpdate();
       }
 
       searchInput.addEventListener("input", () => {
@@ -3103,6 +3753,7 @@
         document.querySelectorAll("details").forEach((item, index) => {
           item.open = printOpenState[index] ?? true;
         });
+        requestScrollUpdate();
       });
 
       runSearch();

@@ -23,7 +23,7 @@ def redact(value):
             if key in ('reasoning_content', 'api_key', 'authorization'):
                 continue
             result[key] = digest(item) if key in (
-                'content', 'answer', 'quote', 'arguments', 'question') else redact(item)
+                'content', 'answer', 'quote', 'arguments', 'question', 'intent', 'preview') else redact(item)
         return result
     return value
 

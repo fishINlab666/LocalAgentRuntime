@@ -4,6 +4,8 @@ const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="session-token"]').content;
 let ready = false, simulated = false, activeId = null, busy = false, timer = null, renderedEvents = 0;
 let viewGeneration = 0, renderedRevision = -1;
+let pendingApproval = null, approvalSendingId = null, approvalBlockedId = null, approvalDeadline = 0, approvalTimer = null;
+let cancelling = false, cancelSendingId = null;
 const errors = {
   CONFIG_MISSING: '模型尚未配置。请在已配置 DEEPSEEK_API_KEY 的终端启动页面服务。',
   CONFIG_INVALID: '模型配置有误，请检查启动服务的环境变量。',
@@ -31,7 +33,20 @@ const errors = {
   NETWORK_ERROR: '连接 DeepSeek 失败，请检查网络后重新提问。',
   MODEL_TIMEOUT: '等待模型回复超时，本次已停止。',
   RUN_TIMEOUT: '本次任务超过时间限制，已停止。',
-  TOOL_TIMEOUT: '读取文件超时，本次已停止。',
+  TOOL_TIMEOUT: '工具执行超时，本次已停止。',
+  USER_REJECTED: '你已拒绝这次新建，文件未创建。',
+  APPROVAL_EXPIRED: '确认已过期，这次新建未执行。请重新发起任务。',
+  APPROVAL_NOT_FOUND: '这次确认已失效，请以最新任务状态为准。',
+  APPROVAL_CONFLICT: '这次操作已收到不同的决定，请以最新任务状态为准。',
+  APPROVAL_UNAVAILABLE: '无法继续等待确认，这次新建未执行。',
+  FILE_EXISTS: '目标文件已存在，不能覆盖。请指定一个新的文件路径。',
+  WRITE_ERROR: '文件写入失败，请检查目标目录权限。',
+  WRITE_OUTCOME_UNKNOWN: '无法确认文件是否已创建，请检查目标路径；本次不会自动重试。',
+  OUTPUT_NOT_CREATED: '没有取得目标文件的成功创建回执，本次未完成。',
+  OS_PERMISSION_DENIED: '系统拒绝访问，请检查文件或目录权限后重试。',
+  DISK_FULL: '磁盘空间不足，本次已停止。',
+  INVALID_OUTPUT_FILE: '输出路径须为工作区内新建的 .md 或 .txt 文件，且不能与输入相同。',
+  IO_ERROR: '本地工具出现异常，本次已停止。',
   CONTEXT_LIMIT: '问题和文件内容超出本次输入限制，请缩小内容。',
   MAX_STEPS: '已达到调用次数上限，本次未完成。',
   INVALID_ANSWER: '回答格式未通过检查，本次没有有效答案。',
@@ -45,13 +60,19 @@ const errors = {
   LOCAL_SERVER_ERROR: '本地服务遇到错误，请检查日志目录权限并重新启动。',
 };
 const eventNames = {'run.started':'任务开始', 'model.requested':'请求模型', 'model.completed':'收到模型回复',
-  'tool.requested':'模型请求读取文件', 'tool.started':'开始读取文件', 'tool.finished':'文件操作结束',
-  'tool.completed':'读取结果已回填', 'answer.rejected':'回答格式不合规，正在纠错', 'run.ended':'任务结束'};
+  'tool.requested':'模型请求工具', 'tool.started':'开始执行工具', 'tool.finished':'工具执行结束',
+  'tool.completed':'工具结果已回填', 'tool.described':'工具动作说明', 'approval.required':'等待确认', 'approval.resolved':'已收到确认决定',
+  'approval.expired':'确认已过期', 'answer.rejected':'回答格式不合规，正在纠错', 'run.ended':'任务结束'};
+const sourceLabel = value => ({builtin: '内置', user: '用户工具', mcp: 'MCP'})[value] || value || '未提供';
+const riskLabel = value => ({low: '低风险', medium: '中风险', high: '高风险'})[value] || value || '未提供';
 function eventLabel(event) {
-  if (event?.event === 'answer.rejected' && event.detail.code === 'IDENTIFIER_MISMATCH') {
+  if (event?.event === 'answer.rejected' && event.detail?.code === 'IDENTIFIER_MISMATCH') {
     return '标识与原文不一致，正在纠错';
   }
-  if (event?.detail.name === 'list_files') {
+  if (event?.event?.startsWith('tool.') && (event.detail?.action_summary || (event.detail?.name && !['read_file', 'list_files'].includes(event.detail.name)))) {
+    return {'tool.described': '工具动作说明', 'tool.requested': '模型请求工具', 'tool.started': '开始执行工具', 'tool.finished': '工具执行结束', 'tool.completed': '工具结果已回填'}[event.event] || event.event;
+  }
+  if (event?.detail?.name === 'list_files') {
     return {'tool.requested': '模型请求列出目录', 'tool.started': '开始列出目录'}[event.event] || eventNames[event.event];
   }
   return eventNames[event?.event] || event?.event || '正在启动';
@@ -83,21 +104,83 @@ function updateControls() {
   $('discover').disabled = busy || !ready;
   $('file').disabled = busy || $('discover').checked;
   $('file').required = !$('discover').checked;
-  for (const element of [$('question'), $('sample'), ...document.querySelectorAll('[data-question]')]) element.disabled = busy;
+  for (const element of [$('question'), $('output-file'), $('sample'), ...document.querySelectorAll('[data-question]')]) element.disabled = busy;
   $('privacy').textContent = simulated ? '演示模式：只在本机读取资料，不向模型发送内容。原文件保持只读。'
     : $('discover').checked ? '开始后，问题、目录元数据和已读取的资料内容将发送给 DeepSeek。原文件保持只读。'
     : '开始后，所选文件内容和问题将发送给 DeepSeek。原文件保持只读。';
+  if ($('output-file').value.trim()) $('privacy').textContent += ' 输出文件的完整内容经你确认后才新建。';
+  updateApprovalControls();
 }
 
 function status(text, type = 'neutral') { $('run-status').textContent = text; $('run-status').className = `badge ${type}`; }
 function showError(error, area = 'form-error') { $(area).textContent = error.message; $(area).hidden = false; }
 function countQuestion() { $('count').textContent = `${$('question').value.length} / 4000`; }
 
+function updateApprovalControls() {
+  clearTimeout(approvalTimer);
+  if (!pendingApproval) return;
+  const id = pendingApproval.approval_id || pendingApproval.id;
+  const remaining = Math.max(0, Math.ceil((approvalDeadline - Date.now()) / 1000));
+  const sending = approvalSendingId === id, blocked = approvalBlockedId === id;
+  $('approval-allow').disabled = $('approval-deny').disabled = !ready || sending || blocked || cancelling || remaining === 0;
+  $('approval-status').textContent = !ready ? '连接已失效，请刷新页面；旧确认不能继续使用。'
+    : cancelling ? '正在取消，这次确认已停用。'
+    : sending ? '正在提交决定，请勿重复点击…'
+    : blocked ? '决定的提交状态需要重新确认，请刷新页面查看。'
+    : remaining === 0 ? '确认已过期，正在获取最终状态…'
+    : `请核对完整内容，剩余 ${remaining} 秒。确认仅适用于这次操作。`;
+  if (remaining > 0 && ready) approvalTimer = setTimeout(updateApprovalControls, 1000);
+}
+
+function renderApproval(job) {
+  const approval = busy ? job.pending_approval : null;
+  const id = approval?.approval_id || approval?.id;
+  const previousId = pendingApproval?.approval_id || pendingApproval?.id;
+  pendingApproval = approval || null;
+  $('approval').hidden = !pendingApproval;
+  clearTimeout(approvalTimer);
+  if (!pendingApproval) return;
+  approvalDeadline = Date.now() + Math.max(0, Number(approval.remaining_seconds) || 0) * 1000;
+  if (id !== previousId) {
+    $('approval-error').hidden = true;
+    $('approval-content').textContent = approval.content;
+  }
+  $('approval-action').textContent = `实际操作：${approval.action_summary || approval.name}`;
+  $('approval-details').textContent = `目标：${approval.path} · ${approval.bytes} 字节 · ${['create', 'created'].includes(approval.operation) ? '新建，不覆盖' : approval.operation} · 来源：${sourceLabel(approval.source)} · ${riskLabel(approval.risk)}`;
+  $('approval-intent').textContent = `模型意图：${approval.arguments?.intent || '未提供'}（用于说明目的）`;
+}
+
+function renderArtifacts(job) {
+  const artifacts = job.result?.artifacts || [];
+  $('artifacts').hidden = artifacts.length === 0;
+  $('artifact-list').replaceChildren();
+  if (!artifacts.length) return;
+  $('artifact-note').textContent = job.state === 'cancelled' ? '文件已生成，后续步骤已取消。已创建文件保留。'
+    : job.state === 'completed' ? '以下文件已由本地工具创建，记录来自实际执行回执。'
+    : '文件已生成，后续步骤未完成。已创建文件保留。';
+  for (const artifact of artifacts) {
+    const article = document.createElement('article'), heading = document.createElement('p');
+    const details = document.createElement('details'), summary = document.createElement('summary'), hash = document.createElement('code');
+    article.className = 'artifact';
+    heading.textContent = `${artifact.path} · ${artifact.bytes} 字节 · ${artifact.operation === 'created' ? '已新建' : artifact.operation}`;
+    summary.textContent = '查看文件校验值'; hash.textContent = `SHA-256：${artifact.sha256}`;
+    details.append(summary, hash); article.append(heading, details); $('artifact-list').append(article);
+  }
+}
+
+function connectionExpired(error) {
+  if (!['SESSION_EXPIRED', 'RUN_NOT_FOUND'].includes(error.code)) return false;
+  ready = false; clearTimeout(timer); status('需要刷新页面', 'warning');
+  showError(error, 'connection-error'); updateControls();
+  return true;
+}
+
 function prepareOutput(job) {
   clearTimeout(timer);
   activeId = job.id; renderedEvents = 0; renderedRevision = -1; viewGeneration++;
+  pendingApproval = null; approvalBlockedId = null; cancelling = false; clearTimeout(approvalTimer);
   $('empty').hidden = true; $('output').hidden = false;
-  for (const id of ['answer-block', 'evidence', 'failure', 'form-error', 'scope-summary']) $(id).hidden = true;
+  for (const id of ['answer-block', 'evidence', 'failure', 'form-error', 'scope-summary', 'approval', 'artifacts']) $(id).hidden = true;
   $('events').replaceChildren(); $('citations').replaceChildren(); $('trace-path').textContent = '';
   $('source-line').textContent = `${job.mode === 'directory' ? '目录发现' : job.file || '资料'} · ${job.question}`;
   $('copy').textContent = '复制回答';
@@ -109,21 +192,26 @@ function render(job) {
   for (const event of job.events.slice(renderedEvents)) {
     const li = document.createElement('li'), stamp = document.createElement('time'), label = document.createElement('span');
     stamp.textContent = `${event.elapsed.toFixed(1)}s`;
-    const detail = event.detail;
-    label.textContent = eventLabel(event) + (detail.path ? ` · ${detail.path}` : '') + (detail.code ? ` · ${detail.code}` : '');
+    const detail = event.detail || {};
+    label.textContent = eventLabel(event) + (detail.action_summary ? ` · 实际操作：${detail.action_summary}` : detail.path ? ` · ${detail.path}` : detail.name ? ` · ${detail.name}` : '')
+      + (detail.source ? ` · 来源：${sourceLabel(detail.source)}` : '') + (detail.risk ? ` · ${riskLabel(detail.risk)}` : '')
+      + (detail.intent ? ` · 模型意图：${detail.intent}` : '') + (detail.code ? ` · ${detail.code}` : '');
     li.append(stamp, label); $('events').append(li);
   }
   renderedEvents = job.events.length; $('event-count').textContent = `${renderedEvents} 个步骤`;
   busy = job.result === null;
+  cancelling = Boolean(job.cancelling) || cancelSendingId === job.id;
+  renderApproval(job);
   $('progress').hidden = !busy;
   if (busy) {
-    status(job.cancelling ? '正在取消' : '正在处理', '');
+    status(cancelling ? '正在取消' : pendingApproval ? '等待确认' : '正在处理', pendingApproval ? 'warning' : '');
     const last = job.events.at(-1);
-    $('progress-text').textContent = job.cancelling ? '正在停止后续操作…' : `${eventLabel(last)}…`;
-    $('cancel').disabled = job.cancelling;
+    $('progress-text').textContent = cancelling ? '正在停止后续操作…' : pendingApproval ? '核对下方操作及完整内容后，确认或拒绝。' : `${eventLabel(last)}…`;
+    $('cancel').disabled = cancelling;
   } else {
     clearTimeout(timer);
     const result = job.result, answer = result.answer;
+    renderArtifacts(job);
     $('trace-path').textContent = result.trace_path || '';
     if (result.scope) {
       const scope = result.scope;
@@ -150,7 +238,7 @@ function render(job) {
       }
     } else {
       const cancelled = job.state === 'cancelled';
-      status(cancelled ? '已取消' : job.state === 'unable' ? '无法读取' : '本次未完成', 'warning');
+      status(cancelled ? '已取消' : job.state === 'unable' && !job.output_file ? '无法读取' : '本次未完成', 'warning');
       $('failure').hidden = false; $('failure-title').textContent = cancelled ? '本次运行已取消' : '没有生成有效答案';
       const toolError = [...job.events].reverse().find(e => e.event === 'tool.completed' && e.detail.code)?.detail.code;
       const reason = job.state === 'unable' ? (toolError || result.stop_reason) : result.stop_reason;
@@ -172,9 +260,7 @@ async function poll() {
   } catch (error) {
     if (requestedId !== activeId || generation !== viewGeneration) return;
     showError(error, 'connection-error');
-    if (error.code === 'SESSION_EXPIRED' || error.code === 'RUN_NOT_FOUND') {
-      status('需要刷新页面', 'warning'); ready = false; updateControls();
-    } else timer = setTimeout(poll, 2000);
+    if (!connectionExpired(error)) timer = setTimeout(poll, 2000);
   }
 }
 
@@ -191,7 +277,7 @@ async function initialize() {
     }
     $('sample').hidden = !config.example_file;
     $('sample').onclick = () => {
-      $('discover').checked = false; updateControls();
+      $('discover').checked = false; $('output-file').value = ''; updateControls();
       $('file').value = config.example_file;
       $('question').value = '项目代号、评审人和演示日期分别是什么？引用原文。';
       countQuestion(); $('question').focus();
@@ -200,6 +286,7 @@ async function initialize() {
       busy = true; updateControls();
       const job = await api(`/api/runs/${config.latest_run_id}`);
       $('discover').checked = job.mode === 'directory';
+      $('output-file').value = job.output_file || '';
       $('file').value = job.file || ''; $('question').value = job.question; countQuestion(); prepareOutput(job); render(job);
       if (busy) timer = setTimeout(poll, 450);
     } else updateControls();
@@ -208,6 +295,7 @@ async function initialize() {
 
 $('question').addEventListener('input', countQuestion);
 $('discover').addEventListener('change', updateControls);
+$('output-file').addEventListener('input', updateControls);
 document.querySelectorAll('[data-question]').forEach(button => button.addEventListener('click', () => {
   $('question').value = button.dataset.question; countQuestion(); $('question').focus();
 }));
@@ -217,6 +305,8 @@ $('question-form').addEventListener('submit', async event => {
   try {
     const question = $('question').value.trim();
     const body = $('discover').checked ? {mode: 'directory', question} : {file: $('file').value.trim(), question};
+    const outputFile = $('output-file').value.trim();
+    if (outputFile) body.output_file = outputFile;
     const job = await api('/api/runs', body);
     prepareOutput(job); render(job); timer = setTimeout(poll, 100);
   } catch (error) {
@@ -228,15 +318,44 @@ $('question-form').addEventListener('submit', async event => {
   }
 });
 $('cancel').addEventListener('click', async () => {
+  if (!activeId || !busy || cancelling) return;
   const requestedId = activeId, generation = viewGeneration;
-  $('cancel').disabled = true;
+  cancelSendingId = requestedId; cancelling = true; $('cancel').disabled = true; updateApprovalControls();
   try {
     const job = await api(`/api/runs/${requestedId}/cancel`, {});
+    if (cancelSendingId === requestedId) cancelSendingId = null;
     if (requestedId === activeId && generation === viewGeneration) render(job);
   } catch (error) {
-    if (requestedId === activeId && generation === viewGeneration) { $('cancel').disabled = false; showError(error); }
+    if (cancelSendingId === requestedId) cancelSendingId = null;
+    if (requestedId === activeId && generation === viewGeneration) {
+      cancelling = false; $('cancel').disabled = false; showError(error);
+      if (!connectionExpired(error)) updateApprovalControls();
+    }
   }
 });
+async function decideApproval(decision) {
+  if (!pendingApproval || !ready || cancelling || Date.now() >= approvalDeadline) return;
+  const approvalId = pendingApproval.approval_id || pendingApproval.id;
+  if (approvalSendingId === approvalId || approvalBlockedId === approvalId) return;
+  const requestedId = activeId, generation = viewGeneration;
+  approvalSendingId = approvalId; $('approval-error').hidden = true; updateApprovalControls();
+  try {
+    const job = await api(`/api/runs/${requestedId}/approvals/${approvalId}`, {decision});
+    if (requestedId === activeId && generation === viewGeneration) render(job);
+  } catch (error) {
+    if (requestedId !== activeId || generation !== viewGeneration) return;
+    showError(error, 'approval-error');
+    if (!connectionExpired(error)) {
+      approvalBlockedId = approvalId;
+      clearTimeout(timer); timer = setTimeout(poll, 100);
+    }
+  } finally {
+    if (approvalSendingId === approvalId) approvalSendingId = null;
+    if (requestedId === activeId && generation === viewGeneration) updateApprovalControls();
+  }
+}
+$('approval-allow').addEventListener('click', () => decideApproval('allow'));
+$('approval-deny').addEventListener('click', () => decideApproval('deny'));
 $('copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('answer-text').textContent); $('copy').textContent = '已复制'; }
   catch { $('copy').textContent = '请选中文字复制'; }

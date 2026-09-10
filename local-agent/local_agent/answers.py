@@ -32,7 +32,8 @@ def _check_identifiers(answer: str, evidence: dict[str, dict]) -> None:
 
 
 def validate_answer(text: str, snapshots: dict[str, dict], target_path: str | None,
-                    read_attempted: bool, *, coverage: dict | None = None) -> dict:
+                    read_attempted: bool, *, coverage: dict | None = None,
+                    task_failure: bool = False) -> dict:
     if not isinstance(text, str):
         raise AnswerError("INVALID_ANSWER", "The final answer must be JSON text.")
     try:
@@ -61,9 +62,10 @@ def validate_answer(text: str, snapshots: dict[str, dict], target_path: str | No
                 and not coverage.get('unread_files') and '.' in coverage.get('listed_directories', [])
                 and all(path in evidence for path in coverage.get('discovered_files', [])))
     if status == "unable":
-        if not (coverage.get('attempted') if directory_mode else read_attempted):
+        if not task_failure and not (coverage.get('attempted') if directory_mode else read_attempted):
             raise AnswerError("MISSING_READ", "A file read must be attempted before returning unable.")
-        if (directory_mode and (complete or not coverage.get('had_error'))) or (not directory_mode and has_read):
+        if not task_failure and ((directory_mode and (complete or not coverage.get('had_error')))
+                                 or (not directory_mode and has_read)):
             raise AnswerError("INVALID_ANSWER", "Unable requires an actual tool failure and incomplete evidence.")
         if citations:
             raise AnswerError("INVALID_CITATION", "Unable must not include citations.")

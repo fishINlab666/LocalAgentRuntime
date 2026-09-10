@@ -6,11 +6,14 @@ from pathlib import Path
 import signal
 import threading
 
+from .approvals import RunControl
+from .console_approval import ConsoleApprovalBroker
 from .demo import DemoProvider
 from .directory_evaluation import evaluate_directory
 from .discovery import DirectoryTools
 from .evaluation import evaluate
 from .files import ReadFile
+from .file_tools import adapt_tools
 from .provider import DeepSeekProvider, ProviderError
 from .runtime import RunConfig, Runtime
 from .trace import Trace
@@ -42,6 +45,7 @@ def main() -> int:
             mode.add_argument('--file')
             mode.add_argument('--discover', action='store_true', help='由模型在工作区目录中发现资料')
             command.add_argument('--question', required=True)
+            command.add_argument('--output-file', help='新建报告的工作区相对路径；完整内容须在终端确认后写入')
             command.add_argument('--debug-content', action='store_true', help='在本地日志保留完整模型输入/输出与文件内容')
     args = parser.parse_args()
     if args.command == 'serve':
@@ -56,7 +60,8 @@ def main() -> int:
             print('无法启动页面：请检查工作区、日志目录和端口是否可用；可通过 --port 更换端口。')
             return 2
     cancel = threading.Event()
-    previous = signal.signal(signal.SIGINT, lambda *_: cancel.set())
+    control = RunControl(cancel, run_timeout=120)
+    previous = signal.signal(signal.SIGINT, lambda *_: control.cancel_run())
     try:
         if args.command in {'evaluate', 'evaluate-directory'}:
             evaluator = evaluate_directory if args.command == 'evaluate-directory' else evaluate
@@ -71,8 +76,16 @@ def main() -> int:
             question = ('项目代号、评审人和演示日期分别是什么？请合并资料并引用原文。' if args.discover
                         else '读取并概括演示资料，引用原文。') if simulated else args.question
             trace = Trace(args.log_dir, workspace, debug_content=simulated or args.debug_content)
-            tool = DirectoryTools(workspace) if args.discover else ReadFile(workspace, {target})
-            output = Runtime(provider, tool, trace, RunConfig()).run(question, target, cancel)
+            reader = DirectoryTools(workspace) if args.discover else ReadFile(workspace, {target})
+            output_path = None if simulated else args.output_file
+            tool = adapt_tools(reader, output_path=output_path)
+            approvals = ConsoleApprovalBroker(trace.run_id, publish=trace.emit) if output_path else None
+            try:
+                output = Runtime(provider, tool, trace, RunConfig(),
+                                 approvals=approvals, control=control).run(question, target, cancel)
+            finally:
+                if approvals is not None:
+                    approvals.close()
             if simulated:
                 output['notice'] = '这是测试替身演示，文件读取真实执行；未调用真实模型，不能作为产品验收。'
             code = 0 if output['state'] == 'completed' else 1

@@ -56,14 +56,14 @@ class DirectoryRuntimeTests(unittest.TestCase):
                          {'directory': '.', 'question': '项目代号和评审人是什么？'})
         listed = json.loads(provider.requests[1][-1]['content'])
         self.assertEqual(provider.requests[1][-1]['tool_call_id'], 'list')
-        self.assertEqual([entry['path'] for entry in listed['entries']], ['plan.md', 'review.txt'])
+        self.assertEqual([entry['path'] for entry in listed['data']['entries']], ['plan.md', 'review.txt'])
         self.assertNotIn('杉木', json.dumps(listed, ensure_ascii=False))
         self.assertFalse(listed['scope']['complete'])
         self.assertEqual([m['role'] for m in provider.requests[2]],
                          ['system', 'user', 'assistant', 'tool', 'assistant', 'tool', 'tool'])
         self.assertEqual([m['tool_call_id'] for m in provider.requests[2][-2:]], ['read-0', 'read-1'])
         returned = [json.loads(m['content']) for m in provider.requests[2][-2:]]
-        self.assertEqual([m['content'] for m in returned], [{'1': '项目代号：杉木-19'}, {'1': '评审人：顾宁'}])
+        self.assertEqual([m['data']['content'] for m in returned], [{'1': '项目代号：杉木-19'}, {'1': '评审人：顾宁'}])
         self.assertTrue(returned[-1]['scope']['complete'])
         self.assertEqual([c['quote'] for c in result['answer']['citations']], ['项目代号：杉木-19', '评审人：顾宁'])
         requested = [e['data'] for e in events if e['event'] == 'model.requested']

@@ -1,8 +1,9 @@
 """Per-run discovery authority, recorded only after a tool result is accepted."""
 
+import copy
 from pathlib import Path
 
-from .files import ListFiles, ReadFile, _path_parts, _valid_arguments
+from .files import ListFiles, ReadFile, _path_parts, _valid_arguments, _error as file_error
 
 
 READ_FILE_SCHEMA = {"type": "function", "function": {
@@ -44,8 +45,25 @@ class DirectoryTools:
         self._ever_read: set[str] = set()
         self._attempted = False
         self._had_error = False
+        self._result_proofs = {}
+
+    def clear_result_proof(self, name: str) -> None:
+        self._result_proofs.pop(name, None)
+
+    def take_result_proof(self, name: str, arguments: dict) -> dict | None:
+        proof = self._result_proofs.pop(name, None)
+        if proof is None or proof[0] != arguments:
+            return None
+        return proof[1]
+
+    def _remember_result(self, name: str, arguments: dict, result: dict,
+                         proof: dict | None) -> dict:
+        if proof == result:
+            self._result_proofs[name] = (copy.deepcopy(arguments), copy.deepcopy(result))
+        return result
 
     def execute(self, name: str, arguments: dict) -> dict:
+        self._result_proofs.pop(name, None)
         if name not in {"list_files", "read_file"}:
             return _error("TOOL_NOT_FOUND")
         if not _valid_arguments(arguments):
@@ -57,18 +75,26 @@ class DirectoryTools:
         if path not in discovered:
             return _error("PATH_NOT_DISCOVERED")
         if name == "list_files":
-            return self._lister.execute(arguments)
+            self._lister.clear_result_proof()
+            result = self._lister.execute(arguments)
+            return self._remember_result(name, arguments, result,
+                                         self._lister.take_result_proof(arguments))
         if path not in self._ever_read and len(self._ever_read) >= self.max_files:
             return _error("FILE_COUNT_LIMIT")
         try:
             reader = ReadFile(self.workspace, self._files)
-        except (OSError, RuntimeError):
-            return _error("PATH_DENIED")
+        except OSError:
+            return file_error("OS_PERMISSION_DENIED")
+        except RuntimeError:
+            return file_error("WORKSPACE_CHANGED")
         # A new allowlist must not re-authorize a replacement of the pinned root.
         if (reader.workspace != self.workspace
                 or reader.workspace_identity != self.workspace_identity):
-            return _error("PATH_DENIED")
-        return reader.execute(arguments)
+            return file_error("WORKSPACE_CHANGED")
+        reader.clear_result_proof()
+        result = reader.execute(arguments)
+        return self._remember_result(name, arguments, result,
+                                     reader.take_result_proof(arguments))
 
     def record(self, name: str, arguments: dict | None, result: dict) -> None:
         self._attempted = True

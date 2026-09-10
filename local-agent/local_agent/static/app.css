@@ -558,6 +558,55 @@ input:disabled,textarea:disabled{
   white-space:pre-wrap;
   overflow-wrap:anywhere
 }
+.approval,.artifacts{
+  border:1px solid var(--line);
+  border-radius:8px;
+  padding:20px;
+  margin-top:24px
+}
+.approval{
+  background:#faf5e7;
+  border-color:#d4c69f
+}
+.approval-action{
+  margin-top:12px;
+  font-size:14px;
+  line-height:1.8;
+  overflow-wrap:anywhere
+}
+.approval .actions{
+  margin-top:16px
+}
+.approval-preview{
+  margin-top:16px
+}
+.approval-preview summary,.artifact summary{
+  cursor:pointer;
+  font-size:12px;
+  line-height:1.7;
+  padding:8px 0
+}
+.approval-preview pre{
+  max-height:360px;
+  overflow:auto;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  font:13px/1.8 ui-monospace,SFMono-Regular,Consolas,monospace;
+  background:var(--paper);
+  border:1px solid var(--line);
+  border-radius:6px;
+  padding:14px;
+  margin:0
+}
+.artifact{
+  margin-top:15px;
+  font-size:13px;
+  line-height:1.8;
+  overflow-wrap:anywhere
+}
+.artifact code{
+  font-size:11px
+}
 footer{
   display:flex;
   justify-content:space-between;

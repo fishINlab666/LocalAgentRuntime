@@ -1,6 +1,7 @@
 """Bounded directory listings and allowlisted UTF-8 reads anchored to a workspace."""
 
 import errno
+import copy
 import hashlib
 import os
 from pathlib import Path
@@ -19,7 +20,13 @@ _MESSAGES = {
     "DIRECTORY_TOO_LARGE": "The requested directory exceeds the listing limit.",
     "DIRECTORY_CHANGED": "The directory changed while it was being listed.",
     "LIST_ERROR": "The directory could not be listed.",
+    "OS_PERMISSION_DENIED": "The operating system denied access; check file permissions.",
+    "WORKSPACE_CHANGED": "The workspace root changed; start a new task with the intended root.",
 }
+
+
+class WorkspaceChanged(PermissionError):
+    pass
 
 
 def _error(code: str) -> dict:
@@ -64,7 +71,7 @@ def _open_directory(workspace: Path, parts: list[str],
         if workspace_identity is not None:
             info = os.fstat(directory_fd)
             if (info.st_dev, info.st_ino) != workspace_identity:
-                raise PermissionError(errno.EACCES, "Workspace root changed.")
+                raise WorkspaceChanged(errno.EACCES, "Workspace root changed.")
         for part in parts:
             child_fd = os.open(part, flags, dir_fd=directory_fd)
             os.close(directory_fd)
@@ -88,8 +95,19 @@ class ListFiles:
     def __init__(self, workspace: Path):
         self.workspace = Path(workspace).resolve()
         self.workspace_identity = _workspace_identity(self.workspace)
+        self._result_proof = None
+
+    def clear_result_proof(self) -> None:
+        self._result_proof = None
+
+    def take_result_proof(self, arguments: dict) -> dict | None:
+        proof, self._result_proof = self._result_proof, None
+        if proof is None or proof[0] != arguments:
+            return None
+        return proof[1]
 
     def execute(self, arguments: dict) -> dict:
+        self._result_proof = None
         if not _valid_arguments(arguments):
             return _error("INVALID_ARGUMENT")
         path = arguments["path"]
@@ -122,13 +140,19 @@ class ListFiles:
             finally:
                 os.close(directory_fd)
         except OSError as exc:
+            if isinstance(exc, WorkspaceChanged):
+                return _error("WORKSPACE_CHANGED")
+            if exc.errno in {errno.EACCES, errno.EPERM}:
+                return _error("OS_PERMISSION_DENIED")
             if exc.errno == errno.ENOENT:
                 return _error("DIRECTORY_NOT_FOUND")
             if exc.errno in {errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM}:
                 return _error("PATH_DENIED")
             return _error("LIST_ERROR")
-        return {"ok": True, "path": path,
-                "entries": sorted(entries, key=lambda entry: entry["path"]), "complete": True}
+        result = {"ok": True, "path": path,
+                  "entries": sorted(entries, key=lambda entry: entry["path"]), "complete": True}
+        self._result_proof = (copy.deepcopy(arguments), copy.deepcopy(result))
+        return result
 
 
 class ReadFile:
@@ -139,6 +163,16 @@ class ReadFile:
         self.workspace_identity = _workspace_identity(self.workspace)
         self.allowed_paths = frozenset(allowed_paths)
         self.max_bytes = max_bytes
+        self._result_proof = None
+
+    def clear_result_proof(self) -> None:
+        self._result_proof = None
+
+    def take_result_proof(self, arguments: dict) -> dict | None:
+        proof, self._result_proof = self._result_proof, None
+        if proof is None or proof[0] != arguments:
+            return None
+        return proof[1]
 
     def _open_file(self, parts: list[str]) -> int:
         directory_fd = _open_directory(self.workspace, parts[:-1], self.workspace_identity)
@@ -150,6 +184,7 @@ class ReadFile:
             os.close(directory_fd)
 
     def execute(self, arguments: dict) -> dict:
+        self._result_proof = None
         if not _valid_arguments(arguments):
             return _error("INVALID_ARGUMENT")
         path = arguments["path"]
@@ -188,6 +223,10 @@ class ReadFile:
             finally:
                 os.close(file_fd)
         except OSError as exc:
+            if isinstance(exc, WorkspaceChanged):
+                return _error("WORKSPACE_CHANGED")
+            if exc.errno in {errno.EACCES, errno.EPERM}:
+                return _error("OS_PERMISSION_DENIED")
             if exc.errno == errno.ENOENT:
                 return _error("FILE_NOT_FOUND")
             if exc.errno in {errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM}:
@@ -201,7 +240,7 @@ class ReadFile:
         if any((ord(char) < 32 and char not in "\t\r\n") or ord(char) == 127 for char in content):
             return _error("UNSUPPORTED_FILE")
         content = content.replace("\r\n", "\n").replace("\r", "\n")
-        return {
+        result = {
             "ok": True,
             "path": path,
             "content": content,
@@ -209,3 +248,5 @@ class ReadFile:
             "bytes": len(raw),
             "sha256": hashlib.sha256(raw).hexdigest(),
         }
+        self._result_proof = (copy.deepcopy(arguments), copy.deepcopy(result))
+        return result

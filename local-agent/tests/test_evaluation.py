@@ -18,11 +18,11 @@ class EvaluationProvider:
             self.initial = json.dumps(messages, ensure_ascii=False)
             return ModelReply({'role': 'assistant', 'content': None, 'tool_calls': [{
                 'id': 'read1', 'type': 'function', 'function': {'name': 'read_file',
-                'arguments': json.dumps({'path': task['file']})}}]})
+                'arguments': json.dumps({'path': task['file'], 'intent': '核对测试资料'})}}]})
         observed = json.loads(messages[-1]['content'])
         status, answer, citations = 'unable', '文件无法读取。', []
         if observed['ok']:
-            content = observed['content']
+            content = observed['data']['content']
             lines = list(content.values()) if isinstance(content, dict) else content.splitlines()
             content = '\n'.join(lines)
             assert content not in self.initial

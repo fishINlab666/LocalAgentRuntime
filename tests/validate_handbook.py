@@ -9,12 +9,13 @@ import sys
 from collections import Counter
 from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "Local-Agent-Runtime-小白入门与开发防跑偏手册.html"
 SOURCES = {
-    ROOT / "个人本地智能助手-Agent项目设计方案.md": (
+    ROOT / "0-个人本地智能助手-Agent项目设计方案.md": (
         "3c1c322affc8056295a6810f4f6db6c6c0a208a9b9ea163564856e105e2f3779"
     ),
     ROOT / "meeting/0829/会议录制：agent-meeting01.md": (
@@ -116,6 +117,7 @@ class HandbookParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.ids: list[str] = []
         self.internal_hrefs: list[str] = []
+        self.local_hrefs: list[str] = []
         self.coverage: set[str] = set()
         self.external_dependencies: list[str] = []
         self.tags: Counter[str] = Counter()
@@ -134,6 +136,8 @@ class HandbookParser(HTMLParser):
         href = attr.get("href", "")
         if href.startswith("#") and len(href) > 1:
             self.internal_hrefs.append(href[1:])
+        elif tag == "a" and href and not urlsplit(href).scheme:
+            self.local_hrefs.append(href)
         if tag == "a" and "skip-link" in attr.get("class", "").split():
             self.has_skip_link = href == "#main-content"
         coverage = attr.get("data-coverage", "")
@@ -223,6 +227,11 @@ def validate() -> list[str]:
     check(parser.has_reduced_motion, "缺少 prefers-reduced-motion 样式", errors)
     check(not duplicate_ids, f"存在重复 id：{duplicate_ids}", errors)
     check(not missing_anchor_targets, f"内部链接缺少目标：{missing_anchor_targets}", errors)
+    missing_local_links = [
+        href for href in parser.local_hrefs
+        if not (ROOT / unquote(urlsplit(href).path)).is_file()
+    ]
+    check(not missing_local_links, f"本地文件链接缺少目标：{missing_local_links}", errors)
     check(not missing_ids, f"缺少必需 id：{missing_ids}", errors)
     check(not missing_coverage, f"缺少覆盖键：{missing_coverage}", errors)
     check(not missing_phrases, f"缺少关键内容：{missing_phrases}", errors)
@@ -243,6 +252,27 @@ def validate() -> list[str]:
     check("data-source=\"会议 01\"" in raw, "缺少会议 01 来源标记", errors)
     check("data-source=\"会议 02\"" in raw, "缺少会议 02 来源标记", errors)
     check("data-source=\"教学解释\"" in raw, "缺少教学解释来源标记", errors)
+
+    for chapter_id in (
+        "session-memory", "context-compression", "long-term-memory",
+        "tool-runtime", "completion-evaluation", "provider-models", "extensions",
+    ):
+        chapter = re.search(
+            rf'<section id="{chapter_id}"[^>]*>(.*?)</section>', raw, re.S
+        )
+        check(chapter is not None, f"缺少重编章节：{chapter_id}", errors)
+        if chapter is None:
+            continue
+        body = chapter.group(1)
+        for marker in (
+            'class="lesson-nav"', 'class="step-list"', 'class="checkpoint"',
+            'class="self-check"', 'class="answer-key"', 'class="chapter-pager"',
+            'class="source-note"', 'data-source="教学解释"',
+        ):
+            check(marker in body, f"{chapter_id} 缺少教学结构：{marker}", errors)
+
+    for expected in SOURCES.values():
+        check(expected in raw, "来源快照未保留完整 SHA-256", errors)
 
     return errors
 

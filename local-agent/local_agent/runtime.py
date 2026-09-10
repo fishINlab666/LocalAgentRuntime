@@ -9,14 +9,13 @@ import threading
 import time
 from typing import Callable
 
-from .answers import AnswerError, validate_answer
-from .discovery import DirectoryTools, READ_FILE_SCHEMA
+from .answers import AnswerError
+from .approvals import RunControl, RunStopped
+from .tool_runtime import parse_arguments, tool_error
+from .file_tools import adapt_tools, model_request, TOOLS
 from .prompts import SYSTEM, DIRECTORY_SYSTEM
 from .provider import ModelReply, Provider, ProviderError
 from .trace import Trace
-
-
-TOOLS = [READ_FILE_SCHEMA]
 
 
 JSON_REPAIR = '''上一条最终答案不是有效的严格 JSON。请立即重新输出一个 JSON 对象，不要调用工具，不要加解释或代码围栏。
@@ -46,9 +45,7 @@ class RunConfig:
                 raise ValueError('Count limits must be integers')
 
 
-class StopRun(Exception):
-    def __init__(self, code: str):
-        self.code = code
+StopRun = RunStopped
 
 
 def check_stop(cancel: threading.Event, deadline: float):
@@ -93,46 +90,12 @@ def bounded_call(fn: Callable, timeout: float, cancel: threading.Event,
         return value
 
 
-def tool_error(code: str) -> dict:
-    return {'ok': False, 'error': {'code': code, 'message': code}}
-
-
-def parse_arguments(text: str) -> dict:
-    def unique(pairs):
-        obj = {}
-        for key, value in pairs:
-            if key in obj:
-                raise ValueError('duplicate field')
-            obj[key] = value
-        return obj
-    result = json.loads(text, object_pairs_hook=unique,
-                        parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
-    if not isinstance(result, dict):
-        raise ValueError('not an object')
-    return result
-
-
-def model_request(messages: list[dict], max_input_bytes: int, tools: list[dict] | None = None) -> dict:
-    request = {'messages': copy.deepcopy(messages), 'tools': TOOLS if tools is None else tools}
-    for message in request['messages']:
-        if message['role'] != 'tool':
-            continue
-        result = json.loads(message['content'])
-        if result.get('ok') and isinstance(result.get('content'), str):
-            # Only the model view gets line anchors; evidence and history stay unchanged.
-            result['content'] = {str(number): line
-                                 for number, line in enumerate(result['content'].splitlines(), 1)}
-            message['content'] = json.dumps(result, ensure_ascii=False)
-    if len(json.dumps(request, ensure_ascii=False).encode('utf-8')) > max_input_bytes:
-        # Many short lines can cost more to number than to send as complete raw text.
-        request['messages'] = messages
-    return request
-
-
 class Runtime:
-    def __init__(self, provider: Provider, tool, trace: Trace, config: RunConfig | None = None):
+    def __init__(self, provider: Provider, tool, trace: Trace, config: RunConfig | None = None,
+                 *, approvals=None, control=None):
         self.provider, self.tool, self.trace = provider, tool, trace
         self.config = config or RunConfig()
+        self.approvals, self.control = approvals, control
         self._used = False
 
     def run(self, question: str, target_path: str | None, cancel: threading.Event | None = None) -> dict:
@@ -141,24 +104,21 @@ class Runtime:
         self._used = True
         cancel = cancel or threading.Event()
         started = time.monotonic()
-        deadline = started + self.config.run_timeout
-        calls, seen_ids, snapshots = 0, set(), {}
+        control = self.control or RunControl(cancel, self.config.run_timeout, clock=time.monotonic)
+        cancel = control.cancel
+        finalize_only, final_reason = False, None
+        calls, seen_ids = 0, set()
         answer_repairs = 0
-        read_attempted = False
-        directory_mode = isinstance(self.tool, DirectoryTools)
-        tools = self.tool.schemas if directory_mode else TOOLS
-        tool_names = {schema['function']['name'] for schema in tools}
-        task = {'directory': '.', 'question': question} if directory_mode else {'file': target_path, 'question': question}
-        messages = [{'role': 'system', 'content': DIRECTORY_SYSTEM if directory_mode else SYSTEM},
-                    {'role': 'user', 'content': json.dumps(task, ensure_ascii=False)}]
+        engine = adapt_tools(self.tool)
+        tools = engine.registry.schemas()
 
         def finish(state, reason, answer=None):
             result = {'run_id': self.trace.run_id, 'state': state, 'stop_reason': reason,
                       'model_calls': calls, 'answer': answer,
                       'elapsed_seconds': round(time.monotonic() - started, 4),
                       'provider': self.provider.metadata, 'trace_path': str(self.trace.path)}
-            if directory_mode:
-                result['scope'] = self.tool.coverage()
+            with control.lock:
+                result.update(engine.policy.result_fields())
             try:
                 self.trace.emit('run.ended', result)
             except OSError:
@@ -168,12 +128,14 @@ class Runtime:
         try:
             self.trace.emit('run.started', {'provider': self.provider.metadata, 'config': asdict(self.config),
                                            'path': target_path, 'question': question})
-            valid_target = target_path is None if directory_mode else isinstance(target_path, str) and bool(target_path)
-            if not isinstance(question, str) or not question.strip() or not valid_target:
+            try:
+                messages = engine.policy.initial_messages(question, target_path)
+            except ValueError:
                 return finish('failed', 'INVALID_TASK')
             while calls < self.config.max_steps:
-                check_stop(cancel, deadline)
-                request = model_request(messages, self.config.max_input_bytes, tools)
+                control.check()
+                deadline = time.monotonic() + control.remaining()
+                request = engine.policy.model_request(messages, self.config.max_input_bytes, tools)
                 if len(json.dumps(request, ensure_ascii=False).encode('utf-8')) > self.config.max_input_bytes:
                     return finish('failed', 'CONTEXT_LIMIT')
                 calls += 1
@@ -193,10 +155,9 @@ class Runtime:
                 tool_calls = message.get('tool_calls')
                 if not tool_calls:
                     try:
-                        answer = validate_answer(message.get('content'), snapshots, target_path, read_attempted,
-                                                 coverage=self.tool.coverage() if directory_mode else None)
+                        answer = engine.policy.validate(message.get('content'))
                     except AnswerError as error:
-                        if error.repairable and answer_repairs == 0 and calls < self.config.max_steps:
+                        if not finalize_only and error.repairable and answer_repairs == 0 and calls < self.config.max_steps:
                             answer_repairs += 1
                             self.trace.emit('answer.rejected', {
                                 'code': error.code, 'repair_attempt': answer_repairs})
@@ -205,69 +166,51 @@ class Runtime:
                             messages.append({'role': 'user', 'content': repair})
                             continue
                         return finish('validation_failed', error.code)
-                    check_stop(cancel, deadline)
+                    control.check()
                     return finish('unable' if answer['status'] == 'unable' else 'completed',
-                                  'FILE_UNAVAILABLE' if answer['status'] == 'unable' else 'ANSWER_VALIDATED', answer)
+                                  (final_reason or engine.policy.failure_reason() or 'FILE_UNAVAILABLE')
+                                  if answer['status'] == 'unable' else 'ANSWER_VALIDATED', answer)
                 if not self._valid_calls(tool_calls, seen_ids):
                     return finish('failed', 'INVALID_MODEL_RESPONSE')
                 messages.append(copy.deepcopy(message))
+                stopped = finalize_only
+                decision = 'stop' if finalize_only else 'continue'
+                stop_code = final_reason
                 for index, call in enumerate(tool_calls):
-                    check_stop(cancel, deadline)
                     seen_ids.add(call['id'])
-                    function = call['function']
-                    self.trace.emit('tool.requested', {'id': call['id'], **function})
-                    try:
-                        arguments = parse_arguments(function['arguments'])
-                    except (ValueError, TypeError, RecursionError):
-                        arguments = None
-                    if index >= self.config.max_tool_calls:
-                        result = tool_error('TOOL_CALL_LIMIT')
-                    elif function['name'] not in tool_names:
-                        result = tool_error('TOOL_NOT_FOUND')
-                    elif arguments is None:
-                        result = tool_error('INVALID_ARGUMENT')
+                    if stopped:
+                        self.trace.emit('tool.requested', {'id': call['id'], **call['function']})
+                        result = engine.skipped()
                     else:
-                        if arguments.get('path') == target_path:
-                            read_attempted = True
-                        self.trace.emit('tool.started', {'id': call['id'], 'name': function['name'], 'path': arguments.get('path')})
-                        tool_start = time.monotonic()
-                        try:
-                            def execute(args=copy.deepcopy(arguments), name=function['name']):
-                                return self.tool.execute(name, args) if directory_mode else self.tool.execute(args)
-                            result = bounded_call(execute, self.config.tool_timeout,
-                                                  cancel, deadline, 'TOOL_TIMEOUT')
-                        except StopRun as error:
-                            if error.code == 'TOOL_TIMEOUT':
-                                self.trace.emit('tool.completed', {'id': call['id'],
-                                    'result': tool_error(error.code),
-                                    'elapsed_seconds': time.monotonic() - tool_start})
-                            raise
-                        except Exception:
-                            result = tool_error('READ_ERROR')
-                        self.trace.emit('tool.finished', {'id': call['id'], 'elapsed_seconds': time.monotonic() - tool_start})
-                    if directory_mode:
-                        # Only the accepted result changes permissions; late workers cannot publish state.
-                        self.tool.record(function['name'], arguments, result)
-                        path = arguments.get('path') if arguments else None
-                        if function['name'] == 'read_file' and isinstance(path, str):
-                            if result.get('ok') and result.get('path') == path:
-                                snapshots[path] = copy.deepcopy(result)
-                            else:
-                                snapshots.pop(path, None)
-                        result = {**result, 'scope': self.tool.coverage()}
-                    elif result.get('ok') and result.get('path') == target_path:
-                        snapshots[target_path] = copy.deepcopy(result)
+                        outcome = engine.invoke(call, budget_ok=index < self.config.max_tool_calls,
+                            execute_bounded=lambda fn, limit: bounded_call(fn,
+                                min(self.config.tool_timeout, limit), cancel,
+                                time.monotonic() + control.remaining(), 'TOOL_TIMEOUT'),
+                            emit=self.trace.emit, control=control, approvals=self.approvals,
+                            tool_timeout=self.config.tool_timeout)
+                        result, decision = outcome.result, outcome.decision
+                        if decision != 'continue':
+                            stopped = True
+                            stop_code = outcome.reason or result['error']['code']
                     messages.append({'role': 'tool', 'tool_call_id': call['id'],
                                      'content': json.dumps(result, ensure_ascii=False)})
                     self.trace.emit('tool.completed', {'id': call['id'], 'result': result})
+                if decision == 'stop':
+                    state = 'cancelled' if stop_code == 'CANCELLED' else (
+                        'timed_out' if stop_code in {'RUN_TIMEOUT', 'TOOL_TIMEOUT', 'APPROVAL_EXPIRED'}
+                        else 'unable' if stop_code == 'USER_REJECTED' else 'failed')
+                    return finish(state, stop_code)
+                if decision == 'finalize_only':
+                    finalize_only, final_reason = True, stop_code
+            if finalize_only:
+                return finish('unable', final_reason)
             return finish('max_steps', 'MAX_STEPS')
         except StopRun as error:
             return finish('cancelled' if error.code == 'CANCELLED' else 'timed_out', error.code)
         except ProviderError as error:
             return finish('timed_out' if error.code == 'MODEL_TIMEOUT' else 'failed', error.code)
         except OSError:
-            return {'run_id': self.trace.run_id, 'state': 'failed', 'stop_reason': 'TRACE_ERROR',
-                    'model_calls': calls, 'answer': None, 'trace_path': str(self.trace.path)}
+            return finish('failed', 'TRACE_ERROR')
         except Exception:
             return finish('failed', 'INTERNAL_ERROR')
 

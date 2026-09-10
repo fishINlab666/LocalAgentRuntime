@@ -2,11 +2,19 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const path = require("node:path");
+const fs = require("node:fs");
+const { pathToFileURL } = require("node:url");
 const { chromium } = require("playwright");
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const FILE_NAME = "Local-Agent-Runtime-小白入门与开发防跑偏手册.html";
-const PAGE_URL = `http://127.0.0.1:8765/${encodeURIComponent(FILE_NAME)}`;
+const PAGE_URL = pathToFileURL(path.resolve(__dirname, "..", FILE_NAME)).href;
+const ARTIFACTS = path.resolve(__dirname, "..", "artifacts", "handbook-deep-2026-09-10");
+const DEEP_LESSONS = [
+  "session-memory", "context-compression", "long-term-memory", "tool-runtime",
+  "completion-evaluation", "provider-models", "extensions",
+];
 const VIEWPORTS = [
   { name: "desktop-1440", width: 1440, height: 1000 },
   { name: "desktop-1024", width: 1024, height: 900 },
@@ -25,7 +33,49 @@ async function assertNoHorizontalOverflow(page, label) {
   );
 }
 
+async function checkDeepLessons(page, label) {
+  for (const id of DEEP_LESSONS) {
+    const chapter = page.locator(`#${id}`);
+    const answer = chapter.locator(":scope > .answer-key");
+    const questions = chapter.locator(":scope > .self-check > ol > li");
+    assert.equal(await answer.count(), 1, `${label} ${id}: answer group`);
+    assert.equal(await answer.getAttribute("open"), null, `${label} ${id}: initially folded`);
+    assert.equal(await answer.locator("ol > li").count(), await questions.count(), `${label} ${id}: answer per question`);
+    for (const item of await answer.locator("ol > li").all()) {
+      assert.ok((await item.textContent()).trim().length > 30, `${label} ${id}: explanation, not just a verdict`);
+    }
+    const firstLink = chapter.locator(".lesson-nav a").first();
+    const href = await firstLink.getAttribute("href");
+    await firstLink.click();
+    await page.waitForFunction((target) => {
+      const top = document.querySelector(target).getBoundingClientRect().top;
+      return location.hash === target && top > 60 && top < 200;
+    }, href);
+    await assertNoHorizontalOverflow(page, `${label} ${id}`);
+    for (const example of await chapter.locator("pre.lesson-example").all()) {
+      assert.ok(await example.evaluate((node) => node.scrollWidth <= node.clientWidth + 1), `${label} ${id}: teaching examples wrap without sideways reading`);
+    }
+    if (id === "session-memory") {
+      await page.screenshot({ path: path.join(ARTIFACTS, `${label}-session-story.png`) });
+    }
+    await answer.locator("summary").click();
+    assert.ok(await answer.evaluate((node) => node.open), `${label} ${id}: answers open`);
+    if (id === "context-compression") {
+      await page.screenshot({ path: path.join(ARTIFACTS, `${label}-compression-answers.png`) });
+    }
+    await assertNoHorizontalOverflow(page, `${label} ${id} expanded`);
+    await answer.locator("summary").click();
+  }
+  await page.locator('#context-compression .lesson-nav a[href="#compression-good-summary"]').click();
+  await page.waitForFunction(() => {
+    const top = document.getElementById("compression-good-summary").getBoundingClientRect().top;
+    return top > 60 && top < 200;
+  });
+  await page.screenshot({ path: path.join(ARTIFACTS, `${label}-compression-example.png`) });
+}
+
 async function run() {
+  fs.mkdirSync(ARTIFACTS, { recursive: true });
   const browser = await chromium.launch({
     headless: true,
     executablePath: CHROME,
@@ -128,7 +178,30 @@ async function run() {
       if (viewport.name === "desktop-1440") {
         await page.screenshot({ path: "/tmp/local-agent-handbook-1440.png", fullPage: false });
 
+        await page.screenshot({ path: path.join(ARTIFACTS, "desktop-cover.png") });
+        for (const id of ["project", "model-to-agent", "context", "tool", "agent-loop", "runtime", "first-slice", "guardrails"]) {
+          const answer = page.locator(`#${id} > .answer-key`);
+          assert.equal(await answer.count(), 1, `${id}: has one answer group`);
+          assert.equal(await answer.getAttribute("open"), null, `${id}: answers start collapsed`);
+          assert.equal(await answer.locator("ol > li").count(), await page.locator(`#${id} > .self-check > ol > li`).count(), `${id}: one explanation per question`);
+        }
+        await page.locator('.toc a[href="#runtime"]').click();
+        await page.locator('#runtime .answer-key summary').click();
+        assert.ok(await page.locator('#runtime .answer-key').evaluate((node) => node.open));
+        await page.screenshot({ path: path.join(ARTIFACTS, "desktop-runtime-answer.png") });
+        await page.locator('#runtime .answer-key summary').click();
+        await page.locator('#runtime .lesson-nav a[href="#runtime-story"]').click();
+        await page.waitForFunction(() => window.location.hash === "#runtime-story");
+        await page.waitForFunction(() => Math.abs(document.getElementById("runtime-story").getBoundingClientRect().top - 120) < 40);
+        await page.screenshot({ path: path.join(ARTIFACTS, "desktop-runtime-story.png") });
+
+        await checkDeepLessons(page, "desktop");
         const search = page.locator("#handbook-search");
+        await search.fill("RunContext");
+        await page.waitForFunction(() => document.getElementById("first-slice").classList.contains("search-hidden"));
+        await page.locator('#runtime .chapter-pager a[href="#first-slice"]').click();
+        assert.equal(await page.locator('#first-slice').evaluate((node) => node.classList.contains('search-hidden')), false, "cross-chapter link reveals a search-hidden target");
+        assert.equal(await search.inputValue(), "", "cross-chapter recovery clears filtering");
         await search.fill("Cron");
         await page.waitForFunction(() =>
           /找到 \d+ 个相关章节/.test(document.getElementById("search-status").textContent || "")
@@ -143,6 +216,15 @@ async function run() {
           hidden: document.querySelectorAll("[data-searchable].search-hidden").length,
         }));
         assert.ok(searchState.visible > 0 && searchState.hidden > 0, "search filters sections");
+
+        await page.evaluate(() => window.dispatchEvent(new Event("beforeprint")));
+        await page.emulateMedia({ media: "print" });
+        assert.ok(await page.locator("#tool").isVisible(), "print retains chapters hidden by search");
+        assert.equal(await page.locator("details:not([open])").count(), 0, "printing expands explanations");
+        await page.emulateMedia({ media: "screen" });
+        await page.evaluate(() => window.dispatchEvent(new Event("afterprint")));
+        assert.equal(await page.locator(".answer-key[open]").count(), 0, "print restores answer fold state");
+        assert.equal(await search.inputValue(), "Cron", "print preserves search query");
 
         await search.fill("完全不存在的词XYZ987");
         await page.waitForFunction(() =>
@@ -193,6 +275,23 @@ async function run() {
 
       if (viewport.name === "mobile-375") {
         await page.screenshot({ path: "/tmp/local-agent-handbook-375.png", fullPage: false });
+        await page.locator("#mobile-nav-toggle").click();
+        await page.waitForFunction(() => document.activeElement.id === "mobile-nav-close");
+        await page.keyboard.press("Shift+Tab");
+        assert.ok(await page.evaluate(() => document.getElementById("sidebar").contains(document.activeElement)), "mobile focus stays in drawer");
+        await page.keyboard.press("Tab");
+        assert.equal(await page.evaluate(() => document.activeElement.id), "mobile-nav-close", "mobile focus cycles to first control");
+        await page.locator('.toc a[href="#runtime"]').click();
+        await page.locator('#runtime .lesson-nav a[href="#runtime-story"]').click();
+        await page.waitForFunction(() => {
+          const top = document.getElementById("runtime-story").getBoundingClientRect().top;
+          return top > 60 && top < 200;
+        });
+        await assertNoHorizontalOverflow(page, "mobile runtime story");
+        await page.screenshot({ path: path.join(ARTIFACTS, "mobile-runtime-story.png") });
+        await page.locator('#runtime .answer-key summary').click();
+        await page.screenshot({ path: path.join(ARTIFACTS, "mobile-runtime-answer.png") });
+        await checkDeepLessons(page, "mobile");
       }
 
       await context.close();
@@ -211,9 +310,18 @@ async function run() {
     );
     await reducedContext.close();
 
+    const offlineContext = await browser.newContext({ viewport: { width: 375, height: 812 }, javaScriptEnabled: false });
+    const offlinePage = await offlineContext.newPage();
+    await offlinePage.goto(PAGE_URL);
+    await assertNoHorizontalOverflow(offlinePage, "no-script mobile");
+    assert.ok(await offlinePage.locator('.toc a[href="#runtime"]').isVisible(), "mobile navigation works without JavaScript");
+    await offlinePage.locator('.toc a[href="#runtime"]').click();
+    assert.equal(new URL(offlinePage.url()).hash, "#runtime");
+    await offlineContext.close();
+
     assert.deepEqual(consoleErrors, [], `browser console errors:\n${consoleErrors.join("\n")}`);
     console.log("PASS: browser handbook checks succeeded");
-    console.log("screenshots: /tmp/local-agent-handbook-1440.png, /tmp/local-agent-handbook-375.png");
+    console.log(`screenshots: ${ARTIFACTS}`);
   } finally {
     await browser.close();
   }

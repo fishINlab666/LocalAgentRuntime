@@ -9,11 +9,17 @@ import time
 from local_agent.demo import DemoProvider
 from local_agent.provider import ModelReply, ProviderError
 from local_agent.web import serve
+from report_provider import ReportProvider
 
 
 class BrowserProvider(DemoProvider):
     def complete(self, messages, tools, timeout):
-        question = json.loads(messages[1]['content'])['question']
+        task = json.loads(messages[1]['content'])
+        question = task['question']
+        if task.get('output_file'):
+            if not hasattr(self, 'report_provider'):
+                self.report_provider = ReportProvider()
+            return self.report_provider.complete(messages, tools, timeout)
         if '慢速' in question:
             time.sleep(1.5)
         if '网络失败' in question:
@@ -28,7 +34,7 @@ class BrowserProvider(DemoProvider):
                 raise ProviderError('AUTH_ERROR')
             return ModelReply({'role': 'assistant', 'content': None, 'tool_calls': [{
                 'id': 'wrong_file', 'type': 'function', 'function': {'name': 'read_file',
-                    'arguments': json.dumps({'path': 'other.md'})}}]})
+                    'arguments': json.dumps({'path': 'other.md', 'intent': '验证读取失败'})}}]})
         if messages[-1]['role'] == 'tool' and '预算' in question:
             return ModelReply({'role': 'assistant', 'content': json.dumps({
                 'status': 'not_found', 'answer': '文件未说明预算。', 'citations': []})})

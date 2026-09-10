@@ -149,7 +149,7 @@ class ListFilesTests(WorkspaceTests):
         self.write("workspace/a.md", "private replacement")
         for tool, path in [(lister, "."), (reader, "a.md")]:
             result = tool.execute({"path": path})
-            self.assert_error(result, "PATH_DENIED")
+            self.assert_error(result, "WORKSPACE_CHANGED")
             self.assertNotIn("private replacement", str(result))
 
     def test_directory_replaced_with_symlink_during_open_is_denied(self):
@@ -376,7 +376,7 @@ class DirectoryToolsTests(WorkspaceTests):
         root.rename(self.root / "original")
         root.symlink_to(self.root / "outside", target_is_directory=True)
         result = self.accepted("read_file", "a.md")
-        self.assert_error(result, "PATH_DENIED")
+        self.assert_error(result, "WORKSPACE_CHANGED")
         self.assertNotIn("private replacement", str(result))
 
     def test_dynamic_reader_rejects_ordinary_workspace_directory_replacement(self):
@@ -388,8 +388,8 @@ class DirectoryToolsTests(WorkspaceTests):
         self.write("workspace/a.md", "private replacement")
         with patch("local_agent.files.os.read", side_effect=AssertionError("replacement body read")):
             result = self.accepted("read_file", "a.md")
-        self.assert_error(result, "PATH_DENIED")
-        self.assert_error(self.accepted("list_files", "."), "PATH_DENIED")
+        self.assert_error(result, "WORKSPACE_CHANGED")
+        self.assert_error(self.accepted("list_files", "."), "WORKSPACE_CHANGED")
 
     def test_root_symlink_substitution_during_dynamic_reader_open_is_denied(self):
         self.write("workspace/a.md", "original")
@@ -407,7 +407,7 @@ class DirectoryToolsTests(WorkspaceTests):
 
         with patch("local_agent.files.os.open", side_effect=replace_before_open):
             result = self.accepted("read_file", "a.md")
-        self.assert_error(result, "PATH_DENIED")
+        self.assert_error(result, "OS_PERMISSION_DENIED")
         self.assertNotIn("private replacement", str(result))
 
     def test_argument_errors_are_strict_and_do_not_change_ledger_until_record(self):

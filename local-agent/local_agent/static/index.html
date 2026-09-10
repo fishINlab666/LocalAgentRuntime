@@ -34,6 +34,9 @@
             <div class="label-row"><label for="question">想了解什么？</label><span id="count">0 / 4000</span></div>
             <textarea id="question" name="question" rows="6" maxlength="4000" required placeholder="例如：项目代号、评审人和演示日期分别是什么？请引用原文。"></textarea>
             <div class="suggestions"><button type="button" data-question="资料的主要内容是什么？请引用原文。">概括主要内容</button><button type="button" data-question="资料中写的预算是多少？">查找预算信息</button></div>
+            <div class="label-row"><label for="output-file">输出文件路径（可选）</label></div>
+            <input id="output-file" name="output_file" placeholder="例如：summary.md" maxlength="1024" autocomplete="off" aria-describedby="output-file-help">
+            <p class="field-help" id="output-file-help">留空只问答；填写后可新建 .md / .txt 文件，最多 32 KiB。父目录须已存在，完整内容经你确认后才写入，不覆盖已有文件。</p>
             <p id="form-error" class="form-error" role="alert" hidden></p>
             <div class="actions"><button class="primary" type="submit" id="start" disabled>开始问答 <span aria-hidden="true">↗</span></button><button type="button" class="secondary" id="cancel" hidden>取消运行</button></div>
             <p class="privacy" id="privacy">开始后，所选文件内容和问题将发送给 DeepSeek。原文件保持只读。</p>
@@ -50,14 +53,25 @@
             <p class="source-line" id="source-line"></p>
             <p class="field-help" id="scope-summary" hidden></p>
             <div id="progress" class="progress" hidden><span class="spinner" aria-hidden="true"></span><span id="progress-text">正在启动…</span></div>
+            <section id="approval" class="approval" aria-labelledby="approval-title" hidden>
+              <h3 id="approval-title">确认这次新建</h3>
+              <p id="approval-action" class="approval-action"></p>
+              <p id="approval-details" class="field-help"></p>
+              <p id="approval-intent" class="field-help"></p>
+              <details class="approval-preview" open><summary>完整内容预览</summary><pre id="approval-content"></pre></details>
+              <p id="approval-status" class="field-help" role="status"></p>
+              <p id="approval-error" class="form-error" role="alert" hidden></p>
+              <div class="actions"><button type="button" id="approval-allow" class="primary">确认这次新建</button><button type="button" id="approval-deny" class="secondary">拒绝</button></div>
+            </section>
             <div id="answer-block" hidden><div class="answer-heading"><h3 id="answer-title">文件中的答案</h3><button type="button" class="copy" id="copy">复制回答</button></div><p id="answer-text" class="answer-text"></p><p id="answer-note" class="field-help"></p></div>
             <div id="failure" class="failure" role="alert" hidden><h3 id="failure-title"></h3><p id="failure-message"></p></div>
+            <section id="artifacts" class="artifacts" aria-labelledby="artifact-title" hidden><h3 id="artifact-title">已创建文件</h3><p id="artifact-note" class="field-help"></p><div id="artifact-list"></div></section>
             <div id="evidence" hidden><div class="evidence-heading"><h3>原文依据</h3><span id="citation-count"></span></div><div id="citations"></div></div>
             <details id="trace" class="trace"><summary>查看执行记录 <span id="event-count"></span></summary><ol id="events"></ol><p class="trace-note">仅展示执行步骤；默认本地日志不保存问题、正文和回答全文。</p><code id="trace-path"></code></details>
           </div>
         </section>
       </div>
-      <footer><span>依据在文件里，判断在你手中。</span><span>本地界面 · 只读文件 · 可核对引用</span></footer>
+      <footer><span>依据在文件里，判断在你手中。</span><span>本地界面 · 确认后新建 · 可核对引用</span></footer>
     </main>
   </div>
 </body>

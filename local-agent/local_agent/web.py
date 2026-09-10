@@ -103,6 +103,10 @@ class Handler(BaseHTTPRequestHandler):
             if data != {}:
                 raise WebError(400, 'INVALID_REQUEST')
             return self.respond(200, self.server.runs.cancel(parts[3]))
+        if len(parts) == 6 and parts[1:3] == ['api', 'runs'] and parts[4] == 'approvals':
+            if not isinstance(data, dict) or set(data) != {'decision'}:
+                raise WebError(400, 'INVALID_REQUEST')
+            return self.respond(200, self.server.runs.decide(parts[3], parts[5], data['decision']))
         raise WebError(404, 'NOT_FOUND')
 
     def do_GET(self):
