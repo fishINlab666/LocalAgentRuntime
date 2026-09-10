@@ -206,29 +206,30 @@ class SessionStore:
         return store
 
     def _initialize_database(self) -> None:
-        existed = self.database_path.exists()
-        if not existed:
-            flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
-            fd = os.open(self.database_path, flags, 0o600)
-            os.close(fd)
-        else:
-            os.chmod(self.database_path, 0o600)
-
-        connection = None
         try:
-            connection = self._new_connection()
-            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            existed = self.database_path.exists()
+            if not existed:
+                flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+                fd = os.open(self.database_path, flags, 0o600)
+                os.close(fd)
+                version = 0
+            else:
+                os.chmod(self.database_path, 0o600)
+                version = self._read_existing_version()
             if version > _SCHEMA_VERSION:
                 raise StoreError("STATE_VERSION_UNSUPPORTED")
             if version == 0:
+                connection = None
                 try:
+                    connection = self._new_connection()
                     if existed:
                         self._backup_before_migration(connection, version)
                     self._migrate_v1(connection)
-                except StoreError:
-                    raise
                 except Exception as error:
                     raise StoreError("STATE_MIGRATION_FAILED") from error
+                finally:
+                    if connection is not None:
+                        connection.close()
         except StoreError:
             raise
         except sqlite3.DatabaseError as error:
@@ -238,9 +239,14 @@ class SessionStore:
             raise StoreError("STATE_OPEN_FAILED") from error
         except OSError as error:
             raise StoreError("STATE_OPEN_FAILED") from error
+
+    def _read_existing_version(self) -> int:
+        uri = self.database_path.resolve().as_uri() + "?mode=ro"
+        connection = sqlite3.connect(uri, uri=True)
+        try:
+            return connection.execute("PRAGMA user_version").fetchone()[0]
         finally:
-            if connection is not None:
-                connection.close()
+            connection.close()
 
     @staticmethod
     def _migrate_v1(connection: sqlite3.Connection) -> None:
@@ -270,14 +276,41 @@ class SessionStore:
 
     @staticmethod
     def _copy_database(connection, destination: Path) -> None:
+        created = False
+        fd = None
         target = None
         try:
+            flags = (
+                os.O_RDWR
+                | os.O_CREAT
+                | os.O_EXCL
+                | os.O_CLOEXEC
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            try:
+                fd = os.open(destination, flags, 0o600)
+            except FileExistsError as error:
+                raise StoreError("STATE_BACKUP_EXISTS") from error
+            created = True
+            os.fchmod(fd, 0o600)
+            os.close(fd)
+            fd = None
             target = sqlite3.connect(destination)
             connection.backup(target)
-        finally:
+            target.close()
+            target = None
+            os.chmod(destination, 0o600)
+        except BaseException:
             if target is not None:
                 target.close()
-        os.chmod(destination, 0o600)
+            if fd is not None:
+                os.close(fd)
+            if created:
+                try:
+                    destination.unlink()
+                except FileNotFoundError:
+                    pass
+            raise
 
     def _new_connection(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, isolation_level=None)
@@ -317,19 +350,29 @@ class SessionStore:
             raise
 
     def backup(self, destination: Path) -> Path:
-        destination = Path(destination)
-        if destination.exists() and destination.is_dir():
-            destination = destination / f"sessions.{int(self._clock())}.sqlite3"
-        resolved = destination.resolve()
-        connection = self.connection()
-        for row in connection.execute("SELECT workspace_path FROM sessions"):
-            workspace = Path(row[0]).resolve()
-            if resolved == workspace or resolved.is_relative_to(workspace):
-                raise StoreError("STATE_DIR_INSIDE_WORKSPACE")
-        if resolved == self.database_path.resolve():
-            raise StoreError("STATE_BACKUP_FAILED")
-
         try:
+            destination = Path(destination)
+            is_directory = destination.exists() and destination.is_dir()
+            if is_directory:
+                timestamp = int(self._clock())
+                base = destination / f"sessions.{timestamp}.sqlite3"
+                candidate = base
+                counter = 1
+                while candidate.exists():
+                    candidate = destination / f"sessions.{timestamp}.{counter}.sqlite3"
+                    counter += 1
+                destination = candidate
+            resolved = destination.resolve()
+            connection = self.connection()
+            for row in connection.execute("SELECT workspace_path FROM sessions"):
+                workspace = Path(row[0]).resolve()
+                if resolved == workspace or resolved.is_relative_to(workspace):
+                    raise StoreError("STATE_DIR_INSIDE_WORKSPACE")
+            if resolved == self.database_path.resolve():
+                raise StoreError("STATE_BACKUP_FAILED")
+            if not is_directory and destination.exists():
+                raise StoreError("STATE_BACKUP_EXISTS")
+
             destination.parent.mkdir(parents=True, exist_ok=True)
             self._copy_database(connection, destination)
         except StoreError:

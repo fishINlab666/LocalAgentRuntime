@@ -1,4 +1,6 @@
 from contextlib import closing
+import hashlib
+import os
 from pathlib import Path
 import queue
 import sqlite3
@@ -32,7 +34,7 @@ def insert_run(connection, run_id, session_id):
         (
             run_id,
             session_id,
-            "request-1",
+            f"request-{run_id}",
             "{}",
             "fingerprint",
             "files",
@@ -260,6 +262,165 @@ class SessionStoreTests(unittest.TestCase):
                 [("run-1",)],
             )
 
+    def test_backup_is_private_before_sqlite_opens_destination(self):
+        store = SessionStore.open(self.state)
+        self.addCleanup(store.close)
+        destination = self.state.parent / "private-backup.sqlite3"
+        real_connect = sqlite3.connect
+        observed_modes = []
+
+        def observe_destination(database, *args, **kwargs):
+            connection = real_connect(database, *args, **kwargs)
+            if Path(database) == destination:
+                observed_modes.append(
+                    stat.S_IMODE(destination.stat().st_mode)
+                )
+            return connection
+
+        previous_umask = os.umask(0o022)
+        try:
+            with patch(
+                "local_agent.session_store.sqlite3.connect",
+                side_effect=observe_destination,
+            ):
+                store.backup(destination)
+        finally:
+            os.umask(previous_umask)
+
+        self.assertEqual(observed_modes, [0o600])
+
+    def test_backup_refuses_existing_file_without_changing_it(self):
+        store = SessionStore.open(self.state)
+        self.addCleanup(store.close)
+        destination = self.state.parent / "existing.sqlite3"
+        with closing(sqlite3.connect(destination)) as existing:
+            existing.execute("CREATE TABLE sentinel (value TEXT NOT NULL)")
+            existing.execute("INSERT INTO sentinel VALUES ('keep')")
+            existing.commit()
+        before = destination.read_bytes()
+
+        with self.assertRaisesRegex(
+            StoreError, "STATE_BACKUP_EXISTS"
+        ) as caught:
+            store.backup(destination)
+
+        self.assertEqual(caught.exception.code, "STATE_BACKUP_EXISTS")
+        self.assertEqual(destination.read_bytes(), before)
+        with closing(sqlite3.connect(destination)) as existing:
+            self.assertEqual(
+                existing.execute("SELECT value FROM sentinel").fetchone()[0],
+                "keep",
+            )
+
+    def test_directory_backup_uses_unique_name_on_clock_collision(self):
+        store = SessionStore.open(self.state, clock=lambda: 1234.0)
+        self.addCleanup(store.close)
+        destination = self.state.parent / "backups"
+        destination.mkdir()
+        occupied = destination / "sessions.1234.sqlite3"
+        occupied.write_bytes(b"keep")
+
+        actual = store.backup(destination)
+
+        self.assertEqual(actual, destination / "sessions.1234.1.sqlite3")
+        self.assertEqual(occupied.read_bytes(), b"keep")
+        self.assertTrue(actual.is_file())
+
+    def test_future_version_probe_does_not_modify_database(self):
+        self.state.mkdir(mode=0o700)
+        path = self.state / "sessions.sqlite3"
+        with closing(sqlite3.connect(path)) as connection:
+            connection.execute("PRAGMA user_version=99")
+        before_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        before_mtime = path.stat().st_mtime_ns
+
+        with self.assertRaisesRegex(
+            StoreError, "STATE_VERSION_UNSUPPORTED"
+        ):
+            SessionStore.open(self.state)
+
+        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before_hash)
+        self.assertEqual(path.stat().st_mtime_ns, before_mtime)
+        self.assertFalse(Path(str(path) + "-wal").exists())
+        self.assertFalse(Path(str(path) + "-shm").exists())
+
+    def test_database_creation_error_is_mapped_and_releases_lock(self):
+        real_open = os.open
+
+        def fail_database(path, flags, mode=0o777):
+            if Path(path).name == "sessions.sqlite3":
+                raise OSError("injected database create failure")
+            return real_open(path, flags, mode)
+
+        with patch("local_agent.session_store.os.open", side_effect=fail_database):
+            with self.assertRaisesRegex(
+                StoreError, "STATE_OPEN_FAILED"
+            ) as caught:
+                SessionStore.open(self.state)
+        self.assertEqual(caught.exception.code, "STATE_OPEN_FAILED")
+
+        reopened = SessionStore.open(self.state)
+        reopened.close()
+
+    def test_backup_query_error_is_mapped(self):
+        store = SessionStore.open(self.state)
+        self.addCleanup(store.close)
+
+        class BrokenQuery:
+            def execute(self, *_args, **_kwargs):
+                raise sqlite3.OperationalError("injected query failure")
+
+        with patch.object(store, "connection", return_value=BrokenQuery()):
+            with self.assertRaisesRegex(
+                StoreError, "STATE_BACKUP_FAILED"
+            ) as caught:
+                store.backup(self.state.parent / "backup.sqlite3")
+        self.assertEqual(caught.exception.code, "STATE_BACKUP_FAILED")
+
+    def test_composite_foreign_keys_reject_cross_run_and_session_links(self):
+        store = SessionStore.open(self.state)
+        self.addCleanup(store.close)
+        workspace = self.state.parent / "workspace"
+        other_workspace = self.state.parent / "other-workspace"
+        with store.transaction() as connection:
+            insert_session(connection, "session-1", workspace)
+            insert_session(connection, "session-2", other_workspace)
+            insert_run(connection, "run-1", "session-1")
+            insert_run(connection, "run-2", "session-1")
+            connection.execute(
+                """INSERT INTO messages (
+                       id, session_id, run_id, session_seq, run_seq, role,
+                       source_kind, payload_json, validation_state, created_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "message-run-2", "session-1", "run-2", 1, 1,
+                    "assistant", "model", "{}", "valid", 3.0,
+                ),
+            )
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            with store.transaction() as connection:
+                connection.execute(
+                    """INSERT INTO tool_calls (
+                           run_id, call_id, session_id, assistant_message_id,
+                           name, stage
+                       ) VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        "run-1", "call-1", "session-1", "message-run-2",
+                        "read_file", "requested",
+                    ),
+                )
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            with store.transaction() as connection:
+                connection.execute(
+                    """INSERT INTO context_manifests (
+                           run_id, request_seq, session_id, payload_json,
+                           input_sha256, input_bytes, created_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    ("run-1", 1, "session-2", "{}", "hash", 2, 4.0),
+                )
+
     def test_backup_rejects_file_or_directory_inside_bound_workspace(self):
         store = SessionStore.open(self.state)
         self.addCleanup(store.close)
@@ -342,6 +503,7 @@ class SessionStoreTests(unittest.TestCase):
             ) as caught:
                 SessionStore.open(self.state, clock=lambda: 1234.0)
         self.assertEqual(caught.exception.code, "STATE_MIGRATION_FAILED")
+        self.assertEqual(list(self.state.glob("*.sqlite3.backup")), [])
         with closing(sqlite3.connect(path)) as connection:
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
             self.assertEqual(backup_value := connection.execute(
