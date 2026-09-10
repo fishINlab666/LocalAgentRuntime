@@ -280,6 +280,7 @@ async function selectSession(sessionId) {
     $('session-rename-title').value = activeSession.title;
     $('session-archive').hidden = activeSession.status === 'archived';
     $('session-restore').hidden = activeSession.status !== 'archived';
+    updateControls();
     const directory = activeSession.scope.mode === 'directory';
     $('discover').checked = directory; $('file').value = activeSession.scope.file || '';
     $('session-scope').hidden = false;
