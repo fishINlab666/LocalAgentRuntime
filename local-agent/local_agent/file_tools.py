@@ -5,7 +5,7 @@ import json
 
 from .answers import AnswerError, validate_answer
 from .discovery import DirectoryTools, READ_FILE_SCHEMA
-from .prompts import SYSTEM, DIRECTORY_SYSTEM, TOOL_PROTOCOL
+from .prompts import SYSTEM, DIRECTORY_SYSTEM, TOOL_PROTOCOL, JSON_REPAIR, IDENTIFIER_REPAIR
 from .tool_runtime import ToolSpec, ToolRegistry, ToolRuntime, tool_error
 from .files import _path_parts
 from pathlib import Path
@@ -219,6 +219,10 @@ class FilePolicy:
         if self.output_path is not None and answer['status'] != 'unable' and not self.artifacts:
             raise AnswerError('OUTPUT_NOT_CREATED', 'The requested output has no actual creation receipt.')
         return answer
+
+    @staticmethod
+    def repair_prompt(code):
+        return IDENTIFIER_REPAIR if code == 'IDENTIFIER_MISMATCH' else JSON_REPAIR
 
     def execute_read(self, name, arguments):
         if self.output_path is not None and arguments.get('path') == self.output_path:

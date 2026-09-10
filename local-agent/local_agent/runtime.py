@@ -256,7 +256,10 @@ class Runtime:
                             emit('answer.rejected', {
                                 'code': error.code, 'repair_attempt': answer_repairs})
                             messages.append(copy.deepcopy(message))
-                            repair = IDENTIFIER_REPAIR if error.code == 'IDENTIFIER_MISMATCH' else JSON_REPAIR
+                            repair_builder = getattr(engine.policy, 'repair_prompt', None)
+                            repair = (repair_builder(error.code) if callable(repair_builder)
+                                      else (IDENTIFIER_REPAIR if error.code == 'IDENTIFIER_MISMATCH'
+                                            else JSON_REPAIR))
                             messages.append({'role': 'user', 'content': repair})
                             continue
                         return finish('validation_failed', error.code)
@@ -319,6 +322,10 @@ class Runtime:
             return finish('timed_out' if error.code == 'MODEL_TIMEOUT' else 'failed', error.code)
         except JournalFailure:
             return finish('failed', 'SESSION_STORE_ERROR', persist=False)
+        except ValueError as error:
+            if str(error) == 'CONTEXT_LIMIT':
+                return finish('failed', 'CONTEXT_LIMIT')
+            return finish('failed', 'INTERNAL_ERROR')
         except OSError:
             return finish('failed', 'TRACE_ERROR')
         except Exception:
