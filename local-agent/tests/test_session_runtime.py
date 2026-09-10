@@ -232,6 +232,46 @@ class SessionRuntimeTests(unittest.TestCase):
         current_result = json.loads(provider.requests[-1][-1]["content"])
         self.assertEqual(current_result["data"]["content"]["1"], "代号：purple-999")
 
+        first_answer = next(
+            message for message in self.store.load_run_messages(session.id, first.run_id)
+            if message.role == "assistant" and message.validation_state == "answer_valid"
+        )
+        source = first_answer.payload["content"]
+        start = source.index("orange-731")
+        conversation = self.service.submit(session.id, RunSubmission(
+            "request-history-a", "第一次读取时的代号是什么？", "conversation",
+            session.scope, None, None, {}))
+        history_provider = ScriptedProvider([{
+            "role": "assistant",
+            "content": json.dumps({
+                "status": "answered",
+                "answer": "第一次读取时的代号是 orange-731。",
+                "references": [{
+                    "message_id": first_answer.id,
+                    "start": start,
+                    "end": start + len("orange-731"),
+                }],
+            }, ensure_ascii=False),
+        }])
+        history_result = self.service.execute(
+            conversation,
+            history_provider,
+            Trace(self.root / "runs", self.workspace, run_id=conversation.run_id),
+        )
+        self.assertEqual(history_result["state"], "completed")
+        self.assertEqual(
+            history_result["answer"]["references"][0]["quote"], "orange-731")
+        manifest = self.store.connection().execute(
+            """SELECT payload_json FROM context_manifests
+               WHERE run_id=? ORDER BY request_seq DESC LIMIT 1""",
+            (conversation.run_id,),
+        ).fetchone()[0]
+        names = [
+            item["function"]["name"]
+            for item in json.loads(manifest)["request"]["tools"]
+        ]
+        self.assertEqual(names, ["session_history"])
+
     def test_idempotent_submit_never_executes_provider_twice(self):
         session, prepared = self.prepare()
         result = self.service.execute(

@@ -13,7 +13,7 @@ import unittest
 
 from local_agent.approvals import ApprovalBroker, ApprovalError
 from local_agent.session_store import SessionStore, StoreError
-from local_agent.sessions import RunSubmission, SessionScope, SessionService
+from local_agent.sessions import RunSubmission, SessionError, SessionScope, SessionService
 from local_agent.web import create_server
 
 
@@ -711,6 +711,59 @@ class SessionRecoveryTests(unittest.TestCase):
             )
         finally:
             store.close()
+
+    def test_sqlite_full_and_read_only_writes_fail_atomically(self):
+        connection = self.store.connection()
+        before = {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("sessions", "runs", "messages")
+        }
+
+        page_count = connection.execute("PRAGMA page_count").fetchone()[0]
+        connection.execute(f"PRAGMA max_page_count={page_count}")
+        try:
+            with self.assertRaises(SessionError) as full:
+                self.service.submit(
+                    self.session.id,
+                    RunSubmission(
+                        "sqlite-full",
+                        "满盘提交" * 100_000,
+                        "conversation",
+                        self.session.scope,
+                        None,
+                        None,
+                        {},
+                    ),
+                )
+            self.assertEqual(full.exception.code, "SESSION_STORE_ERROR")
+        finally:
+            connection.execute("PRAGMA max_page_count=1073741823")
+
+        connection.execute("PRAGMA query_only=ON")
+        try:
+            with self.assertRaises(SessionError) as read_only:
+                self.service.submit(
+                    self.session.id,
+                    RunSubmission(
+                        "sqlite-read-only",
+                        "只读库提交",
+                        "conversation",
+                        self.session.scope,
+                        None,
+                        None,
+                        {},
+                    ),
+                )
+            self.assertEqual(read_only.exception.code, "SESSION_STORE_ERROR")
+        finally:
+            connection.execute("PRAGMA query_only=OFF")
+
+        after = {
+            table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("sessions", "runs", "messages")
+        }
+        self.assertEqual(after, before)
+        self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
 
 
 if __name__ == "__main__":

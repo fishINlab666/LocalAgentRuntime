@@ -48,6 +48,7 @@ class SessionHistoryTests(unittest.TestCase):
         page = self.tool.execute({"action": "read", "message_id": hit["message_id"]})
         self.assertEqual(page["call_id"], "call-1")
         self.assertEqual(page["name"], "read_file")
+        self.assertEqual(page["source_run_id"], hit["source_run_id"])
         self.assertIn('"path":"missing-73.md"', page["text"])
         self.assertEqual(page["result_message_id"], self.result_id)
         verified = self.tool.verify_success(
@@ -83,6 +84,55 @@ class SessionHistoryTests(unittest.TestCase):
         data["hits"] = []
         with self.assertRaises(ValueError):
             self.tool.verify_success({"action": "search", "query": "missing-73.md"}, data)
+
+    def test_read_cursor_is_bound_to_session_cutoff_message_and_offset(self):
+        old = self.service.submit(self.session.id, RunSubmission(
+            "long-old", "页首-" + "甲" * 9000 + "-页尾", "conversation",
+            self.session.scope, None, None, {}))
+        old.journal.record_model_request({"messages": []}, {"kind": "fixture"})
+        old.journal.record_model_reply(
+            {"role": "assistant", "content": "已保存长消息"}, None, "answer_valid")
+        old.journal.finish_run({"state": "completed", "answer": "已保存长消息"})
+        message = self.store.load_run_messages(self.session.id, old.run_id)[0]
+        cutoff = self.store.connection().execute(
+            "SELECT MAX(session_seq)+1 FROM messages WHERE session_id=?",
+            (self.session.id,),
+        ).fetchone()[0]
+        tool = SessionHistoryTool(self.store, self.session.id, before_seq=cutoff)
+
+        first = tool.execute({"action": "read", "message_id": message.id})
+        self.assertTrue(first["ok"])
+        self.assertIn("cursor", first)
+        pages = [first]
+        while "cursor" in pages[-1]:
+            page = tool.execute({
+                "action": "read",
+                "message_id": message.id,
+                "cursor": pages[-1]["cursor"],
+            })
+            self.assertTrue(page["ok"])
+            pages.append(page)
+        self.assertEqual(
+            "".join(page["text"] for page in pages), message.payload["content"])
+        self.assertTrue(all(page["source_run_id"] == old.run_id for page in pages))
+
+        changed_cutoff = SessionHistoryTool(
+            self.store, self.session.id, before_seq=cutoff + 1)
+        self.assertEqual(changed_cutoff.execute({
+            "action": "read", "message_id": message.id, "cursor": first["cursor"]
+        })["error"]["code"], "CURSOR_INVALID")
+
+        other = self.service.create(
+            Path(self.session.workspace_path), "游标隔离", SessionScope("directory", None))
+        foreign = SessionHistoryTool(self.store, other.id, before_seq=10_000)
+        self.assertEqual(foreign.execute({
+            "action": "read", "message_id": message.id, "cursor": first["cursor"]
+        })["error"]["code"], "NOT_FOUND")
+
+        tampered = first["cursor"][:-1] + ("A" if first["cursor"][-1] != "A" else "B")
+        self.assertEqual(tool.execute({
+            "action": "read", "message_id": message.id, "cursor": tampered
+        })["error"]["code"], "CURSOR_INVALID")
 
 
 if __name__ == "__main__":

@@ -206,6 +206,40 @@ class ContextBuilderTests(unittest.TestCase):
             )
 
     def test_fifty_runs_create_a_bounded_traceable_summary_and_keep_raw_history(self):
+        marker = "archive-only-73.md"
+        historical_call = self.service.submit(
+            self.session.id,
+            RunSubmission(
+                "historical-call", "核对早期附件", "conversation",
+                self.session.scope, None, None, {},
+            ),
+        )
+        historical_call.journal.record_model_request(
+            {"messages": []}, {"kind": "fixture"})
+        call = {
+            "id": "historical-call-1",
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "arguments": json.dumps(
+                    {"path": marker, "intent": "核对旧附件"}, ensure_ascii=False),
+            },
+        }
+        assistant_id = historical_call.journal.record_model_reply(
+            {"role": "assistant", "content": None, "tool_calls": [call]},
+            None,
+            "tool_calls_valid",
+        )
+        result_id = historical_call.journal.record_tool_result(
+            call["id"],
+            {"ok": False, "error": {"code": "FILE_NOT_FOUND", "message": "missing"}},
+        )
+        historical_call.journal.record_model_request(
+            {"messages": []}, {"kind": "fixture-2"})
+        historical_call.journal.record_model_reply(
+            {"role": "assistant", "content": "该次读取失败"}, None, "answer_valid")
+        historical_call.journal.finish_run(
+            {"state": "completed", "answer": "该次读取失败"})
         run_ids = self.seed_long_history()
         prepared = self.prepare_current()
         summary_requests = []
@@ -236,6 +270,12 @@ class ContextBuilderTests(unittest.TestCase):
         )
 
         self.assertEqual(len(summary_requests), 1)
+        raw_history_bytes = self.store.connection().execute(
+            """SELECT SUM(LENGTH(CAST(payload_json AS BLOB))) FROM messages
+               WHERE session_id=? AND run_id<>?""",
+            (self.session.id, prepared.run_id),
+        ).fetchone()[0]
+        self.assertGreater(raw_history_bytes, 128 * 1024)
         summary_request, summary_manifest = summary_requests[0]
         self.assertEqual(summary_request["tools"], [])
         self.assertLessEqual(
@@ -258,6 +298,7 @@ class ContextBuilderTests(unittest.TestCase):
         rendered = json.dumps(built.request, ensure_ascii=False)
         self.assertIn("session_summary", rendered)
         self.assertIn("history_omission", rendered)
+        self.assertNotIn(marker, rendered)
 
         first_user = self.store.load_run_messages(self.session.id, run_ids[0])[0]
         result = SessionHistoryTool(
@@ -267,6 +308,44 @@ class ContextBuilderTests(unittest.TestCase):
         ).execute({"action": "read", "message_id": first_user.id})
         self.assertTrue(result["ok"])
         self.assertIn("早期目标-0", result["text"])
+
+        history = SessionHistoryTool(
+            self.store,
+            self.session.id,
+            before_seq=built.manifest["cutoff_seq"],
+        )
+        found = history.execute({"action": "search", "query": marker})
+        self.assertTrue(found["ok"])
+        self.assertEqual(len(found["hits"]), 1)
+        hit = found["hits"][0]
+        self.assertEqual(
+            (hit["message_id"], hit["source_run_id"], hit["call_id"]),
+            (assistant_id, historical_call.run_id, call["id"]),
+        )
+        page = history.execute({"action": "read", "message_id": assistant_id})
+        self.assertEqual(page["result_message_id"], result_id)
+        self.assertEqual(page["result"]["error"]["code"], "FILE_NOT_FOUND")
+        self.assertFalse((self.workspace / marker).exists())
+
+        other = self.service.create(
+            self.workspace, "摘要隔离", SessionScope("directory", None))
+        other_current = self.service.submit(
+            other.id,
+            RunSubmission(
+                "other-current", "继续", "conversation", other.scope,
+                None, None, {},
+            ),
+        )
+        other_built = ContextBuilder(
+            self.store, other.id, other_current.run_id
+        ).build(
+            {"messages": [{"role": "system", "content": "system"},
+                          {"role": "user", "content": "继续"}], "tools": []},
+            65536,
+        )
+        self.assertIsNone(other_built.manifest["active_summary_id"])
+        self.assertNotIn("session_summary", json.dumps(
+            other_built.request, ensure_ascii=False))
 
     def test_invalid_summary_variants_leave_old_summary_and_raw_messages_unchanged(self):
         run_ids = self.seed_long_history(12)
