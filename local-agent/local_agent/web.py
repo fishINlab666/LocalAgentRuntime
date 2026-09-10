@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import secrets
 import socket
+from urllib.parse import parse_qs, urlsplit
 import webbrowser
 
 from .provider import DeepSeekProvider
@@ -36,6 +37,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *_):
         pass
+
+    def finish(self):
+        try:
+            super().finish()
+        finally:
+            self.server.runs.close_thread_connection()
 
     def respond(self, status, value, content_type='application/json'):
         if content_type == 'application/json':
@@ -68,19 +75,44 @@ class Handler(BaseHTTPRequestHandler):
             raise WebError(403, 'SESSION_EXPIRED')
 
     def dispatch(self):
-        api = self.path.startswith('/api/')
+        parsed = urlsplit(self.path)
+        path = parsed.path
+        api = path.startswith('/api/')
         self.authorize(api)
         if self.command == 'GET':
-            if self.path in ROUTES:
-                name, kind = ROUTES[self.path]
+            if parsed.query and path not in {'/api/sessions'} and not (
+                    path.startswith('/api/sessions/') and path.endswith('/runs')):
+                raise WebError(400, 'INVALID_REQUEST')
+            if path in ROUTES:
+                name, kind = ROUTES[path]
                 content = (ASSETS / name).read_text(encoding='utf-8')
                 if name == 'index.html':
                     content = content.replace('__SESSION_TOKEN__', self.server.token)
                 return self.respond(200, content, kind)
-            if self.path == '/api/config':
+            if path == '/api/config':
                 return self.respond(200, self.server.runs.config())
-            if self.path.startswith('/api/runs/'):
-                return self.respond(200, self.server.runs.snapshot(self.path.removeprefix('/api/runs/')))
+            if path.startswith('/api/runs/'):
+                return self.respond(200, self.server.runs.snapshot(path.removeprefix('/api/runs/')))
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            parts = path.split('/')
+            if path == '/api/sessions':
+                if set(query) - {'archived', 'cursor'} or any(len(value) != 1 for value in query.values()):
+                    raise WebError(400, 'INVALID_REQUEST')
+                archived_value = query.get('archived', ['0'])[0]
+                if archived_value not in {'0', '1'}:
+                    raise WebError(400, 'INVALID_REQUEST')
+                return self.respond(200, self.server.runs.list_sessions(
+                    archived=archived_value == '1', cursor=query.get('cursor', [None])[0]))
+            if len(parts) == 4 and parts[1:3] == ['api', 'sessions']:
+                return self.respond(200, self.server.runs.session_view(parts[3]))
+            if len(parts) == 5 and parts[1:3] == ['api', 'sessions'] and parts[4] == 'runs':
+                if set(query) - {'cursor'} or any(len(value) != 1 for value in query.values()):
+                    raise WebError(400, 'INVALID_REQUEST')
+                return self.respond(200, self.server.runs.list_session_runs(
+                    parts[3], cursor=query.get('cursor', [None])[0]))
+            if (len(parts) == 6 and parts[1:3] == ['api', 'sessions']
+                    and parts[4] == 'runs'):
+                return self.respond(200, self.server.runs.session_snapshot(parts[3], parts[5]))
             raise WebError(404, 'NOT_FOUND')
         if not api:
             raise WebError(404, 'NOT_FOUND')
@@ -96,9 +128,11 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(length))
         except (ValueError, UnicodeError, RecursionError):
             raise WebError(400, 'INVALID_REQUEST') from None
-        if self.path == '/api/runs':
+        if path == '/api/runs':
             return self.respond(202, self.server.runs.start(data))
-        parts = self.path.split('/')
+        if path == '/api/sessions':
+            return self.respond(201, self.server.runs.create_session(data))
+        parts = path.split('/')
         if len(parts) == 5 and parts[1:3] == ['api', 'runs'] and parts[4] == 'cancel':
             if data != {}:
                 raise WebError(400, 'INVALID_REQUEST')
@@ -107,6 +141,28 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(data, dict) or set(data) != {'decision'}:
                 raise WebError(400, 'INVALID_REQUEST')
             return self.respond(200, self.server.runs.decide(parts[3], parts[5], data['decision']))
+        if (len(parts) == 5 and parts[1:3] == ['api', 'sessions']
+                and parts[4] in {'rename', 'archive', 'restore'}):
+            return self.respond(200, self.server.runs.change_session(parts[3], parts[4], data))
+        if (len(parts) == 5 and parts[1:3] == ['api', 'sessions']
+                and parts[4] == 'runs'):
+            value, created = self.server.runs.start_session_run(parts[3], data)
+            return self.respond(202 if created else 200, value)
+        if (len(parts) == 5 and parts[1:3] == ['api', 'sessions']
+                and parts[4] == 'continue'):
+            value, created = self.server.runs.continue_session(parts[3], data)
+            return self.respond(202 if created else 200, value)
+        if (len(parts) == 7 and parts[1:3] == ['api', 'sessions']
+                and parts[4] == 'runs' and parts[6] == 'cancel'):
+            if data != {}:
+                raise WebError(400, 'INVALID_REQUEST')
+            return self.respond(200, self.server.runs.cancel_session(parts[3], parts[5]))
+        if (len(parts) == 8 and parts[1:3] == ['api', 'sessions']
+                and parts[4] == 'runs' and parts[6] == 'approvals'):
+            if not isinstance(data, dict) or set(data) != {'decision'}:
+                raise WebError(400, 'INVALID_REQUEST')
+            return self.respond(200, self.server.runs.decide_session(
+                parts[3], parts[5], parts[7], data['decision']))
         raise WebError(404, 'NOT_FOUND')
 
     def do_GET(self):
@@ -122,17 +178,22 @@ class Handler(BaseHTTPRequestHandler):
     do_POST = do_GET
 
 
-def create_server(workspace, directory, *, port=8765, provider_factory=DeepSeekProvider.from_env):
-    runs = WebRuns(workspace, directory, provider_factory)
+def create_server(workspace, directory, *, state_dir=None, session_id=None, port=8765,
+                  provider_factory=DeepSeekProvider.from_env):
+    runs = WebRuns(workspace, directory, provider_factory, state_dir=state_dir,
+                   selected_session_id=session_id)
     server = WebServer(('127.0.0.1', port), Handler, runs)
     server.token = secrets.token_hex(32)
     server.origin = f'http://127.0.0.1:{server.server_port}'
     return server
 
 
-def serve(workspace, directory, *, port=8765, provider_factory=DeepSeekProvider.from_env, open_browser=False):
-    server = create_server(workspace, directory, port=port, provider_factory=provider_factory)
-    print(f'单文件问答：{server.origin}\n工作区：{server.runs.workspace}\n按 Ctrl+C 关闭服务。', flush=True)
+def serve(workspace, directory, *, state_dir=None, session_id=None, port=8765,
+          provider_factory=DeepSeekProvider.from_env, open_browser=False):
+    server = create_server(workspace, directory, state_dir=state_dir,
+                           session_id=session_id, port=port,
+                           provider_factory=provider_factory)
+    print(f'本地资料会话：{server.origin}\n工作区：{server.runs.workspace}\n按 Ctrl+C 关闭服务。', flush=True)
     if open_browser:
         webbrowser.open(server.origin)
     try:

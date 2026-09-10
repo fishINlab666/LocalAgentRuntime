@@ -130,7 +130,9 @@ def _build_parser():
     commands = parser.add_subparsers(dest="command", required=True)
 
     web = commands.add_parser("serve", help="启动本地资料问答页面")
-    web.add_argument("--workspace", type=Path, required=True)
+    web_scope = web.add_mutually_exclusive_group(required=True)
+    web_scope.add_argument("--workspace", type=Path)
+    web_scope.add_argument("--session", help="从状态库打开一个已有会话；工作区缺失时仍可看历史")
     web.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     web.add_argument("--log-dir", type=Path, default=ROOT / "runs")
     web.add_argument("--port", type=int, default=8765)
@@ -211,10 +213,11 @@ def main() -> int:
             parser.error("--port 必须在 0–65535 之间")
         from .web import serve
         try:
-            return serve(args.workspace, args.log_dir, port=args.port,
+            return serve(args.workspace, args.log_dir, state_dir=args.state_dir,
+                         session_id=args.session, port=args.port,
                          provider_factory=DemoProvider if args.demo else DeepSeekProvider.from_env,
                          open_browser=args.open)
-        except (OSError, ValueError):
+        except (OSError, ValueError, SessionError, StoreError):
             print("无法启动页面：请检查工作区、日志目录和端口是否可用；可通过 --port 更换端口。")
             return 2
     if args.command == "sessions" and args.sessions_action != "continue":

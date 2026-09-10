@@ -4,6 +4,8 @@ const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="session-token"]').content;
 let ready = false, simulated = false, activeId = null, busy = false, timer = null, renderedEvents = 0;
 let viewGeneration = 0, renderedRevision = -1;
+let activeSessionId = null, activeSession = null, fixedSessionSelection = false;
+let workspaceAvailable = true, historyRuns = [];
 let pendingApproval = null, approvalSendingId = null, approvalBlockedId = null, approvalDeadline = 0, approvalTimer = null;
 let cancelling = false, cancelSendingId = null;
 const errors = {
@@ -27,6 +29,13 @@ const errors = {
   INVALID_TASK: '文件路径或问题不完整，请检查后重试。',
   RUN_ACTIVE: '已有任务正在运行，请等待完成或先取消。',
   RUN_NOT_FOUND: '任务已过期或服务已重启，请重新提问。',
+  NOT_FOUND: '找不到这条会话记录，或它不属于当前工作区。',
+  SESSION_ARCHIVED: '这个会话已归档；恢复后才能继续提交。',
+  SESSION_REQUEST_CONFLICT: '同一个提交编号已经用于不同内容，请刷新后重试。',
+  SESSION_SELECTION_FIXED: '当前服务固定打开一个会话，不能在这里新建其他会话。',
+  WORKSPACE_UNAVAILABLE: '原工作区当前不可用。历史仍可查看，也可以选择“聊这段记录”。',
+  RUN_NOT_INTERRUPTED: '这条运行不是可继续的中断状态。',
+  APPROVAL_UNAVAILABLE: '旧审批仅供查看，不能在当前进程继续执行。',
   SESSION_EXPIRED: '本地服务已重启，请刷新页面重新连接。',
   AUTH_ERROR: 'DeepSeek 鉴权失败，请检查启动终端中的 API Key。',
   RATE_LIMIT: 'DeepSeek 请求频率受限，请稍后重试。',
@@ -98,14 +107,24 @@ async function api(path, body) {
 }
 
 function updateControls() {
-  $('start').disabled = busy || !ready;
+  const sessionMode = Boolean(activeSessionId);
+  const conversation = sessionMode && $('task-type').value === 'conversation';
+  const archived = activeSession?.status === 'archived';
+  $('start').disabled = busy || !ready || archived || (sessionMode && !conversation && !workspaceAvailable);
   $('start').textContent = busy ? '运行中…' : '开始问答 ↗';
   $('cancel').hidden = !busy || !activeId;
-  $('discover').disabled = busy || !ready;
-  $('file').disabled = busy || $('discover').checked;
-  $('file').required = !$('discover').checked;
-  for (const element of [$('question'), $('output-file'), $('sample'), ...document.querySelectorAll('[data-question]')]) element.disabled = busy;
+  $('discover').disabled = sessionMode || busy || !ready;
+  $('file').disabled = sessionMode || busy || $('discover').checked;
+  $('file').required = !sessionMode && !$('discover').checked;
+  $('task-type').disabled = busy || !sessionMode;
+  $('output-file').disabled = busy || conversation;
+  for (const element of [$('question'), $('sample'), ...document.querySelectorAll('[data-question]')]) element.disabled = busy;
+  $('session-create').disabled = busy || fixedSessionSelection;
+  $('session-rename').disabled = busy || !activeSessionId;
+  $('session-archive').disabled = busy || !activeSessionId;
+  $('session-restore').disabled = busy || !activeSessionId;
   $('privacy').textContent = simulated ? '演示模式：只在本机读取资料，不向模型发送内容。原文件保持只读。'
+    : conversation ? '本轮只把问题和本会话的受限历史发送给 DeepSeek，不读取工作区文件。'
     : $('discover').checked ? '开始后，问题、目录元数据和已读取的资料内容将发送给 DeepSeek。原文件保持只读。'
     : '开始后，所选文件内容和问题将发送给 DeepSeek。原文件保持只读。';
   if ($('output-file').value.trim()) $('privacy').textContent += ' 输出文件的完整内容经你确认后才新建。';
@@ -119,6 +138,10 @@ function countQuestion() { $('count').textContent = `${$('question').value.lengt
 function updateApprovalControls() {
   clearTimeout(approvalTimer);
   if (!pendingApproval) return;
+  if (pendingApproval.historical) {
+    $('approval-status').textContent = `历史审批：${pendingApproval.status}。仅供查看，不能再次执行。`;
+    return;
+  }
   const id = pendingApproval.approval_id || pendingApproval.id;
   const remaining = Math.max(0, Math.ceil((approvalDeadline - Date.now()) / 1000));
   const sending = approvalSendingId === id, blocked = approvalBlockedId === id;
@@ -133,14 +156,20 @@ function updateApprovalControls() {
 }
 
 function renderApproval(job) {
-  const approval = busy ? job.pending_approval : null;
+  const historicalRow = !busy && job.approvals?.length ? job.approvals.at(-1) : null;
+  const approval = busy ? job.pending_approval : historicalRow ? {
+    ...historicalRow.preview, id: historicalRow.id, status: historicalRow.decision,
+    arguments: {}, historical: true
+  } : null;
   const id = approval?.approval_id || approval?.id;
   const previousId = pendingApproval?.approval_id || pendingApproval?.id;
   pendingApproval = approval || null;
   $('approval').hidden = !pendingApproval;
+  $('approval-actions').hidden = Boolean(approval?.historical);
   clearTimeout(approvalTimer);
   if (!pendingApproval) return;
-  approvalDeadline = Date.now() + Math.max(0, Number(approval.remaining_seconds) || 0) * 1000;
+  approvalDeadline = approval.historical ? 0
+    : Date.now() + Math.max(0, Number(approval.remaining_seconds) || 0) * 1000;
   if (id !== previousId) {
     $('approval-error').hidden = true;
     $('approval-content').textContent = approval.content;
@@ -148,6 +177,7 @@ function renderApproval(job) {
   $('approval-action').textContent = `实际操作：${approval.action_summary || approval.name}`;
   $('approval-details').textContent = `目标：${approval.path} · ${approval.bytes} 字节 · ${['create', 'created'].includes(approval.operation) ? '新建，不覆盖' : approval.operation} · 来源：${sourceLabel(approval.source)} · ${riskLabel(approval.risk)}`;
   $('approval-intent').textContent = `模型意图：${approval.arguments?.intent || '未提供'}（用于说明目的）`;
+  if (approval.historical) $('approval-status').textContent = `历史审批：${approval.status}。仅供查看，不能再次执行。`;
 }
 
 function renderArtifacts(job) {
@@ -175,14 +205,122 @@ function connectionExpired(error) {
   return true;
 }
 
+function normalizedSessionRun(run) {
+  const terminal = !['queued', 'running', 'waiting_approval'].includes(run.state);
+  const result = run.result || (terminal ? {answer: null, stop_reason: run.stop_reason,
+    trace_path: run.trace_path || '', artifacts: run.artifacts || []} : null);
+  if (result && !result.artifacts && run.artifacts) result.artifacts = run.artifacts.map(item => ({
+    path: item.path, bytes: item.bytes, sha256: item.sha256,
+    operation: item.receipt?.operation || 'created'
+  }));
+  return {...run, mode: activeSession?.scope?.mode || 'file',
+    file: activeSession?.scope?.file || null, events: run.events || [], result,
+    revision: terminal ? Number.MAX_SAFE_INTEGER : Number(run.revision) || 0,
+    pending_approval: run.pending_approval || null,
+    cancelling: Boolean(run.cancelling)};
+}
+
+function runPath(runId, tail = '') {
+  return activeSessionId ? `/api/sessions/${activeSessionId}/runs/${runId}${tail}`
+    : `/api/runs/${runId}${tail}`;
+}
+
+function clearRunView() {
+  clearTimeout(timer); activeId = null; busy = false; renderedEvents = 0; renderedRevision = -1;
+  pendingApproval = null; cancelling = false; $('output').hidden = true; $('empty').hidden = false;
+  $('continue-run').hidden = true; updateControls();
+}
+
+function renderRunHistory(runs) {
+  historyRuns = runs;
+  $('session-history').replaceChildren();
+  for (const item of runs) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = `${item.state === 'completed' ? '✓' : '·'} ${item.question}`;
+    button.title = item.question;
+    button.addEventListener('click', () => openSessionRun(item.id));
+    $('session-history').append(button);
+  }
+}
+
+async function openSessionRun(runId) {
+  if (!activeSessionId) return;
+  const sessionId = activeSessionId, generation = ++viewGeneration;
+  clearTimeout(timer);
+  try {
+    const response = await api(`/api/sessions/${sessionId}/runs/${runId}`);
+    if (sessionId !== activeSessionId || generation !== viewGeneration) return;
+    const job = normalizedSessionRun(response.run);
+    $('question').value = job.question; countQuestion(); $('task-type').value = job.task_type;
+    $('output-file').value = job.output_file || '';
+    prepareOutput(job); render(job);
+    if (busy) timer = setTimeout(poll, 450);
+  } catch (error) {
+    if (sessionId === activeSessionId && generation === viewGeneration) showError(error, 'session-error');
+  }
+}
+
+async function selectSession(sessionId) {
+  const generation = ++viewGeneration;
+  clearTimeout(timer); activeSessionId = sessionId || null; activeSession = null;
+  $('session-error').hidden = true;
+  if (!activeSessionId) {
+    $('session-actions').hidden = true; $('session-scope').hidden = true;
+    renderRunHistory([]); $('task-type').value = 'files'; clearRunView(); return;
+  }
+  try {
+    const [sessionResponse, runsResponse] = await Promise.all([
+      api(`/api/sessions/${activeSessionId}`), api(`/api/sessions/${activeSessionId}/runs`)
+    ]);
+    if (generation !== viewGeneration || sessionId !== activeSessionId) return;
+    activeSession = sessionResponse.session;
+    $('session-select').value = activeSession.id;
+    $('session-actions').hidden = false;
+    $('session-rename-title').value = activeSession.title;
+    $('session-archive').hidden = activeSession.status === 'archived';
+    $('session-restore').hidden = activeSession.status !== 'archived';
+    const directory = activeSession.scope.mode === 'directory';
+    $('discover').checked = directory; $('file').value = activeSession.scope.file || '';
+    $('session-scope').hidden = false;
+    $('session-scope').textContent = `固定资料范围：${directory ? '当前工作区目录发现' : activeSession.scope.file}`
+      + (workspaceAvailable ? '' : ' · 原工作区当前不可用');
+    renderRunHistory(runsResponse.runs);
+    if (runsResponse.runs.length) await openSessionRun(runsResponse.runs[0].id);
+    else clearRunView();
+  } catch (error) {
+    if (generation === viewGeneration) showError(error, 'session-error');
+  }
+  updateControls();
+}
+
+async function loadSessions(selectedId = null, fixed = fixedSessionSelection) {
+  const [active, archived] = await Promise.all([api('/api/sessions'), api('/api/sessions?archived=1')]);
+  const all = [...active.sessions, ...archived.sessions];
+  const select = $('session-select'), temporary = select.firstElementChild;
+  select.replaceChildren(temporary);
+  for (const session of all) {
+    const option = document.createElement('option'); option.value = session.id;
+    option.textContent = session.title + (session.status === 'archived' ? '（已归档）' : '');
+    select.append(option);
+  }
+  fixedSessionSelection = Boolean(fixed);
+  temporary.hidden = fixedSessionSelection;
+  $('session-create').hidden = fixedSessionSelection;
+  const wanted = selectedId || active.sessions[0]?.id || null;
+  if (wanted) { select.value = wanted; await selectSession(wanted); }
+}
+
 function prepareOutput(job) {
   clearTimeout(timer);
   activeId = job.id; renderedEvents = 0; renderedRevision = -1; viewGeneration++;
   pendingApproval = null; approvalBlockedId = null; cancelling = false; clearTimeout(approvalTimer);
   $('empty').hidden = true; $('output').hidden = false;
   for (const id of ['answer-block', 'evidence', 'failure', 'form-error', 'scope-summary', 'approval', 'artifacts']) $(id).hidden = true;
+  $('continue-run').hidden = true;
   $('events').replaceChildren(); $('citations').replaceChildren(); $('trace-path').textContent = '';
-  $('source-line').textContent = `${job.mode === 'directory' ? '目录发现' : job.file || '资料'} · ${job.question}`;
+  $('source-line').textContent = `${job.task_type === 'conversation' ? '会话记录'
+    : job.mode === 'directory' ? '目录发现' : job.file || '资料'} · ${job.question}`;
   $('copy').textContent = '复制回答';
 }
 
@@ -224,25 +362,34 @@ function render(job) {
     if (job.state === 'completed' && answer) {
       status(answer.status === 'not_found' ? '信息未记载' : '回答已完成', answer.status === 'not_found' ? 'warning' : '');
       $('answer-block').hidden = false;
-      $('answer-title').textContent = answer.status === 'not_found' ? '资料中未找到这项信息' : '资料中的答案';
+      $('answer-title').textContent = answer.status === 'not_found' ? '没有找到这项信息'
+        : job.task_type === 'conversation' ? '会话中的答案' : '资料中的答案';
       $('answer-text').textContent = answer.answer;
       $('answer-note').textContent = simulated ? '模拟演示：显示读取到的内容，未调用真实模型，也未理解问题。' : '回答通过格式与引用检查；请结合原文判断内容是否准确。';
-      $('evidence').hidden = answer.citations.length === 0;
-      $('citation-count').textContent = `${answer.citations.length} 处引用`;
+      const citations = answer.citations || answer.references || [];
+      $('evidence').hidden = citations.length === 0;
+      $('citation-count').textContent = `${citations.length} 处引用`;
       $('citations').replaceChildren();
-      for (const citation of answer.citations) {
+      for (const citation of citations) {
         const article = document.createElement('article'), heading = document.createElement('header'), quote = document.createElement('blockquote');
         article.className = 'citation';
-        heading.textContent = `${citation.path} · 第 ${citation.start_line}${citation.end_line === citation.start_line ? '' : '–' + citation.end_line} 行`;
+        heading.textContent = citation.message_id
+          ? `会话消息 ${citation.message_id} · 字符 ${citation.start}–${citation.end}`
+          : `${citation.path} · 第 ${citation.start_line}${citation.end_line === citation.start_line ? '' : '–' + citation.end_line} 行`;
         quote.textContent = citation.quote; article.append(heading, quote); $('citations').append(article);
       }
     } else {
       const cancelled = job.state === 'cancelled';
-      status(cancelled ? '已取消' : job.state === 'unable' && !job.output_file ? '无法读取' : '本次未完成', 'warning');
+      const interrupted = job.state === 'interrupted';
+      status(cancelled ? '已取消' : interrupted ? '运行已中断'
+        : job.state === 'unable' && !job.output_file ? '无法读取' : '本次未完成', 'warning');
       $('failure').hidden = false; $('failure-title').textContent = cancelled ? '本次运行已取消' : '没有生成有效答案';
       const toolError = [...job.events].reverse().find(e => e.event === 'tool.completed' && e.detail.code)?.detail.code;
       const reason = job.state === 'unable' ? (toolError || result.stop_reason) : result.stop_reason;
-      $('failure-message').textContent = messageFor(reason) + (answer?.answer ? `\n${answer.answer}` : '');
+      $('failure-message').textContent = interrupted
+        ? '服务曾在这次运行中停止。旧运行不会自动重做；可以新建一次继续运行。'
+        : messageFor(reason) + (answer?.answer ? `\n${answer.answer}` : '');
+      $('continue-run').hidden = !interrupted || !activeSessionId;
     }
   }
   updateControls();
@@ -250,15 +397,20 @@ function render(job) {
 
 async function poll() {
   if (!activeId) return;
-  const requestedId = activeId, generation = viewGeneration;
+  const requestedId = activeId, requestedSession = activeSessionId, generation = viewGeneration;
   try {
-    const job = await api(`/api/runs/${requestedId}`);
-    if (requestedId !== activeId || generation !== viewGeneration) return;
+    const response = await api(runPath(requestedId));
+    if (requestedId !== activeId || requestedSession !== activeSessionId || generation !== viewGeneration) return;
+    const job = activeSessionId ? normalizedSessionRun(response.run) : response;
     $('connection-error').hidden = true;
     render(job);
     if (busy) timer = setTimeout(poll, 450);
+    else if (activeSessionId) {
+      const runs = await api(`/api/sessions/${activeSessionId}/runs`);
+      if (requestedSession === activeSessionId && generation === viewGeneration) renderRunHistory(runs.runs);
+    }
   } catch (error) {
-    if (requestedId !== activeId || generation !== viewGeneration) return;
+    if (requestedId !== activeId || requestedSession !== activeSessionId || generation !== viewGeneration) return;
     showError(error, 'connection-error');
     if (!connectionExpired(error)) timer = setTimeout(poll, 2000);
   }
@@ -269,6 +421,7 @@ async function initialize() {
     const config = await api('/api/config');
     $('workspace').textContent = config.workspace;
     ready = config.ready; simulated = Boolean(config.provider?.simulated);
+    workspaceAvailable = config.workspace_available !== false;
     $('connection').textContent = simulated ? '模拟演示 · 未调用模型' : ready ? 'DeepSeek 已配置' : '模型未配置';
     $('connection').className = `badge ${simulated || !ready ? 'warning' : ''}`;
     if (simulated || !ready) {
@@ -282,7 +435,8 @@ async function initialize() {
       $('question').value = '项目代号、评审人和演示日期分别是什么？引用原文。';
       countQuestion(); $('question').focus();
     };
-    if (config.latest_run_id) {
+    await loadSessions(config.selected_session_id, Boolean(config.selected_session_id));
+    if (config.latest_run_id && !activeSessionId) {
       busy = true; updateControls();
       const job = await api(`/api/runs/${config.latest_run_id}`);
       $('discover').checked = job.mode === 'directory';
@@ -296,6 +450,35 @@ async function initialize() {
 $('question').addEventListener('input', countQuestion);
 $('discover').addEventListener('change', updateControls);
 $('output-file').addEventListener('input', updateControls);
+$('task-type').addEventListener('change', () => {
+  if ($('task-type').value === 'conversation') $('output-file').value = '';
+  updateControls();
+});
+$('session-mode').addEventListener('change', () => {
+  $('session-file').disabled = $('session-mode').value === 'directory';
+});
+$('session-select').addEventListener('change', () => selectSession($('session-select').value));
+$('session-create').addEventListener('click', async () => {
+  $('session-error').hidden = true;
+  const scope = $('session-mode').value === 'directory' ? {mode: 'directory'}
+    : {mode: 'file', file: $('session-file').value.trim()};
+  try {
+    const response = await api('/api/sessions', {title: $('session-name').value.trim(), scope});
+    await loadSessions(response.session.id, fixedSessionSelection);
+  } catch (error) { showError(error, 'session-error'); }
+});
+$('session-rename').addEventListener('click', async () => {
+  if (!activeSessionId) return;
+  try {
+    await api(`/api/sessions/${activeSessionId}/rename`, {title: $('session-rename-title').value.trim()});
+    await loadSessions(activeSessionId, fixedSessionSelection);
+  } catch (error) { showError(error, 'session-error'); }
+});
+for (const action of ['archive', 'restore']) $("session-" + action).addEventListener('click', async () => {
+  if (!activeSessionId) return;
+  try { await api(`/api/sessions/${activeSessionId}/${action}`, {}); await loadSessions(activeSessionId, fixedSessionSelection); }
+  catch (error) { showError(error, 'session-error'); }
+});
 document.querySelectorAll('[data-question]').forEach(button => button.addEventListener('click', () => {
   $('question').value = button.dataset.question; countQuestion(); $('question').focus();
 }));
@@ -304,10 +487,22 @@ $('question-form').addEventListener('submit', async event => {
   $('form-error').hidden = true; busy = true; activeId = null; viewGeneration++; clearTimeout(timer); updateControls();
   try {
     const question = $('question').value.trim();
-    const body = $('discover').checked ? {mode: 'directory', question} : {file: $('file').value.trim(), question};
     const outputFile = $('output-file').value.trim();
-    if (outputFile) body.output_file = outputFile;
-    const job = await api('/api/runs', body);
+    let job;
+    if (activeSessionId) {
+      const requestedSession = activeSessionId, generation = viewGeneration;
+      const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+      const response = await api(`/api/sessions/${requestedSession}/runs`, {
+        client_request_id: requestId, task_type: $('task-type').value,
+        question, output_file: outputFile || null
+      });
+      if (requestedSession !== activeSessionId || generation !== viewGeneration) return;
+      job = normalizedSessionRun(response.run);
+    } else {
+      const body = $('discover').checked ? {mode: 'directory', question} : {file: $('file').value.trim(), question};
+      if (outputFile) body.output_file = outputFile;
+      job = await api('/api/runs', body);
+    }
     prepareOutput(job); render(job); timer = setTimeout(poll, 100);
   } catch (error) {
     if (!error.code || error.code === 'RUN_ACTIVE') {
@@ -319,15 +514,16 @@ $('question-form').addEventListener('submit', async event => {
 });
 $('cancel').addEventListener('click', async () => {
   if (!activeId || !busy || cancelling) return;
-  const requestedId = activeId, generation = viewGeneration;
+  const requestedId = activeId, requestedSession = activeSessionId, generation = viewGeneration;
   cancelSendingId = requestedId; cancelling = true; $('cancel').disabled = true; updateApprovalControls();
   try {
-    const job = await api(`/api/runs/${requestedId}/cancel`, {});
+    const response = await api(runPath(requestedId, '/cancel'), {});
+    const job = requestedSession ? normalizedSessionRun(response.run) : response;
     if (cancelSendingId === requestedId) cancelSendingId = null;
-    if (requestedId === activeId && generation === viewGeneration) render(job);
+    if (requestedId === activeId && requestedSession === activeSessionId && generation === viewGeneration) render(job);
   } catch (error) {
     if (cancelSendingId === requestedId) cancelSendingId = null;
-    if (requestedId === activeId && generation === viewGeneration) {
+    if (requestedId === activeId && requestedSession === activeSessionId && generation === viewGeneration) {
       cancelling = false; $('cancel').disabled = false; showError(error);
       if (!connectionExpired(error)) updateApprovalControls();
     }
@@ -337,13 +533,14 @@ async function decideApproval(decision) {
   if (!pendingApproval || !ready || cancelling || Date.now() >= approvalDeadline) return;
   const approvalId = pendingApproval.approval_id || pendingApproval.id;
   if (approvalSendingId === approvalId || approvalBlockedId === approvalId) return;
-  const requestedId = activeId, generation = viewGeneration;
+  const requestedId = activeId, requestedSession = activeSessionId, generation = viewGeneration;
   approvalSendingId = approvalId; $('approval-error').hidden = true; updateApprovalControls();
   try {
-    const job = await api(`/api/runs/${requestedId}/approvals/${approvalId}`, {decision});
-    if (requestedId === activeId && generation === viewGeneration) render(job);
+    const response = await api(runPath(requestedId, `/approvals/${approvalId}`), {decision});
+    const job = requestedSession ? normalizedSessionRun(response.run) : response;
+    if (requestedId === activeId && requestedSession === activeSessionId && generation === viewGeneration) render(job);
   } catch (error) {
-    if (requestedId !== activeId || generation !== viewGeneration) return;
+    if (requestedId !== activeId || requestedSession !== activeSessionId || generation !== viewGeneration) return;
     showError(error, 'approval-error');
     if (!connectionExpired(error)) {
       approvalBlockedId = approvalId;
@@ -351,11 +548,29 @@ async function decideApproval(decision) {
     }
   } finally {
     if (approvalSendingId === approvalId) approvalSendingId = null;
-    if (requestedId === activeId && generation === viewGeneration) updateApprovalControls();
+    if (requestedId === activeId && requestedSession === activeSessionId && generation === viewGeneration) updateApprovalControls();
   }
 }
 $('approval-allow').addEventListener('click', () => decideApproval('allow'));
 $('approval-deny').addEventListener('click', () => decideApproval('deny'));
+$('continue-run').addEventListener('click', async () => {
+  if (!activeSessionId || !activeId || busy) return;
+  const sessionId = activeSessionId, parentId = activeId, generation = viewGeneration;
+  busy = true; updateControls();
+  try {
+    const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+    const response = await api(`/api/sessions/${sessionId}/continue`, {
+      run_id: parentId, client_request_id: requestId
+    });
+    if (sessionId !== activeSessionId || generation !== viewGeneration) return;
+    const job = normalizedSessionRun(response.run);
+    prepareOutput(job); render(job); timer = setTimeout(poll, 100);
+  } catch (error) {
+    if (sessionId === activeSessionId && generation === viewGeneration) {
+      busy = false; updateControls(); showError(error);
+    }
+  }
+});
 $('copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('answer-text').textContent); $('copy').textContent = '已复制'; }
   catch { $('copy').textContent = '请选中文字复制'; }

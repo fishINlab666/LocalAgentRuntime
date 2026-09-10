@@ -14,7 +14,41 @@ from report_provider import ReportProvider
 
 class BrowserProvider(DemoProvider):
     def complete(self, messages, tools, timeout):
-        task = json.loads(messages[1]['content'])
+        task_index, task = None, None
+        for index in range(len(messages) - 1, 0, -1):
+            if messages[index].get('role') != 'user':
+                continue
+            try:
+                candidate = json.loads(messages[index].get('content', ''))
+            except (TypeError, ValueError):
+                continue
+            if isinstance(candidate, dict) and 'question' in candidate and (
+                    'file' in candidate or 'directory' in candidate):
+                task_index, task = index, candidate
+                break
+        if task is None:
+            for message in reversed(messages):
+                if message.get('role') != 'user':
+                    continue
+                try:
+                    candidate = json.loads(message.get('content', ''))
+                except (TypeError, ValueError):
+                    continue
+                records = candidate.get('records') if isinstance(candidate, dict) else None
+                if not isinstance(records, list):
+                    continue
+                source = next((record for record in reversed(records)
+                               if record.get('role') == 'user' and isinstance(record.get('text'), str)), None)
+                if source is not None:
+                    text = source['text']
+                    return ModelReply({'role': 'assistant', 'content': json.dumps({
+                        'status': 'answered', 'answer': '上一次要求是：' + text,
+                        'references': [{'message_id': source['message_id'],
+                                        'start': 0, 'end': len(text)}]}, ensure_ascii=False)})
+            raise ProviderError('INVALID_MODEL_RESPONSE')
+        # DemoProvider expects the current task at index 1. Durable history remains data,
+        # while the current run's native assistant/tool chain stays after that task.
+        messages = [messages[0], messages[task_index], *messages[task_index + 1:]]
         question = task['question']
         if task.get('output_file'):
             if not hasattr(self, 'report_provider'):

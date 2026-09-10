@@ -443,7 +443,28 @@ class SessionService:
         cursor: str | None = None,
     ) -> Page:
         resolved, device, inode = self._workspace_identity(workspace)
-        parameters: list = [str(resolved), device, inode]
+        return self.list_bound(
+            str(resolved), device, inode, archived=archived, cursor=cursor
+        )
+
+    def list_bound(
+        self,
+        workspace_path: str,
+        workspace_device: int,
+        workspace_inode: int,
+        *,
+        archived: bool = False,
+        cursor: str | None = None,
+    ) -> Page:
+        """List sessions already bound to a startup identity without re-opening it."""
+        if (
+            not isinstance(workspace_path, str)
+            or not workspace_path
+            or type(workspace_device) is not int
+            or type(workspace_inode) is not int
+        ):
+            raise SessionError("SESSION_STORE_ERROR")
+        parameters: list = [workspace_path, workspace_device, workspace_inode]
         status = "archived" if archived else "active"
         where = "workspace_path=? AND workspace_device=? AND workspace_inode=?"
         where += " AND status=?"
@@ -520,6 +541,177 @@ class SessionService:
         if row is None:
             raise SessionError("NOT_FOUND")
         return self._run_from_row(row)
+
+    @staticmethod
+    def _encode_run_cursor(session_id: str, started_at: float, run_id: str) -> str:
+        payload = _canonical_json([session_id, started_at, run_id]).encode("utf-8")
+        return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_run_cursor(session_id: str, cursor: str) -> tuple[float, str]:
+        try:
+            if not isinstance(cursor, str) or not cursor:
+                raise ValueError()
+            padding = "=" * (-len(cursor) % 4)
+            raw = base64.b64decode(cursor + padding, altchars=b"-_", validate=True)
+            value = json.loads(raw.decode("utf-8"))
+            if (
+                not isinstance(value, list)
+                or len(value) != 3
+                or value[0] != session_id
+                or type(value[1]) not in (int, float)
+                or not math.isfinite(value[1])
+                or not isinstance(value[2], str)
+                or not value[2]
+            ):
+                raise ValueError()
+            return float(value[1]), value[2]
+        except (ValueError, TypeError, UnicodeError, json.JSONDecodeError):
+            raise SessionError("NOT_FOUND") from None
+
+    def list_runs(self, session_id: str, *, cursor: str | None = None) -> Page:
+        self.load(session_id)
+        parameters: list = [session_id]
+        where = "session_id=?"
+        if cursor is not None:
+            started_at, run_id = self._decode_run_cursor(session_id, cursor)
+            where += " AND (started_at < ? OR (started_at = ? AND id < ?))"
+            parameters.extend((started_at, started_at, run_id))
+        parameters.append(self.PAGE_SIZE + 1)
+        try:
+            rows = self.store.connection().execute(
+                f"""SELECT id, session_id, client_request_id, request_json,
+                           state, phase, stop_reason, started_at, finished_at
+                    FROM runs WHERE {where}
+                    ORDER BY started_at DESC, id DESC LIMIT ?""",
+                parameters,
+            ).fetchall()
+        except (sqlite3.DatabaseError, StoreError):
+            raise SessionError("SESSION_STORE_ERROR") from None
+        has_more = len(rows) > self.PAGE_SIZE
+        items = tuple(self._run_from_row(row) for row in rows[: self.PAGE_SIZE])
+        next_cursor = None
+        if has_more and items:
+            last = items[-1]
+            next_cursor = self._encode_run_cursor(
+                session_id, last.started_at, last.id
+            )
+        return Page(items=items, next_cursor=next_cursor)
+
+    def run_view(self, session_id: str, run_id: str) -> dict:
+        """Return one session-scoped durable run view for CLI and HTTP."""
+        run = self.load_run(session_id, run_id)
+        try:
+            connection = self.store.connection()
+            metadata = connection.execute(
+                """SELECT result_json, trace_path, provider_json
+                   FROM runs WHERE session_id=? AND id=?""",
+                (session_id, run_id),
+            ).fetchone()
+            tool_rows = connection.execute(
+                """SELECT call_id, name, stage, assistant_message_id,
+                          result_message_id, publication_state, recovery_state
+                   FROM tool_calls WHERE session_id=? AND run_id=?
+                   ORDER BY rowid""",
+                (session_id, run_id),
+            ).fetchall()
+            approval_rows = connection.execute(
+                """SELECT id, call_id, preview_json, decision, created_at,
+                          decided_at, invalidated_at
+                   FROM approvals WHERE session_id=? AND run_id=?
+                   ORDER BY created_at, id""",
+                (session_id, run_id),
+            ).fetchall()
+            artifact_rows = connection.execute(
+                """SELECT id, call_id, path, bytes, sha256, receipt_json,
+                          recovery_state, confirmed_at
+                   FROM artifacts WHERE session_id=? AND run_id=?
+                   ORDER BY confirmed_at, id""",
+                (session_id, run_id),
+            ).fetchall()
+            manifest_rows = connection.execute(
+                """SELECT request_seq, payload_json, input_sha256, input_bytes,
+                          created_at
+                   FROM context_manifests WHERE session_id=? AND run_id=?
+                   ORDER BY request_seq""",
+                (session_id, run_id),
+            ).fetchall()
+            messages = self.store.load_run_messages(session_id, run_id)
+        except StoreError as error:
+            if error.code == "NOT_FOUND":
+                raise SessionError("NOT_FOUND") from None
+            raise SessionError("SESSION_STORE_ERROR") from None
+        except sqlite3.DatabaseError:
+            raise SessionError("SESSION_STORE_ERROR") from None
+
+        def parsed(value):
+            if value is None:
+                return None
+            return _parse_json_object(value)
+
+        return {
+            "id": run.id,
+            "session_id": run.session_id,
+            "client_request_id": run.client_request_id,
+            "task_type": run.submission.task_type,
+            "question": run.submission.question,
+            "output_file": run.submission.output_path,
+            "parent_run_id": run.submission.parent_run_id,
+            "state": run.state,
+            "phase": run.phase,
+            "stop_reason": run.stop_reason,
+            "started_at": run.started_at,
+            "finished_at": run.finished_at,
+            "result": parsed(metadata[0]),
+            "trace_path": metadata[1],
+            "provider": parsed(metadata[2]),
+            "messages": [
+                {
+                    "id": item.id,
+                    "role": item.role,
+                    "source_kind": item.source_kind,
+                    "payload": item.payload,
+                    "validation_state": item.validation_state,
+                    "session_seq": item.session_seq,
+                    "run_seq": item.run_seq,
+                    "created_at": item.created_at,
+                }
+                for item in messages
+            ],
+            "tool_calls": [
+                {
+                    "call_id": row[0], "name": row[1], "stage": row[2],
+                    "assistant_message_id": row[3], "result_message_id": row[4],
+                    "publication_state": row[5], "recovery_state": row[6],
+                }
+                for row in tool_rows
+            ],
+            "approvals": [
+                {
+                    "id": row[0], "call_id": row[1], "preview": parsed(row[2]),
+                    "decision": row[3], "created_at": row[4],
+                    "decided_at": row[5], "invalidated_at": row[6],
+                }
+                for row in approval_rows
+            ],
+            "artifacts": [
+                {
+                    "id": row[0], "call_id": row[1], "path": row[2],
+                    "bytes": row[3], "sha256": row[4], "receipt": parsed(row[5]),
+                    "recovery_state": row[6], "confirmed_at": row[7],
+                }
+                for row in artifact_rows
+            ],
+            "context_manifests": [
+                {
+                    "request_seq": row[0], "payload": parsed(row[1]),
+                    "input_sha256": row[2], "input_bytes": row[3],
+                    "created_at": row[4],
+                }
+                for row in manifest_rows
+            ],
+            "revision": len(messages) + len(tool_rows) + (run.finished_at is not None),
+        }
 
     def load_message(self, session_id: str, message_id: str) -> MessageRecord:
         try:
