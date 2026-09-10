@@ -2,7 +2,7 @@
 
 ## 当前任务入口（2026-09-10）
 
-当前为**会话管理设计和实施计划已核实，应用开发尚未开始**。设计原文对照的两项 P2 已关闭，定向设计 Gate：PASS；重点是长期保存、重启继续、会话隔离和长历史可回查。设计及审查记录见[会话管理模块设计 §0](../../docs/superpowers/specs/2026-09-10-session-management-design.md)，可执行步骤见[会话管理实施计划 §0](../../docs/superpowers/plans/2026-09-10-session-management.md)。用户已接受本次修订：旧调用参数、意图及结果可回查；目录免重复审批明确后置。下一步从实施计划 Task 1 开始，按 A/B/C 三个停止点核实；应用实现、离线验证、真实验证均未开始。工具层原有验收继续有效，不恢复旧专名加固或重复原固定组。
+当前为**会话管理里程碑 A 已实现并完成离线核实**。SQLite 状态库、单写者锁、Session CRUD、完整提交幂等、跨会话归属、RunJournal、中断恢复分类、发布未知窗口和一致备份已经落地；会话相关 36 项与 Journal 4 项测试通过且无 `ResourceWarning`。这证明“保存后找得回”的存储基础，不代表当前 Runtime、页面或 CLI 已能连续会话，也不代表真实模型验收完成。设计及审查记录见[会话管理模块设计 §0](../../docs/superpowers/specs/2026-09-10-session-management-design.md)，执行状态见[会话管理实施计划 §0](../../docs/superpowers/plans/2026-09-10-session-management.md)。下一步从 Task 4 接入显式 Journal seam；不恢复旧专名加固，不重复目录固定组，也不调用真实模型。
 
 ### 已完成的工具层基线
 

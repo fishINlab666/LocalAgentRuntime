@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-**会话管理设计和实施计划已完成并核实，应用代码尚未开始实现。** 目标为会话长期保存、重启继续、隔离和长历史回查，见[会话模块设计](../docs/superpowers/specs/2026-09-10-session-management-design.md)与[实施计划](../docs/superpowers/plans/2026-09-10-session-management.md)。应用当前仍是下述已验收工具层版本。
+**会话管理里程碑 A 已实现并通过离线核实。** SQLite、Session/Run/Message 持久结构、完整提交幂等、RunJournal、中断分类和一致备份已经落地；Runtime、页面与 CLI 尚未接入，因此当前可运行应用仍是下述已验收工具层版本。目标和后续步骤见[会话模块设计](../docs/superpowers/specs/2026-09-10-session-management-design.md)与[实施计划](../docs/superpowers/plans/2026-09-10-session-management.md)。
 
 **工具层及结果契约复核已通过，本批收口。** 默认仍是只读问答；填写输出路径才启用逐次确认的新建文件能力。Loop 会校验冻结参数、用户所见预览、工具错误及本次真实执行证明，写入成功还必须经过一次性发布并取得与批准内容一致的回执；结果始终按原调用 ID 进入下一轮。此前真实单文件、拒绝报告、确认报告三个 run 共使用 10 次 DeepSeek 请求，确认后实际创建的 957 字节报告与预览一致；本次加固没有新增真实 API 调用。证据见[真实验证记录](trial/tool-layer-live-check.md)，当前状态见[阶段验收记录](trial/directory-check.md)，具体实施见[工具层方案](../docs/superpowers/plans/2026-09-10-tool-runtime.md)。后续开发遵循根目录[项目规则](../AGENTS.md)。
 - 运行环境：macOS、Python 3.14.6；代码使用 Python 3.11+ 标准库，不需要安装依赖。Python 3.11 / Linux 尚未实测，Windows 不支持本版文件打开方式。
@@ -12,7 +12,7 @@
 - 单文件模式只读用户指定的一份 UTF-8 `.md` / `.txt`；目录模式允许模型发现和选择最多 4 份文件，每份上限仍为 32 KiB。写工具只允许新建用户指定的一个 `.md` / `.txt`，最多 32 KiB，不覆盖、不自动更名或创建父目录；没有 Shell。
 - 两份会议与产品设计稿用于确定需求；会议 02 的小节选已用于真实模型验证。原始会议 01 超过大小上限，三份长文的综合试用在后续阶段。
 
-工具阶段已按结果回填与确认后的实际产物收口；会话管理现处于**待按实施计划开发**阶段。流式正文尚未实现，不能将当前版本称为完整 M1。前一阶段已通过的真实基准不会因本次文档更新而重复执行。
+工具阶段已按结果回填与确认后的实际产物收口；会话管理现处于**里程碑 A 完成、等待 Runtime 接入**阶段。流式正文尚未实现，不能将当前版本称为完整 M1。前一阶段已通过的真实基准不会因本次开发而重复执行。
 
 ## 使用本地页面
 
@@ -212,4 +212,4 @@ PYTHONPATH=local-agent python3 -m unittest discover -s local-agent/tests -v
 | `local_agent/demo.py`、`__main__.py` | 模拟替身与运行入口 |
 | `tests/` | 文件、引用、协议、Runtime、入口与验收规则测试 |
 
-已实现的单文件、页面及目录能力见 [目录发现计划](../docs/superpowers/plans/2026-09-08-local-agent-directory-discovery.md)，当前阶段结论统一见 [阶段验收记录](trial/directory-check.md)。流式输出、长会议分段、持久化、MCP、Skill、Cron、Memory 均未作为当前任务启动。
+已实现的单文件、页面及目录能力见 [目录发现计划](../docs/superpowers/plans/2026-09-08-local-agent-directory-discovery.md)，当前阶段结论统一见 [阶段验收记录](trial/directory-check.md)。持久存储基础已实现但尚未接入运行入口；流式输出、长会议分段、MCP、Skill、Cron、Memory 均未作为当前任务启动。

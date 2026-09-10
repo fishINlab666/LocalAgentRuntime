@@ -12,14 +12,14 @@
 
 ## §0 当前进度、范围与停止条件
 
-- 状态：**实施计划已编排并完成结构、接口、链接与 SQLite schema 自检；会话应用代码、离线验收和真实验收均未开始。**
+- 状态：**里程碑 A（Task 1–3）已实现并核实：SQLite、Session CRUD、完整提交幂等、RunJournal、中断分类及一致备份通过离线测试；Runtime、网页/CLI 接入和真实验收尚未开始。**
 - 设计依据：[会话管理模块设计](../specs/2026-09-10-session-management-design.md)已通过原文对照 Gate。计划不重新讨论 SQLite、恢复为新 Run、历史查询或逐次审批等已确认取舍。
-- 当前主阻塞：现有 `Runtime`、`WebRuns.jobs` 和审批都只在进程内；Trace 经过脱敏，不能恢复原会话。
+- 当前主阻塞：持久存储基础已经就绪，但现有 `Runtime`、`ToolRuntime`、`WebRuns.jobs` 和审批尚未接入 Journal；下一步从 Task 4 的显式 seam 开始。
 - 本批交付：设计 §2 的 Session、Run、Message、ToolCall、Approval、Artifact、摘要、历史查询、网页/CLI 入口和备份。
 - 明确不交付：跨设备、多用户、跨会话 Memory、向量检索、自动恢复执行、目录免重复审批、覆盖文件、后台守护、流式输出和新 Provider。
 - 固定完成条件：设计 §11 的 S1–S13 全部取得对应证据；代码存在、单元测试通过或页面能打开都不能单独称为完成。
 - 真实模型成本：阶段 A、B、C 的开发和故障注入全部使用测试 Provider；离线通过后最多进行 6 次用户提交、每次连同摘要最多 6 次模型请求，总上限 36 次。失败只重跑受影响场景。
-- 工作区当前含已完成工具层的未提交改动。执行前只读检查 `git status --short`，保留这些变化；禁止用 reset/checkout 清理。每次提交前用 `git diff --cached --check` 和 `git diff --cached --stat` 确认暂存范围。
+- 工具层基线已保存为本地提交 `2d7c38a`；里程碑 A 分任务保存为 `2720db3`、`c3cdc25`、`50efc19`、`7641fde`。后续仍在每次提交前用 `git diff --cached --check` 和 `git diff --cached --stat` 确认暂存范围。
 
 执行前先为已经验收的工具层和已批准的会话设计建立本地基线提交，确保后续 `runtime.py` 等共享文件的提交只含会话增量。不要推送，也不要重跑旧真实模型组：
 
@@ -101,7 +101,7 @@ Web / CLI -> SessionService -> SessionStore
 - Create: `local-agent/tests/test_session_store.py`
 - Modify: `local-agent/.gitignore`
 
-- [ ] **Step 1：先写状态目录、schema 与锁的失败测试**
+- [x] **Step 1：先写状态目录、schema 与锁的失败测试**
 
 在 `test_session_store.py` 写入以下首组测试；测试只使用临时目录：
 
@@ -154,13 +154,13 @@ class SessionStoreTests(unittest.TestCase):
             SessionStore.open(self.state)
 ```
 
-- [ ] **Step 2：运行测试，确认因模块缺失而失败**
+- [x] **Step 2：运行测试，确认因模块缺失而失败**
 
 Run: `cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent && python3 -m unittest discover -s tests -p 'test_session_store.py' -v`
 
 Expected: FAIL，首个原因是 `ModuleNotFoundError: No module named 'local_agent.session_store'`。
 
-- [ ] **Step 3：实现状态所有者、连接配置和完整 v1 schema**
+- [x] **Step 3：实现状态所有者、连接配置和完整 v1 schema**
 
 `session_store.py` 的外部 interface 固定为：
 
@@ -326,17 +326,17 @@ PRAGMA user_version=1;
 
 将 `*.sqlite3`、`*.sqlite3-wal`、`*.sqlite3-shm`、`*.sqlite3.backup` 和 `state.lock` 加入 `local-agent/.gitignore`。状态默认在仓库外，但排除规则防止用户通过 `--state-dir` 误放进项目。
 
-- [ ] **Step 4：补备份与线程连接测试并实现**
+- [x] **Step 4：补备份与线程连接测试并实现**
 
 测试必须断言 `backup()` 使用 `sqlite3.Connection.backup`，并以 `uri = destination.resolve().as_uri() + "?mode=ro"`、`sqlite3.connect(uri, uri=True)` 独立打开。目的目录位于任一已绑定资料工作区时返回 `STATE_DIR_INSIDE_WORKSPACE`。`SessionStore` 为每个线程延迟创建连接；worker 在 `finally` 中调用内部 `close_thread_connection()`。网页关闭时先停止并 join worker，再由 `close()` 释放最后连接和进程锁，禁止跨线程关闭仍在使用的 SQLite connection。迁移前把旧库备份成带版本和时间的 `.backup`；备份或迁移失败时抛 `STATE_MIGRATION_FAILED`，不删除或重建旧库。
 
-- [ ] **Step 5：运行定向测试**
+- [x] **Step 5：运行定向测试**
 
 Run: `cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent && python3 -W error::ResourceWarning -m unittest discover -s tests -p 'test_session_store.py' -v`
 
 Expected: PASS；没有 `ResourceWarning`。
 
-- [ ] **Step 6：保存阶段提交**
+- [x] **Step 6：保存阶段提交**
 
 ```sh
 git -C /Users/wujingyu/Desktop/AI/projects/dev-agent add local-agent/local_agent/session_store.py local-agent/tests/test_session_store.py local-agent/.gitignore
@@ -353,7 +353,7 @@ git -C /Users/wujingyu/Desktop/AI/projects/dev-agent commit -m "feat: add durabl
 - Create: `local-agent/tests/test_sessions.py`
 - Modify: `local-agent/local_agent/session_store.py`
 
-- [ ] **Step 1：写 CRUD、隔离和完整指纹测试**
+- [x] **Step 1：写 CRUD、隔离和完整指纹测试**
 
 测试用固定 `client_request_id="request-1"` 连续提交：完全相同语义返回同一 `run_id`；依次只改 `question`、`task_type`、`scope`、`output_path`、`parent_run_id`、`execution_options` 时均抛 `SESSION_REQUEST_CONFLICT`。另建 A/B 两个 Session，断言 B 无法读取 A 的 Run 或 message。父 Run 变体引用测试中先创建的真实 interrupted Run，不能用不存在的 ID 绕过指纹检查。
 
@@ -383,13 +383,13 @@ for changed in (
             service.submit(session_a.id, changed)
 ```
 
-- [ ] **Step 2：运行测试，确认接口尚不存在**
+- [x] **Step 2：运行测试，确认接口尚不存在**
 
 Run: `cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent && python3 -m unittest discover -s tests -p 'test_sessions.py' -v`
 
 Expected: FAIL，缺少 `sessions.RunSubmission` 或 `SessionService`。
 
-- [ ] **Step 3：定义不可变值对象与规范指纹**
+- [x] **Step 3：定义不可变值对象与规范指纹**
 
 在 `sessions.py` 定义：
 
@@ -445,15 +445,15 @@ continue_interrupted(session_id: str, run_id: str, client_request_id: str) -> Pr
 
 创建时用规范路径和 `os.stat()` 的 device/inode 固定工作区身份；`mode=file` 必须有一个受支持的相对 `target_path`，`mode=directory` 的 `target_path` 必须为空，输入范围变化通过 `create()` 建新 Session。标题去首尾空白后限制 1–120 字；列表每页 20 条并使用稳定 `(updated_at,id)` 游标。
 
-- [ ] **Step 4：实现原子提交和跨会话归属检查**
+- [x] **Step 4：实现原子提交和跨会话归属检查**
 
 `submit()` 在单个 `BEGIN IMMEDIATE` 事务内依次完成：验证 Session 为 active；比较 `(session_id, client_request_id)`；把包含 scope 的完整规范提交保存到 `request_json`；插入 `runs(state='queued', phase='submitted')`；分配 `session_seq/run_seq=1` 并插入用户原话；递增 Session revision。事务提交后才返回 `created=True`。重复指纹一致返回旧 Run；指纹不同抛 `SESSION_REQUEST_CONFLICT`。所有 `load_run/load_message` SQL 同时带 `session_id`，其他会话 ID 统一返回 `NOT_FOUND`。
 
-- [ ] **Step 5：实现继续中断为新 Run**
+- [x] **Step 5：实现继续中断为新 Run**
 
 `continue_interrupted()` 仅接受所属 Session 中 `state='interrupted'` 的旧 Run；它复制旧问题、任务类型和固定 scope，设置 `parent_run_id`，但将 `output_path` 置空、使用新的 `client_request_id`。它不复制调用 ID、预算、审批或执行许可。
 
-- [ ] **Step 6：运行定向测试并提交**
+- [x] **Step 6：运行定向测试并提交**
 
 ```sh
 cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent
@@ -474,7 +474,7 @@ Expected: 两个测试模块全部 PASS。
 - Create: `local-agent/tests/test_run_journal.py`
 - Create: `local-agent/tests/test_session_recovery.py`
 
-- [ ] **Step 1：写消息顺序、调用归属和恢复失败测试**
+- [x] **Step 1：写消息顺序、调用归属和恢复失败测试**
 
 构造一个 Run，依次记录用户消息、合法 assistant ToolCall、工具失败、最终回答。断言角色顺序、`session_seq/run_seq` 单调、`tool_calls.result_message_id` 指向原 ID 的 tool message。再构造 `model_in_flight`、`tool_started`、`approval_allowed`、`publication_intent_committed`、`publication_receipt_committed` 五种未结束状态，关闭并重开 Store 后断言：前三种旧 Run 为 `interrupted`，intent 无回执为 `WRITE_OUTCOME_UNKNOWN`，已有回执保留 Artifact。
 
@@ -494,7 +494,7 @@ self.assertEqual([item.role for item in history], ["user", "assistant", "tool"])
 self.assertEqual(history[-1].payload["tool_call_id"], "call-1")
 ```
 
-- [ ] **Step 2：运行失败测试**
+- [x] **Step 2：运行失败测试**
 
 Run these commands from `/Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent`:
 
@@ -505,7 +505,7 @@ python3 -m unittest discover -s tests -p 'test_session_recovery.py' -v
 
 Expected: FAIL，`PreparedRun` 尚不能创建 Journal。
 
-- [ ] **Step 3：实现窄 RunJournal interface**
+- [x] **Step 3：实现窄 RunJournal interface**
 
 `PreparedRun` 增加 `journal`。`RunJournal` 只暴露以下有顺序语义的方法：
 
@@ -523,17 +523,17 @@ finish_run(result: dict) -> None
 
 每个方法开启自己的短事务并验证前态；模型调用、审批等待和文件 I/O 期间不得持事务。`record_model_reply()` 必须保存原始合法或非法 assistant payload；只有协议合法时，才在同一事务从该 payload 建 ToolCall 索引。`tool_calls` 只保存消息引用、名称和阶段，禁止复制 `arguments`。无对应 ToolCall 的结果、重复 terminal 结果和跨 Run call ID 均抛 `JOURNAL_ORDER_ERROR`。
 
-- [ ] **Step 4：实现启动恢复和发布结果分类**
+- [x] **Step 4：实现启动恢复和发布结果分类**
 
 `SessionStore.recover_interrupted(process_generation)` 在取得所有者锁后运行一次。对 `queued/running/model_in_flight/tool_started/waiting_approval` 设 `interrupted`；审批许可全部标记失效。`publication_intent_json` 已提交而无 Artifact 时设 `WRITE_OUTCOME_UNKNOWN`，并在同一 workspace 的所有 Session 中锁定该目标路径；有 Artifact 回执时保留 confirmed。恢复只更新记录，不启动 Provider、工具或审批线程。
 
 只读核对未知目标可返回 `missing/present_same_hash/present_different_hash`，但三者都不能自动升级为“当时已创建”。用户明确选择保留或改用新输出目标后才解除目标锁；首版不自动删除、覆盖或改名。
 
-- [ ] **Step 5：实现一致在线备份测试**
+- [x] **Step 5：实现一致在线备份测试**
 
 在一个连接保持 WAL 活跃时调用 `store.backup(destination)`，用标准库 `sqlite3` 的 URI `mode=ro` 打开备份，断言 Run、messages、ToolCall、Artifact 数量和关联一致；原 Artifact 文件不出现在备份目录。备份检查不取得生产状态目录的所有者锁，也不触发迁移或恢复。
 
-- [ ] **Step 6：运行里程碑 A 验证并提交**
+- [x] **Step 6：运行里程碑 A 验证并提交**
 
 ```sh
 cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent
