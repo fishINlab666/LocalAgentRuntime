@@ -224,6 +224,8 @@ def _validate_submission(submission: object) -> RunSubmission:
         submission.output_path
     ):
         raise SessionError("OUTPUT_PATH_INVALID")
+    if submission.task_type == "conversation" and submission.output_path is not None:
+        raise SessionError("OUTPUT_PATH_INVALID")
     if submission.parent_run_id is not None and (
         not isinstance(submission.parent_run_id, str)
         or not submission.parent_run_id.strip()
@@ -736,3 +738,160 @@ class SessionService:
             raise
         except (sqlite3.DatabaseError, StoreError, OSError):
             raise SessionError("SESSION_STORE_ERROR") from None
+
+    def _current_user_seq(self, session_id: str, run_id: str) -> int:
+        try:
+            row = self.store.connection().execute(
+                """SELECT session_seq FROM messages
+                   WHERE session_id=? AND run_id=? AND role='user'
+                   ORDER BY run_seq LIMIT 1""",
+                (session_id, run_id),
+            ).fetchone()
+        except (sqlite3.DatabaseError, StoreError):
+            raise SessionError("SESSION_STORE_ERROR") from None
+        if row is None:
+            raise SessionError("SESSION_STORE_ERROR")
+        return row[0]
+
+    def _stored_result(self, prepared: PreparedRun) -> dict:
+        try:
+            row = self.store.connection().execute(
+                """SELECT state, phase, stop_reason, result_json
+                   FROM runs WHERE session_id=? AND id=?""",
+                (prepared.session_id, prepared.run_id),
+            ).fetchone()
+        except (sqlite3.DatabaseError, StoreError):
+            raise SessionError("SESSION_STORE_ERROR") from None
+        if row is None:
+            raise SessionError("NOT_FOUND")
+        if row[3] is not None:
+            result = _parse_json_object(row[3])
+            result["idempotent_replay"] = True
+            return result
+        return {
+            "run_id": prepared.run_id,
+            "state": row[0],
+            "phase": row[1],
+            "stop_reason": row[2],
+            "answer": None,
+            "idempotent_replay": True,
+        }
+
+    def execute(self, prepared: PreparedRun, provider, trace, *, approvals=None,
+                control=None, config=None) -> dict:
+        """Build a fresh run-local authority set and execute one durable submission."""
+        if not isinstance(prepared, PreparedRun):
+            raise SessionError("SUBMISSION_INVALID")
+        if not prepared.created:
+            return self._stored_result(prepared)
+
+        from .context import ContextBuilder
+        from .conversation import ConversationPolicy, SessionTaskPolicy
+        from .discovery import DirectoryTools
+        from .file_tools import adapt_tools
+        from .files import ReadFile
+        from .runtime import RunConfig, Runtime
+        from .session_history import SessionHistoryTool
+        from .tool_runtime import ToolRegistry, ToolRuntime
+
+        session = self.load(prepared.session_id)
+        before_seq = self._current_user_seq(prepared.session_id, prepared.run_id)
+        history = SessionHistoryTool(
+            self.store, prepared.session_id, before_seq=before_seq
+        )
+        target = None
+
+        def fail_before_provider(code):
+            result = {
+                "run_id": prepared.run_id,
+                "state": "failed",
+                "stop_reason": code,
+                "model_calls": 0,
+                "answer": None,
+                "provider": getattr(provider, "metadata", {}),
+                "trace_path": str(getattr(trace, "path", "")),
+            }
+            try:
+                prepared.journal.finish_run(result)
+            except StoreError:
+                result["stop_reason"] = "SESSION_STORE_ERROR"
+            return result
+
+        try:
+            if prepared.submission.task_type == "files":
+                self._check_workspace_identity(
+                    session.workspace_path,
+                    session.workspace_device,
+                    session.workspace_inode,
+                )
+                workspace = Path(session.workspace_path)
+                if session.scope.mode == "file":
+                    target = session.scope.target_path
+                    engine = adapt_tools(
+                        ReadFile(workspace, {target}), prepared.submission.output_path
+                    )
+                else:
+                    engine = adapt_tools(
+                        DirectoryTools(workspace), prepared.submission.output_path
+                    )
+                if (prepared.submission.output_path is not None
+                        and self.store.inspect_unknown_publication(
+                            prepared.session_id, prepared.submission.output_path
+                        ) is not None):
+                    return fail_before_provider("WRITE_OUTCOME_UNKNOWN")
+                engine.registry.register(history)
+                engine.policy = SessionTaskPolicy(engine.policy)
+                policy = engine.policy
+            else:
+                policy = ConversationPolicy(
+                    self.store, prepared.session_id, before_seq=before_seq
+                )
+                engine = ToolRuntime(ToolRegistry([history]), policy)
+        except SessionError as error:
+            if error.code in {"WORKSPACE_CHANGED", "WORKSPACE_NOT_FOUND"}:
+                return fail_before_provider("WORKSPACE_UNAVAILABLE")
+            raise
+        except Exception:
+            return fail_before_provider("WORKSPACE_UNAVAILABLE")
+
+        context = ContextBuilder(self.store, prepared.session_id, prepared.run_id)
+
+        class RequestBuilder:
+            def build(inner_self, request, limit):
+                built = context.build(request, limit)
+                setter = getattr(policy, "set_visible_messages", None)
+                if callable(setter):
+                    setter(built.manifest["selected_message_ids"])
+                return built
+
+        if approvals is not None:
+            if getattr(approvals, "run_id", prepared.run_id) != prepared.run_id:
+                raise SessionError("APPROVAL_NOT_FOUND")
+            if getattr(approvals, "journal", None) is None:
+                approvals.journal = prepared.journal
+
+        if config is None:
+            try:
+                config = RunConfig(**dict(prepared.submission.execution_options))
+            except (TypeError, ValueError):
+                result = {
+                    "run_id": prepared.run_id,
+                    "state": "failed",
+                    "stop_reason": "INVALID_CONFIG",
+                    "model_calls": 0,
+                    "answer": None,
+                    "provider": getattr(provider, "metadata", {}),
+                    "trace_path": str(getattr(trace, "path", "")),
+                }
+                prepared.journal.finish_run(result)
+                return result
+        return Runtime(
+            provider,
+            engine,
+            trace,
+            config,
+            approvals=approvals,
+            control=control,
+            journal=prepared.journal,
+            request_builder=RequestBuilder(),
+        ).run(prepared.submission.question, target)

@@ -138,6 +138,137 @@ class SessionRuntimeTests(unittest.TestCase):
         self.assertEqual(receipt["bytes"], len(raw))
         self.assertEqual(receipt["sha256"], hashlib.sha256(raw).hexdigest())
 
+    def test_session_service_runs_file_then_conversation_and_survives_reopen(self):
+        session, first = self.prepare()
+        first_provider = ScriptedProvider([call_message(), final_message()])
+        first_result = self.service.execute(
+            first,
+            first_provider,
+            Trace(self.root / "runs", self.workspace, run_id=first.run_id),
+        )
+        self.assertEqual(first_result["state"], "completed")
+        first_user = self.store.load_run_messages(session.id, first.run_id)[0]
+
+        second = self.service.submit(session.id, RunSubmission(
+            "request-2", "我上次要求做什么？", "conversation", session.scope,
+            None, None, {}))
+        source = first_user.payload["content"]
+        second_answer = {"role": "assistant", "content": json.dumps({
+            "status": "answered", "answer": "你上次要求读取文件并回答代号。",
+            "references": [{"message_id": first_user.id, "start": 0, "end": len(source)}],
+        }, ensure_ascii=False)}
+        second_provider = ScriptedProvider([second_answer])
+        second_result = self.service.execute(
+            second,
+            second_provider,
+            Trace(self.root / "runs", self.workspace, run_id=second.run_id),
+        )
+        self.assertEqual(second_result["state"], "completed")
+        self.assertIn(source, json.dumps(second_provider.requests[0], ensure_ascii=False))
+
+        state_dir = self.store.state_dir
+        self.store.close()
+        self.store = SessionStore.open(state_dir)
+        self.addCleanup(self.store.close)
+        self.service = SessionService(self.store)
+        third = self.service.submit(session.id, RunSubmission(
+            "request-3", "继续沿用刚才的要求", "conversation", session.scope,
+            None, None, {}))
+        second_user = self.store.load_run_messages(session.id, second.run_id)[0]
+        second_source = second_user.payload["content"]
+        third_provider = ScriptedProvider([{"role": "assistant", "content": json.dumps({
+            "status": "answered", "answer": "继续沿用上一轮要求。",
+            "references": [{"message_id": second_user.id, "start": 0,
+                            "end": len(second_source)}],
+        }, ensure_ascii=False)}])
+        third_result = self.service.execute(
+            third,
+            third_provider,
+            Trace(self.root / "runs", self.workspace, run_id=third.run_id),
+        )
+        self.assertEqual(third_result["state"], "completed")
+        self.assertIn(second_source, json.dumps(third_provider.requests[0], ensure_ascii=False))
+
+    def test_each_file_run_re_reads_changed_source(self):
+        session, first = self.prepare()
+        self.assertEqual(self.service.execute(
+            first, ScriptedProvider([call_message(), final_message()]),
+            Trace(self.root / "runs", self.workspace, run_id=first.run_id),
+        )["state"], "completed")
+        (self.workspace / "a.md").write_text("代号：purple-999\n", encoding="utf-8")
+        second = self.service.submit(session.id, RunSubmission(
+            "request-2", "再次核对代号", "files", session.scope, None, None, {}))
+        provider = ScriptedProvider([
+            call_message(), final_message(quote="代号：purple-999")
+        ])
+        result = self.service.execute(
+            second, provider,
+            Trace(self.root / "runs", self.workspace, run_id=second.run_id),
+        )
+        self.assertEqual(result["answer"]["answer"], "代号：purple-999")
+        current_result = json.loads(provider.requests[-1][-1]["content"])
+        self.assertEqual(current_result["data"]["content"]["1"], "代号：purple-999")
+
+    def test_idempotent_submit_never_executes_provider_twice(self):
+        session, prepared = self.prepare()
+        result = self.service.execute(
+            prepared, ScriptedProvider([call_message(), final_message()]),
+            Trace(self.root / "runs", self.workspace, run_id=prepared.run_id),
+        )
+        duplicate = self.service.submit(session.id, prepared.submission)
+        self.assertFalse(duplicate.created)
+        provider = ScriptedProvider([])
+        replay = self.service.execute(
+            duplicate, provider,
+            Trace(self.root / "runs-duplicate", self.workspace, run_id=duplicate.run_id),
+        )
+        self.assertEqual(replay["answer"], result["answer"])
+        self.assertEqual(provider.requests, [])
+
+    def test_continue_creates_a_new_run_without_inheriting_output(self):
+        session, interrupted = self.prepare()
+        interrupted.journal.record_model_request({"messages": []}, {"kind": "fixture"})
+        self.store.recover_interrupted("new-process")
+        continued = self.service.continue_interrupted(
+            session.id, interrupted.run_id, "request-continued")
+        self.assertNotEqual(continued.run_id, interrupted.run_id)
+        self.assertEqual(continued.submission.parent_run_id, interrupted.run_id)
+        self.assertIsNone(continued.submission.output_path)
+        self.assertEqual(continued.submission.execution_options, {})
+
+    def test_missing_workspace_keeps_conversation_available_and_blocks_file_run(self):
+        session, first = self.prepare()
+        self.assertEqual(self.service.execute(
+            first, ScriptedProvider([call_message(), final_message()]),
+            Trace(self.root / "runs", self.workspace, run_id=first.run_id),
+        )["state"], "completed")
+        first_user = self.store.load_run_messages(session.id, first.run_id)[0]
+        pending_file = self.service.submit(session.id, RunSubmission(
+            "request-file", "重新读取", "files", session.scope, None, None, {}))
+        conversation = self.service.submit(session.id, RunSubmission(
+            "request-chat", "回顾上一轮", "conversation", session.scope, None, None, {}))
+        source = first_user.payload["content"]
+        moved = self.root / "workspace-moved"
+        self.workspace.rename(moved)
+
+        chat_provider = ScriptedProvider([{"role": "assistant", "content": json.dumps({
+            "status": "answered", "answer": "上一轮要求读取文件并回答代号。",
+            "references": [{"message_id": first_user.id, "start": 0,
+                            "end": len(source)}],
+        }, ensure_ascii=False)}])
+        chat_result = self.service.execute(
+            conversation, chat_provider,
+            Trace(self.root / "runs", self.workspace, run_id=conversation.run_id),
+        )
+        self.assertEqual(chat_result["state"], "completed")
+        file_provider = ScriptedProvider([])
+        file_result = self.service.execute(
+            pending_file, file_provider,
+            Trace(self.root / "runs", self.workspace, run_id=pending_file.run_id),
+        )
+        self.assertEqual(file_result["stop_reason"], "WORKSPACE_UNAVAILABLE")
+        self.assertEqual(file_provider.requests, [])
+
 
 class ApprovalJournalTests(unittest.TestCase):
     def test_required_and_decision_are_durable_before_they_become_visible(self):

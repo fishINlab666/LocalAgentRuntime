@@ -484,7 +484,7 @@ class RunJournal:
             connection.execute(
                 """UPDATE tool_calls SET stage=?, result_message_id=?,
                        publication_state=CASE WHEN ? THEN 'unknown' ELSE publication_state END,
-                       recovery_state=CASE WHEN ? THEN 'outcome_unknown' ELSE recovery_state END
+                       recovery_state=CASE WHEN ? THEN 'WRITE_OUTCOME_UNKNOWN' ELSE recovery_state END
                    WHERE run_id=? AND call_id=?""",
                 (stage, message_id, outcome_unknown, outcome_unknown,
                  self.run_id, call_id),
