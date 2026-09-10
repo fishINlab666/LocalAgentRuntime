@@ -28,10 +28,36 @@ class ConversationPolicy:
         self._queried_segments = {}
         self._queries = 0
         self._query_error = None
+        self._current_message_id = None
+
+    def _current_user_message(self, question=None, *, required=True):
+        row = self.store.connection().execute(
+            """SELECT id, payload_json FROM messages
+               WHERE session_id=? AND session_seq=?
+                 AND role='user' AND source_kind='user'""",
+            (self.session_id, self.before_seq),
+        ).fetchone()
+        if row is None:
+            if required:
+                raise ValueError("INVALID_TASK")
+            return None
+        try:
+            payload = json.loads(row[1])
+        except (TypeError, ValueError, RecursionError):
+            raise ValueError("INVALID_TASK") from None
+        content = _text(payload) if isinstance(payload, dict) else None
+        if content is None or (question is not None and content != question):
+            raise ValueError("INVALID_TASK")
+        self._current_message_id = row[0]
+        return row[0]
 
     def set_visible_messages(self, message_ids):
         self._context_segments = {}
-        for message_id in message_ids:
+        current_id = self._current_message_id or self._current_user_message(required=False)
+        visible_ids = [*message_ids]
+        if current_id is not None:
+            visible_ids.append(current_id)
+        for message_id in visible_ids:
             if not isinstance(message_id, str):
                 continue
             try:
@@ -43,9 +69,11 @@ class ConversationPolicy:
     def initial_messages(self, question, target):
         if not isinstance(question, str) or not question.strip() or target is not None:
             raise ValueError("INVALID_TASK")
+        message_id = self._current_user_message(question)
         return [
             {"role": "system", "content": CONVERSATION_SYSTEM},
-            {"role": "user", "content": json.dumps({"question": question}, ensure_ascii=False)},
+            {"role": "user", "content": json.dumps(
+                {"question": question, "message_id": message_id}, ensure_ascii=False)},
         ]
 
     def model_request(self, messages, limit, schemas):
@@ -92,8 +120,9 @@ class ConversationPolicy:
     def _source_text(self, message_id: str) -> str:
         row = self.store.connection().execute(
             """SELECT payload_json, session_seq, role, validation_state
-               FROM messages WHERE session_id=? AND id=? AND session_seq < ?""",
-            (self.session_id, message_id, self.before_seq),
+               FROM messages WHERE session_id=? AND id=?
+                 AND (session_seq < ? OR (session_seq=? AND role='user'))""",
+            (self.session_id, message_id, self.before_seq, self.before_seq),
         ).fetchone()
         if row is None or row[2] not in {"user", "assistant"}:
             raise AnswerError("INVALID_REFERENCE", "INVALID_REFERENCE: source is unavailable")

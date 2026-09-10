@@ -17,9 +17,9 @@ class ConversationPolicyTests(unittest.TestCase):
         workspace.mkdir()
         self.store = SessionStore.open(root / "state")
         self.addCleanup(self.store.close)
-        service = SessionService(self.store)
-        self.session = service.create(workspace, "约定", SessionScope("directory", None))
-        old = service.submit(self.session.id, RunSubmission(
+        self.service = SessionService(self.store)
+        self.session = self.service.create(workspace, "约定", SessionScope("directory", None))
+        old = self.service.submit(self.session.id, RunSubmission(
             "old", "不要表格，改成三段文字", "conversation", self.session.scope,
             None, None, {}))
         self.message = self.store.load_run_messages(self.session.id, old.run_id)[0]
@@ -53,6 +53,25 @@ class ConversationPolicyTests(unittest.TestCase):
             policy.validate(payload)
         policy.accept("session_history", {"action": "search"}, {"ok": True, "hits": []})
         self.assertEqual(policy.validate(payload)["status"], "not_found")
+
+    def test_current_user_message_id_is_visible_and_can_be_referenced(self):
+        current = self.service.submit(self.session.id, RunSubmission(
+            "current", "更正：标题改为项目复核报告", "conversation",
+            self.session.scope, None, None, {}))
+        message = self.store.load_run_messages(self.session.id, current.run_id)[0]
+        policy = ConversationPolicy(
+            self.store, self.session.id, before_seq=message.session_seq)
+        initial = policy.initial_messages(message.payload["content"], None)
+        self.assertEqual(json.loads(initial[-1]["content"])["message_id"], message.id)
+        policy.set_visible_messages([])
+        start = message.payload["content"].index("项目复核报告")
+        answer = policy.validate(json.dumps({
+            "status": "answered",
+            "answer": "最新标题为项目复核报告。",
+            "references": [{"message_id": message.id, "start": start,
+                            "end": start + len("项目复核报告")}],
+        }, ensure_ascii=False))
+        self.assertEqual(answer["references"][0]["quote"], "项目复核报告")
 
 
 if __name__ == "__main__":
