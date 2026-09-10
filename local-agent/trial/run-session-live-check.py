@@ -356,8 +356,7 @@ class LiveCheck:
                 task_type="files",
                 output_path="project-review.md",
                 question=(
-                    "请重新读取当前资料，按本会话最新约定生成报告。报告标题必须是“项目复核报告”，"
-                    "必须包含当前项目代号、负责人、演示日期，末尾列出原文依据；回答也要引用原文。"
+                    "请重新读取当前资料，按本会话现在生效的报告约定生成报告；回答也要引用原文。"
                 ),
             )
             self.check(

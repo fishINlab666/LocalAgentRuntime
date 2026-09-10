@@ -12,9 +12,9 @@
 
 ## §0 当前进度、范围与停止条件
 
-- 状态：**里程碑 A（Task 1–3）已实现并核实：SQLite、Session CRUD、完整提交幂等、RunJournal、中断分类及一致备份通过离线测试；Runtime、网页/CLI 接入和真实验收尚未开始。**
+- 状态：**Task 1–10 与 Task 11 的离线部分已实现并核实。** Runtime、工具结果、上下文、历史查询、CLI、网页、长历史摘要和进程恢复均已接入；完整 Python 378 项及三组浏览器回归通过。当前仅剩受限真实 DeepSeek 连续演示、一次实现级 Review Gate 和权威状态收口。
 - 设计依据：[会话管理模块设计](../specs/2026-09-10-session-management-design.md)已通过原文对照 Gate。计划不重新讨论 SQLite、恢复为新 Run、历史查询或逐次审批等已确认取舍。
-- 当前主阻塞：持久存储基础已经就绪，但现有 `Runtime`、`ToolRuntime`、`WebRuns.jobs` 和审批尚未接入 Journal；下一步从 Task 4 的显式 seam 开始。
+- 当前主阻塞：离线 S1–S13 已闭合，尚缺同一代码版本上的受限真实 DeepSeek 报告及语义复核；没有其他 P0/P1 阻断。
 - 本批交付：设计 §2 的 Session、Run、Message、ToolCall、Approval、Artifact、摘要、历史查询、网页/CLI 入口和备份。
 - 明确不交付：跨设备、多用户、跨会话 Memory、向量检索、自动恢复执行、目录免重复审批、覆盖文件、后台守护、流式输出和新 Provider。
 - 固定完成条件：设计 §11 的 S1–S13 全部取得对应证据；代码存在、单元测试通过或页面能打开都不能单独称为完成。
