@@ -12,9 +12,9 @@
 
 ## §0 当前进度、范围与停止条件
 
-- 状态：**Task 1–11 已实现并通过最终验收。** Runtime、工具结果、上下文、历史查询、CLI、网页、长历史摘要和进程恢复均已接入；完整 Python 381 项及三组浏览器回归通过。真实 DeepSeek 在 6 次用户提交、18 次模型请求内完成重启连续、更正、重新取证、审批发布、长历史摘要和旧调用回查；最终实现级 Review Gate 的两项历史视图阻断已修复并定向复核为 PASS。
+- 状态：**Task 1–12 已实现，当前离线 Gate：PASS。** SQLite、Runtime、CLI、网页、审批、恢复、搜索续页、完整信封分页和长会话更正/未完事项补证均已落地；完整 Python 387 项通过，Task 12 的规格与代码质量 Gate 均无剩余 P0–P2。
 - 设计依据：[会话管理模块设计](../specs/2026-09-10-session-management-design.md)已通过原文对照 Gate。计划不重新讨论 SQLite、恢复为新 Run、历史查询或逐次审批等已确认取舍。
-- 当前主阻塞：无。S1–S13、真实机器检查、AI 语义复核与最终实现级 Review Gate 均已闭合；本批按固定停止条件收口。
+- 当前代码阻塞：无。真实 S4 的更正回答在引用修复后没有重跑，因此真实 DeepSeek 证据保持 PARTIAL；这不推翻当前离线实现 Gate，也不能写成真实全量验收通过。
 - 本批交付：设计 §2 的 Session、Run、Message、ToolCall、Approval、Artifact、摘要、历史查询、网页/CLI 入口和备份。
 - 明确不交付：跨设备、多用户、跨会话 Memory、向量检索、自动恢复执行、目录免重复审批、覆盖文件、后台守护、流式输出和新 Provider。
 - 固定完成条件：设计 §11 的 S1–S13 全部取得对应证据；代码存在、单元测试通过或页面能打开都不能单独称为完成。
@@ -1095,6 +1095,55 @@ git -C /Users/wujingyu/Desktop/AI/projects/dev-agent diff --cached --check
 git -C /Users/wujingyu/Desktop/AI/projects/dev-agent commit -m "test: verify durable session workflow"
 ```
 
+### Task 12：补齐历史分页和长会话状态证据
+
+**Files:**
+- Modify: `local-agent/local_agent/session_history.py`
+- Modify: `local-agent/local_agent/sessions.py`
+- Modify: `local-agent/local_agent/tool_runtime.py`
+- Modify: `local-agent/tests/test_session_history.py`
+- Modify: `local-agent/tests/test_context.py`
+- Modify: `local-agent/tests/test_session_runtime.py`
+- Modify: `docs/superpowers/specs/2026-09-10-session-management-design.md`
+- Modify: `local-agent/trial/session-live-check.md`
+- Modify: `local-agent/trial/directory-check.md`
+- Modify: `local-agent/README.md`
+
+- [x] **Step 1：写搜索续页失败测试**
+
+新增 `test_search_pages_all_matches_in_stable_order_without_duplicates` 与 `test_search_cursor_rejects_changed_query_cutoff_session_tampering_and_read`：保存 17 条同关键词历史，三页按 8＋8＋1 返回且无重漏；把 cursor 用于不同 query、不同 Session、不同 `before_seq`、不同 action 或篡改值，统一返回 `CURSOR_INVALID`。
+
+- [x] **Step 2：实现有界搜索游标**
+
+search 接受字段恰好为 `action/query` 或 `action/query/cursor`。游标由当前 HMAC 密钥签名，并绑定 `search/session_id/before_seq/query/last_session_seq/last_message_id`；下一页只扫描严格早于上一页末条的视图。每页最多 8 条，只有仍有命中时返回下一 cursor；不接受客户端提供 Session 或结果数。
+
+- [x] **Step 3：写完整信封大小失败测试**
+
+新增 `test_read_pages_by_actual_wire_size_and_preserves_unicode_exactly`：保存包含大量引号、反斜杠和换行、原 UTF-8 正文不超过 8 KiB 的消息。逐页 read 时，每页按 `wire_result` 和 Runtime 实际 JSON 序列化计算的完整信封必须不超过 12 KiB，cursor 必须前进，拼接所有 `text` 后与原文逐字相同；另覆盖策略字段本身超限时的有界错误。
+
+- [x] **Step 4：按最终序列化大小选择 read 页尾**
+
+先用 UTF-8 8 KiB 得到候选最大 Unicode 码点，再用完整返回信封的实际 JSON 序列化字节数选择最大可用页尾；分页不得切断字符。SessionService 将当前策略的附加字段提供给历史工具，Tool Runtime 对最终序列化再兜底；若固定元数据本身已超限，返回不携带超限附加字段的明确错误。小工具结果仍可兼容内联，大结果继续使用独立结果消息分页。
+
+- [x] **Step 5：补长历史更正与未完事项固定验证**
+
+新增 `test_summary_keeps_correction_pending_item_and_original_history_for_follow_up`：构造超过 128 KiB 的 50 轮历史，在可摘要前缀依次放入旧约定、更正和未完事项；当前问题为“按最新约定继续，尚未完成什么”。固定摘要替身只能选择程序提供的逐字 `reference_spans`，断言最终 Context 同时保留新旧约定 ID、优先显示更正、包含未完事项，并能通过 `session_history` 找回三条原文。
+
+- [x] **Step 6：运行定向与完整离线验证**
+
+```sh
+cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent
+python3 -W error::ResourceWarning -m unittest discover -s tests -p 'test_session_history.py'
+python3 -W error::ResourceWarning -m unittest discover -s tests -p 'test_context.py'
+python3 -W error::ResourceWarning -m unittest discover -s tests
+```
+
+Expected: 两个原故障测试先红后绿；长历史固定验证通过；完整回归无新增失败。此次不调用 DeepSeek。
+
+- [x] **Step 7：修正状态、定向 Gate 并提交**
+
+规格中的“尚未实现／尚未执行”改为历史设计状态；验收记录分别写明真实已证明、离线补证和仍未真实复测的 S4，不能再写“六个目标场景均真实通过”。Review Gate 只复核 Task 12 三项与证据边界，通过后更新 README 与当前阶段入口并提交；不重跑目录验收、浏览器或真实模型。
+
 ## 4. 验收覆盖与执行止损
 
 | 设计要求 | 实施任务 |
@@ -1106,8 +1155,8 @@ git -C /Users/wujingyu/Desktop/AI/projects/dev-agent commit -m "test: verify dur
 | 重启中断和继续为新 Run | 3、7、8、9、11 |
 | 当前文件重新取证、历史不恢复权限 | 5、7 |
 | ConversationPolicy 与历史引用 | 5、6、7 |
-| 旧 ToolCall 参数/意图/结果回查 | 3、6、10 |
-| 64 KiB、有界摘要、失败降级、manifest | 5、10 |
+| 旧 ToolCall 参数/意图/结果回查及搜索续页 | 3、6、10、12 |
+| 64 KiB、有界摘要、失败降级、manifest、更正与未完事项 | 5、10、12 |
 | 页面、CLI、缺失工作区历史可看 | 8、9 |
 | 原工具合同和有限真实模型演示 | 4、6、11 |
 
@@ -1115,7 +1164,7 @@ git -C /Users/wujingyu/Desktop/AI/projects/dev-agent commit -m "test: verify dur
 
 ## 5. 计划自检
 
-- Spec coverage：设计 §1–§12 均映射到 Tasks 1–11；目录免重复审批明确保持后置。
+- Spec coverage：设计 §1–§12 均映射到 Tasks 1–12；目录免重复审批明确保持后置。
 - Interface consistency：SessionService、SessionStore、RunJournal、ContextBuilder 和 session_history 的调用方向单向；网页/CLI 不直接写表，Runtime 不导入 SQLite。
 - Authority consistency：每个文件 Run 新建权限账本；旧批准、历史消息、摘要和 ToolCall 都不能重新授权或进入执行队列。
 - Failure consistency：数据库失败先于 Provider/副作用时停止；发布后 receipt 保存失败保留当前进程实物事实，重启后按 unknown，不伪造成功或失败。
