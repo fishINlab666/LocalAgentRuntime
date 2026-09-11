@@ -103,6 +103,7 @@ class LiveCheck:
         self.output = output
         self.provider = provider
         self.real_runs = []
+        self.prior_runs = []
         self.report = {
             "gate": "RUNNING",
             "provider": copy.deepcopy(provider.metadata),
@@ -124,13 +125,19 @@ class LiveCheck:
             self.report["failures"].append(name)
             raise CheckFailed(name)
 
+    def submission_count(self) -> int:
+        return len(self.prior_runs) + len(self.report["runs"])
+
     def used_requests(self) -> int:
-        return sum(item["model_calls"] for item in self.report["runs"])
+        return sum(
+            item["model_calls"]
+            for item in [*self.prior_runs, *self.report["runs"]]
+        )
 
     def _reserve_request_budget(self) -> None:
         self.check(
-            f"budget-before-submission-{len(self.real_runs) + 1}",
-            len(self.real_runs) < MAX_SUBMISSIONS
+            f"budget-before-submission-{self.submission_count() + 1}",
+            self.submission_count() < MAX_SUBMISSIONS
             and self.used_requests() + 6 <= MAX_MODEL_REQUESTS,
             "为下一次提交预留最多 6 次模型请求",
         )
@@ -314,6 +321,73 @@ class LiveCheck:
             session_id = session.id
         finally:
             store.close()
+
+        self.run_segment1_after_correction(root, session_id)
+
+    def adopt_prior_segment1(self, prior_output: Path):
+        report_path = prior_output / "report.json"
+        try:
+            prior = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, RecursionError):
+            self.check(
+                "resume-prior-report-readable", False,
+                "续跑来源必须含可读取的原始失败报告",
+            )
+        runs = prior.get("runs") if isinstance(prior, dict) else None
+        self.check(
+            "resume-prior-shape",
+            isinstance(runs, list)
+            and len(runs) == 2
+            and runs[0].get("state") == "completed"
+            and runs[1].get("state") == "validation_failed"
+            and runs[1].get("stop_reason") == "INVALID_REFERENCE"
+            and runs[0].get("session_id") == runs[1].get("session_id"),
+            "只复用第一轮已完成、第二轮引用失败的同一会话",
+        )
+        self.prior_runs = copy.deepcopy(runs)
+        session_id = runs[0]["session_id"]
+        root = prior_output / "segment1"
+        store = SessionStore.open(root / "state")
+        try:
+            service = SessionService(store)
+            session = service.load(session_id)
+            second_messages = store.load_run_messages(
+                session_id, runs[1]["run_id"]
+            )
+            correction = next(
+                (
+                    message
+                    for message in second_messages
+                    if message.role == "user" and message.source_kind == "user"
+                ),
+                None,
+            )
+            correction_text = (
+                correction.payload.get("content")
+                if correction is not None and isinstance(correction.payload, dict)
+                else None
+            )
+            self.check(
+                "resume-correction-is-durable",
+                session.workspace_path == str((root / "workspace").resolve())
+                and isinstance(correction_text, str)
+                and "项目复核报告" in correction_text,
+                "失败回答没有丢失已提交的用户更正",
+            )
+        finally:
+            store.close()
+        self.report["resumed_from"] = {
+            "report_path": str(report_path.resolve()),
+            "session_id": session_id,
+            "prior_run_ids": [item["run_id"] for item in runs],
+            "prior_user_submissions": len(runs),
+            "prior_model_requests": sum(item["model_calls"] for item in runs),
+        }
+        return root, session_id
+
+    def run_segment1_after_correction(self, root: Path, session_id: str):
+        workspace = root / "workspace"
+        state = root / "state"
 
         (workspace / "project.md").write_text(
             "项目代号：紫杉-88\n项目名称：本地会话验证\n", encoding="utf-8"
@@ -592,7 +666,7 @@ class LiveCheck:
         requests = self.used_requests()
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         usage_records = 0
-        for run in self.report["runs"]:
+        for run in [*self.prior_runs, *self.report["runs"]]:
             for record in run.get("usage") or []:
                 if not isinstance(record, dict):
                     continue
@@ -602,14 +676,14 @@ class LiveCheck:
                     if type(value) is int and value >= 0:
                         usage[key] += value
         self.report["budget"] = {
-            "user_submissions": len(self.report["runs"]),
+            "user_submissions": self.submission_count(),
             "model_requests": requests,
             "usage_records": usage_records,
             "usage_totals": usage if usage_records else None,
         }
         self.check(
             "final-real-call-budget",
-            len(self.report["runs"]) <= MAX_SUBMISSIONS
+            self.submission_count() <= MAX_SUBMISSIONS
             and requests <= MAX_MODEL_REQUESTS,
             "真实调用没有超过 6 次用户提交或 36 次模型请求",
         )
@@ -619,6 +693,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--results-root", type=Path, default=PROJECT_ROOT / "trial" / "results"
+    )
+    parser.add_argument(
+        "--resume-after-correction",
+        type=Path,
+        help="Resume the bounded check after a recorded second-run INVALID_REFERENCE.",
     )
     args = parser.parse_args()
     output = args.results_root.resolve() / f"session-live-{uuid.uuid4().hex}"
@@ -640,7 +719,18 @@ def main() -> int:
     check = LiveCheck(output, provider)
     check.report["report_path"] = str(report_path)
     try:
-        check.run_segment1()
+        if args.resume_after_correction is None:
+            check.run_segment1()
+        else:
+            prior_output = args.resume_after_correction.resolve()
+            check.check(
+                "resume-source-is-result-directory",
+                prior_output.parent == args.results_root.resolve()
+                and prior_output.name.startswith("session-live-"),
+                "续跑来源必须是当前 results 根目录内的会话验收目录",
+            )
+            segment1_root, session_id = check.adopt_prior_segment1(prior_output)
+            check.run_segment1_after_correction(segment1_root, session_id)
         check.run_segment2()
         check.finish_budget()
         check.report["gate"] = "PENDING_SEMANTIC_REVIEW"
@@ -648,7 +738,7 @@ def main() -> int:
     except CheckFailed:
         check.report["gate"] = "FAILED"
         check.report.setdefault("budget", {
-            "user_submissions": len(check.report["runs"]),
+            "user_submissions": check.submission_count(),
             "model_requests": check.used_requests(),
             "usage_records": None,
             "usage_totals": None,
@@ -660,7 +750,7 @@ def main() -> int:
             f"unexpected:{type(error).__name__}:{getattr(error, 'code', '')}"
         )
         check.report.setdefault("budget", {
-            "user_submissions": len(check.report["runs"]),
+            "user_submissions": check.submission_count(),
             "model_requests": check.used_requests(),
             "usage_records": None,
             "usage_totals": None,
@@ -671,7 +761,7 @@ def main() -> int:
         print(json.dumps({
             "gate": check.report["gate"],
             "report_path": str(report_path),
-            "user_submissions": len(check.report["runs"]),
+            "user_submissions": check.submission_count(),
             "model_requests": check.used_requests(),
         }))
     return return_code
