@@ -988,9 +988,6 @@ class SessionService:
 
         session = self.load(prepared.session_id)
         before_seq = self._current_user_seq(prepared.session_id, prepared.run_id)
-        history = SessionHistoryTool(
-            self.store, prepared.session_id, before_seq=before_seq
-        )
         target = None
 
         def fail_before_provider(code):
@@ -1031,12 +1028,20 @@ class SessionService:
                             prepared.session_id, prepared.submission.output_path
                         ) is not None):
                     return fail_before_provider("WRITE_OUTCOME_UNKNOWN")
-                engine.registry.register(history)
                 engine.policy = SessionTaskPolicy(engine.policy)
                 policy = engine.policy
+                history = SessionHistoryTool(
+                    self.store, prepared.session_id, before_seq=before_seq,
+                    result_fields=policy.result_fields,
+                )
+                engine.registry.register(history)
             else:
                 policy = ConversationPolicy(
                     self.store, prepared.session_id, before_seq=before_seq
+                )
+                history = SessionHistoryTool(
+                    self.store, prepared.session_id, before_seq=before_seq,
+                    result_fields=policy.result_fields,
                 )
                 engine = ToolRuntime(ToolRegistry([history]), policy)
         except SessionError as error:

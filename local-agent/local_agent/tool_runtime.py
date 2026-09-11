@@ -382,7 +382,14 @@ class ToolRuntime:
             raw = result
         if tool is not None and not accepted:
             self.policy.accept(name, copy.deepcopy(arguments), copy.deepcopy(raw))
-        result = wire_result(raw, self.policy.result_fields(), self._user_errors(tool))
+        result_fields = getattr(tool, 'result_fields', None) if tool is not None else None
+        fields = result_fields() if callable(result_fields) else self.policy.result_fields()
+        result = wire_result(raw, fields, self._user_errors(tool))
+        if (tool is not None and callable(result_fields)
+                and len(json.dumps(
+                    result, ensure_ascii=False, allow_nan=False
+                ).encode('utf-8')) > tool.spec.max_result_bytes):
+            result = wire_result(raw, user_error_codes=self._user_errors(tool))
         if not result['ok'] and result['error']['owner'] == 'user':
             decision = 'stop'
         if call_id is not None:

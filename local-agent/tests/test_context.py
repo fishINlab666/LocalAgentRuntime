@@ -375,6 +375,117 @@ class ContextBuilderTests(unittest.TestCase):
         self.assertNotIn("session_summary", json.dumps(
             other_built.request, ensure_ascii=False))
 
+    def test_summary_keeps_correction_pending_item_and_original_history_for_follow_up(self):
+        old_text = "旧约定：报告使用表格。"
+        correction_text = "更正：报告不要表格，改成三段文字。"
+        pending_text = "未完事项：补上风险与负责人。"
+        source_runs = [
+            self.complete(old_text + "甲" * 1400, "已记录旧约定。" + "甲" * 1400),
+            self.complete(correction_text + "乙" * 1400, "已记录更正。" + "乙" * 1400),
+            self.complete(pending_text + "丙" * 1400, "已记录未完事项。" + "丙" * 1400),
+        ]
+        source_runs.extend(self.seed_long_history(47, prefix="历史填充"))
+        prepared = self.prepare_current("按最新约定继续，尚未完成什么？")
+
+        def summarize(request, _manifest):
+            source = json.loads(request["messages"][-1]["content"])
+            records = [
+                record
+                for run in source["source_runs"]
+                for record in run["records"]
+                if record.get("source_kind") == "user"
+            ]
+
+            def fact(expected):
+                for record in records:
+                    for span in record["reference_spans"]:
+                        if span["text"] == expected:
+                            return {
+                                "text": span["text"],
+                                "message_id": record["message_id"],
+                                "start": span["start"],
+                                "end": span["end"],
+                            }
+                self.fail(f"摘要输入缺少固定事实：{expected}")
+
+            old = fact(old_text)
+            correction = fact(correction_text)
+            pending = fact(pending_text)
+            payload = {
+                "goals": [],
+                "constraints": [correction, old],
+                "decisions": [],
+                "completed": [],
+                "pending": [pending],
+                "anchors": [correction, pending, old],
+            }
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": json.dumps(payload, ensure_ascii=False),
+                },
+                "model": {"provider": "fixture", "model": "correction-summary"},
+            }
+
+        built = ContextBuilder(
+            self.store, self.session.id, prepared.run_id
+        ).build(
+            {
+                "messages": [
+                    {"role": "system", "content": "system"},
+                    {"role": "user", "content": "按最新约定继续，尚未完成什么？"},
+                ],
+                "tools": [],
+            },
+            65536,
+            summarize=summarize,
+        )
+
+        raw_history_bytes = self.store.connection().execute(
+            """SELECT SUM(LENGTH(CAST(payload_json AS BLOB))) FROM messages
+               WHERE session_id=? AND run_id<>?""",
+            (self.session.id, prepared.run_id),
+        ).fetchone()[0]
+        self.assertGreater(raw_history_bytes, 128 * 1024)
+        active = self.store.load_active_summary(self.session.id)
+        self.assertIsNotNone(active)
+        self.assertEqual(
+            [fact["text"] for fact in active.payload["constraints"]],
+            [correction_text, old_text],
+        )
+        self.assertEqual(
+            [fact["text"] for fact in active.payload["pending"]], [pending_text]
+        )
+        rendered = json.dumps(built.request, ensure_ascii=False)
+        self.assertIn(correction_text, rendered)
+        self.assertIn(old_text, rendered)
+        self.assertIn(pending_text, rendered)
+        self.assertIn("按最新约定继续，尚未完成什么？", rendered)
+
+        source_message_ids = {
+            text: self.store.load_run_messages(self.session.id, run_id)[0].id
+            for text, run_id in zip(
+                (old_text, correction_text, pending_text), source_runs[:3]
+            )
+        }
+        history = SessionHistoryTool(
+            self.store, self.session.id, before_seq=built.manifest["cutoff_seq"]
+        )
+        for text, query in (
+            (old_text, "旧约定：报告使用表格"),
+            (correction_text, "报告不要表格"),
+            (pending_text, "补上风险与负责人"),
+        ):
+            with self.subTest(query=query):
+                found = history.execute({"action": "search", "query": query})
+                self.assertTrue(found["ok"], found)
+                self.assertEqual(found["hits"][0]["message_id"], source_message_ids[text])
+                page = history.execute({
+                    "action": "read", "message_id": source_message_ids[text]
+                })
+                self.assertTrue(page["ok"], page)
+                self.assertIn(text, page["text"])
+
     def test_invalid_summary_variants_leave_old_summary_and_raw_messages_unchanged(self):
         run_ids = self.seed_long_history(12)
         first_message = self.store.load_run_messages(self.session.id, run_ids[0])[0]

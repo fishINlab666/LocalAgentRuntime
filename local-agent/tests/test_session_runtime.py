@@ -11,6 +11,7 @@ from local_agent.file_tools import adapt_tools
 from local_agent.files import ReadFile
 from local_agent.provider import ModelReply
 from local_agent.runtime import RunConfig, Runtime
+from local_agent.session_history import SessionHistoryTool
 from local_agent.session_store import SessionStore, StoreError
 from local_agent.sessions import RunSubmission, SessionScope, SessionService
 from local_agent.trace import Trace
@@ -98,6 +99,38 @@ class SessionRuntimeTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual((stored[0], stored[1]), ("completed", "finished"))
         self.assertEqual(json.loads(stored[2])["answer"], result["answer"])
+
+    def test_file_session_supplies_scope_fields_to_history_wire_budget(self):
+        session, prepared = self.prepare(scope=SessionScope("directory", None))
+        providers = []
+
+        class RecordingHistoryTool(SessionHistoryTool):
+            def __init__(inner_self, *args, result_fields=None, **kwargs):
+                providers.append(result_fields)
+                super().__init__(
+                    *args, result_fields=result_fields, **kwargs
+                )
+
+        provider = ScriptedProvider([
+            call_message("list", path=".", name="list_files"),
+            call_message("read", path="a.md"),
+            final_message(),
+        ])
+        with patch(
+            "local_agent.session_history.SessionHistoryTool", RecordingHistoryTool
+        ):
+            result = self.service.execute(
+                prepared,
+                provider,
+                Trace(self.root / "runs", self.workspace, run_id=prepared.run_id),
+            )
+
+        self.assertEqual(result["state"], "completed", result)
+        self.assertEqual(len(providers), 1)
+        self.assertTrue(callable(providers[0]))
+        fields = providers[0]()
+        self.assertEqual(fields["scope"]["read_files"], ["a.md"])
+        self.assertTrue(fields["scope"]["complete"])
 
     def test_journal_failure_stops_before_provider_call(self):
         _, prepared = self.prepare()

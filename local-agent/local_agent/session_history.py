@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import json
 
-from .tool_runtime import ToolSpec
+from .tool_runtime import ToolSpec, wire_result
 
 
 _ERROR_CODES = frozenset({"INVALID_ARGUMENT", "NOT_FOUND", "CURSOR_INVALID", "SESSION_STORE_ERROR"})
@@ -26,10 +26,15 @@ class SessionHistoryTool:
     PAGE_BYTES = 8192
     RESULT_BYTES = 12288
 
-    def __init__(self, store, session_id: str, *, before_seq: int):
+    def __init__(self, store, session_id: str, *, before_seq: int,
+                 result_fields=None):
+        if result_fields is not None and not callable(result_fields):
+            raise ValueError("result_fields must be callable")
         self.store = store
         self.session_id = session_id
         self.before_seq = before_seq
+        self._result_fields = result_fields or (lambda: None)
+        self._omit_result_fields = False
         self._proof = None
         self._cursor_key = hashlib.sha256(
             (str(store.database_path) + "\0" + session_id + "\0" + str(before_seq)).encode("utf-8")
@@ -209,12 +214,12 @@ class SessionHistoryTool:
         views.sort(key=lambda view: (view["session_seq"], view["message_id"]))
         return views
 
-    def _cursor(self, message_id, offset):
-        payload = _canonical([self.session_id, self.before_seq, message_id, offset]).encode("utf-8")
+    def _signed_cursor(self, value):
+        payload = _canonical(value).encode("utf-8")
         signature = hmac.new(self._cursor_key, payload, hashlib.sha256).hexdigest()
         return base64.urlsafe_b64encode(payload + b"." + signature.encode("ascii")).decode("ascii")
 
-    def _decode_cursor(self, cursor, message_id):
+    def _unsigned_cursor(self, cursor):
         try:
             raw = base64.b64decode(cursor.encode("ascii"), altchars=b"-_", validate=True)
             payload, signature = raw.rsplit(b".", 1)
@@ -222,11 +227,54 @@ class SessionHistoryTool:
             if not hmac.compare_digest(signature, expected):
                 raise ValueError()
             value = json.loads(payload.decode("utf-8"))
-            if value[:3] != [self.session_id, self.before_seq, message_id] or type(value[3]) is not int:
+            if not isinstance(value, list):
                 raise ValueError()
-            return value[3]
+            return value
         except (ValueError, TypeError, UnicodeError, json.JSONDecodeError):
             raise ValueError("CURSOR_INVALID") from None
+
+    def _cursor(self, message_id, offset):
+        return self._signed_cursor([self.session_id, self.before_seq, message_id, offset])
+
+    def _decode_cursor(self, cursor, message_id):
+        value = self._unsigned_cursor(cursor)
+        if (len(value) != 4
+                or value[:3] != [self.session_id, self.before_seq, message_id]
+                or type(value[3]) is not int):
+            raise ValueError("CURSOR_INVALID")
+        return value[3]
+
+    @staticmethod
+    def _query_digest(query):
+        return hashlib.sha256(query.encode("utf-8")).hexdigest()
+
+    def _search_cursor(self, query, view):
+        return self._signed_cursor([
+            "search-v1", self.session_id, self.before_seq,
+            self._query_digest(query), view["session_seq"], view["message_id"],
+        ])
+
+    def _decode_search_cursor(self, cursor, query):
+        value = self._unsigned_cursor(cursor)
+        if (len(value) != 6
+                or value[:4] != ["search-v1", self.session_id, self.before_seq,
+                                 self._query_digest(query)]
+                or type(value[4]) is not int
+                or not isinstance(value[5], str)):
+            raise ValueError("CURSOR_INVALID")
+        return value[4], value[5]
+
+    def _wire_bytes(self, result):
+        wired = wire_result(
+            result, self.result_fields(),
+            user_error_codes=self.spec.user_error_codes,
+        )
+        return len(json.dumps(
+            wired, ensure_ascii=False, allow_nan=False
+        ).encode("utf-8"))
+
+    def result_fields(self):
+        return {} if self._omit_result_fields else self._result_fields()
 
     @staticmethod
     def _slice(text, offset, maximum):
@@ -241,12 +289,24 @@ class SessionHistoryTool:
         return text[offset:end], end
 
     def _search(self, arguments):
-        if set(arguments) != {"action", "query"} or not isinstance(arguments.get("query"), str) \
-                or not arguments["query"]:
+        allowed = {"action", "query"} | ({"cursor"} if "cursor" in arguments else set())
+        if (set(arguments) != allowed
+                or not isinstance(arguments.get("query"), str)
+                or not arguments["query"]):
             return _error("INVALID_ARGUMENT")
-        query = arguments["query"].casefold()
-        hits = []
+        raw_query = arguments["query"]
+        query = raw_query.casefold()
+        try:
+            resume_before = self._decode_search_cursor(
+                arguments["cursor"], raw_query
+            ) if "cursor" in arguments else None
+        except ValueError:
+            return _error("CURSOR_INVALID")
+        candidates = []
         for view in reversed(self._views()):
+            key = view["session_seq"], view["message_id"]
+            if resume_before is not None and key >= resume_before:
+                continue
             index = view["text"].casefold().find(query)
             if index < 0:
                 continue
@@ -265,10 +325,18 @@ class SessionHistoryTool:
                         hit["result_message_id"] = link["result_message_id"]
                     break
             hit.update(start=start, end=end, excerpt=view["text"][start:end])
-            hits.append(hit)
-            if len(hits) == self.SEARCH_LIMIT:
+            candidates.append(hit)
+            if len(candidates) == self.SEARCH_LIMIT + 1:
                 break
-        return {"ok": True, "action": "search", "hits": hits}
+        if not candidates:
+            return {"ok": True, "action": "search", "hits": []}
+        for count in range(min(self.SEARCH_LIMIT, len(candidates)), 0, -1):
+            result = {"ok": True, "action": "search", "hits": candidates[:count]}
+            if len(candidates) > count:
+                result["cursor"] = self._search_cursor(raw_query, candidates[count - 1])
+            if self._wire_bytes(result) <= self.RESULT_BYTES:
+                return result
+        return _error("SESSION_STORE_ERROR")
 
     def _read(self, arguments):
         allowed = {"action", "message_id"} | ({"cursor"} if "cursor" in arguments else set())
@@ -285,26 +353,45 @@ class SessionHistoryTool:
             return _error("CURSOR_INVALID")
         if not 0 <= offset <= len(view["text"]):
             return _error("CURSOR_INVALID")
-        text, end = self._slice(view["text"], offset, self.PAGE_BYTES)
-        result = {"ok": True, "action": "read", "message_id": message_id,
-                  "source_run_id": view["source_run_id"], "source_kind": view["source_kind"],
-                  "start": offset, "end": end, "text": text}
-        for key in ("call_id", "name", "call_message_id", "result_message_id",
-                    "status", "calls"):
-            if key in view:
-                result[key] = copy.deepcopy(view[key])
-        if end < len(view["text"]):
-            result["cursor"] = self._cursor(message_id, end)
+        _, maximum_end = self._slice(view["text"], offset, self.PAGE_BYTES)
+
+        def page(end):
+            result = {"ok": True, "action": "read", "message_id": message_id,
+                      "source_run_id": view["source_run_id"],
+                      "source_kind": view["source_kind"],
+                      "start": offset, "end": end, "text": view["text"][offset:end]}
+            for key in ("call_id", "name", "call_message_id", "result_message_id",
+                        "status", "calls"):
+                if key in view:
+                    result[key] = copy.deepcopy(view[key])
+            if end < len(view["text"]):
+                result["cursor"] = self._cursor(message_id, end)
+            return result
+
+        result = page(maximum_end)
+        if self._wire_bytes(result) > self.RESULT_BYTES:
+            low, high, best = offset + 1, maximum_end - 1, None
+            while low <= high:
+                middle = (low + high) // 2
+                candidate = page(middle)
+                if self._wire_bytes(candidate) <= self.RESULT_BYTES:
+                    best = candidate
+                    low = middle + 1
+                else:
+                    high = middle - 1
+            if best is None:
+                return _error("SESSION_STORE_ERROR")
+            result = best
         if "inline_result" in view:
             with_inline = copy.deepcopy(result)
             with_inline["result"] = copy.deepcopy(view["inline_result"])
-            data = {key: value for key, value in with_inline.items() if key != "ok"}
-            if len(_canonical({"ok": True, "data": data}).encode("utf-8")) <= self.RESULT_BYTES:
+            if self._wire_bytes(with_inline) <= self.RESULT_BYTES:
                 result = with_inline
         return result
 
     def execute(self, arguments):
         self._proof = None
+        self._omit_result_fields = False
         try:
             if not isinstance(arguments, dict) or arguments.get("action") not in {"search", "read"}:
                 return _error("INVALID_ARGUMENT")
@@ -313,9 +400,12 @@ class SessionHistoryTool:
             return _error("SESSION_STORE_ERROR")
         if result.get("ok") is True:
             data = {key: copy.deepcopy(value) for key, value in result.items() if key != "ok"}
-            if len(_canonical({"ok": True, "data": data}).encode("utf-8")) > self.RESULT_BYTES:
-                return _error("SESSION_STORE_ERROR")
-            self._proof = (copy.deepcopy(arguments), data)
+            if self._wire_bytes(result) > self.RESULT_BYTES:
+                result = _error("SESSION_STORE_ERROR")
+            else:
+                self._proof = (copy.deepcopy(arguments), data)
+        if self._wire_bytes(result) > self.RESULT_BYTES:
+            self._omit_result_fields = True
         return result
 
     def verify_success(self, arguments, data):
