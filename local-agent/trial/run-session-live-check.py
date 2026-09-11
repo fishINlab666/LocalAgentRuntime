@@ -385,6 +385,71 @@ class LiveCheck:
         }
         return root, session_id
 
+    def adopt_prior_segment2(self, prior_output: Path):
+        report_path = prior_output / "report.json"
+        try:
+            prior = json.loads(report_path.read_text(encoding="utf-8"))
+            earlier_path = Path(prior["resumed_from"]["report_path"]).resolve()
+            earlier = json.loads(earlier_path.read_text(encoding="utf-8"))
+        except (OSError, KeyError, ValueError, TypeError, RecursionError):
+            self.check(
+                "resume-segment2-reports-readable", False,
+                "最后一轮续跑必须能读取前两份原始报告",
+            )
+        current_runs = prior.get("runs") if isinstance(prior, dict) else None
+        earlier_runs = earlier.get("runs") if isinstance(earlier, dict) else None
+        self.check(
+            "resume-segment2-prior-shape",
+            isinstance(current_runs, list)
+            and isinstance(earlier_runs, list)
+            and len(current_runs) == 3
+            and len(earlier_runs) == 2
+            and prior.get("failures") == ["segment2-real-summary"]
+            and current_runs[-1].get("client_request_id") == "live-seg2-1"
+            and current_runs[-1].get("state") == "completed"
+            and "霜叶规范-91"
+            in (current_runs[-1].get("answer") or {}).get("answer", ""),
+            "只复用前五次提交已完成且唯一失败为摘要未保存的证据",
+        )
+        self.prior_runs = copy.deepcopy([*earlier_runs, *current_runs])
+        session_id = current_runs[-1]["session_id"]
+        root = prior_output / "segment2"
+        store = SessionStore.open(root / "state")
+        try:
+            service = SessionService(store)
+            session = service.load(session_id)
+            call = store.connection().execute(
+                """SELECT run_id, call_id, result_message_id
+                   FROM tool_calls WHERE session_id=? AND call_id=?""",
+                (session_id, "legacy-failed-call"),
+            ).fetchone()
+            self.check(
+                "resume-segment2-state",
+                session.workspace_path == str((root / "workspace").resolve())
+                and store.load_active_summary(session_id) is None
+                and call is not None
+                and all(isinstance(value, str) and value for value in call),
+                "长历史原文、旧调用关联和未保存摘要状态均保持",
+            )
+            special = {
+                "run_id": call[0],
+                "call_id": call[1],
+                "result_message_id": call[2],
+            }
+        finally:
+            store.close()
+        self.report["resumed_from"] = {
+            "report_path": str(report_path.resolve()),
+            "earlier_report_path": str(earlier_path),
+            "session_id": session_id,
+            "prior_run_ids": [item["run_id"] for item in self.prior_runs],
+            "prior_user_submissions": len(self.prior_runs),
+            "prior_model_requests": sum(
+                item["model_calls"] for item in self.prior_runs
+            ),
+        }
+        return root, session_id, special
+
     def run_segment1_after_correction(self, root: Path, session_id: str):
         workspace = root / "workspace"
         state = root / "state"
@@ -585,27 +650,7 @@ class LiveCheck:
                     "最终只能引用找到的那条最早用户消息，不要引用本条提问。"
                 ),
             )
-            active = store.load_active_summary(session.id)
-            self.check(
-                "segment2-real-summary",
-                active is not None
-                and set(active.payload) == {
-                    "goals", "constraints", "decisions", "completed", "pending", "anchors"
-                }
-                and len(canonical(active.payload)) <= 6144,
-                "真实模型生成的结构化摘要已通过锚点和大小校验",
-            )
-            self.check(
-                "segment2-summary-in-task-context",
-                any(item["source_kind"] == "summary" for item in fifth_run["manifests"])
-                and any(
-                    item["source_kind"] == "task"
-                    and item["summary_id"] == active.id
-                    and item["omitted_seq_range"] is not None
-                    for item in fifth_run["manifests"]
-                ),
-                "摘要计入预算并进入同一轮任务 Context",
-            )
+            self.check_real_summary(store, session.id, fifth_run)
             references = fifth["answer"].get("references", [])
             self.check(
                 "segment2-early-requirement-recalled",
@@ -614,7 +659,45 @@ class LiveCheck:
                 and any(call["name"] == "session_history" for call in fifth_run["tool_calls"]),
                 "早期要求通过真实 history 调用找回并引用原用户消息",
             )
+        finally:
+            store.close()
+        self.run_segment2_old_call(root, session_id, special)
 
+    def check_real_summary(self, store, session_id: str, run_evidence: dict):
+        active = store.load_active_summary(session_id)
+        self.check(
+            "segment2-real-summary",
+            active is not None
+            and set(active.payload) == {
+                "goals", "constraints", "decisions", "completed", "pending", "anchors"
+            }
+            and len(canonical(active.payload)) <= 6144,
+            "真实模型生成的结构化摘要已通过锚点和大小校验",
+        )
+        self.check(
+            "segment2-summary-in-task-context",
+            any(item["source_kind"] == "summary" for item in run_evidence["manifests"])
+            and any(
+                item["source_kind"] == "task"
+                and item["summary_id"] == active.id
+                and item["omitted_seq_range"] is not None
+                for item in run_evidence["manifests"]
+            ),
+            "摘要计入预算并进入同一轮任务 Context",
+        )
+
+    def run_segment2_old_call(
+        self,
+        root: Path,
+        session_id: str,
+        special: dict,
+        *,
+        verify_new_summary: bool = False,
+    ):
+        store = SessionStore.open(root / "state")
+        try:
+            service = SessionService(store)
+            session = service.load(session_id)
             sixth_question = (
                 "请先用 session_history 的 search 定位本会话中那次旧的失败文件读取（query 使用 "
                 "read_file），再用 read "
@@ -632,6 +715,8 @@ class LiveCheck:
                 task_type="conversation",
                 question=sixth_question,
             )
+            if verify_new_summary:
+                self.check_real_summary(store, session.id, sixth_run)
             answer = sixth["answer"].get("answer", "")
             self.check(
                 "segment2-old-call-recalled",
@@ -694,10 +779,16 @@ def main() -> int:
     parser.add_argument(
         "--results-root", type=Path, default=PROJECT_ROOT / "trial" / "results"
     )
-    parser.add_argument(
+    resume = parser.add_mutually_exclusive_group()
+    resume.add_argument(
         "--resume-after-correction",
         type=Path,
         help="Resume the bounded check after a recorded second-run INVALID_REFERENCE.",
+    )
+    resume.add_argument(
+        "--resume-before-old-call",
+        type=Path,
+        help="Resume the final bounded run after a recorded summary validation failure.",
     )
     args = parser.parse_args()
     output = args.results_root.resolve() / f"session-live-{uuid.uuid4().hex}"
@@ -719,8 +810,26 @@ def main() -> int:
     check = LiveCheck(output, provider)
     check.report["report_path"] = str(report_path)
     try:
-        if args.resume_after_correction is None:
+        if args.resume_before_old_call is not None:
+            prior_output = args.resume_before_old_call.resolve()
+            check.check(
+                "resume-source-is-result-directory",
+                prior_output.parent == args.results_root.resolve()
+                and prior_output.name.startswith("session-live-"),
+                "续跑来源必须是当前 results 根目录内的会话验收目录",
+            )
+            segment2_root, session_id, special = check.adopt_prior_segment2(
+                prior_output
+            )
+            check.run_segment2_old_call(
+                segment2_root,
+                session_id,
+                special,
+                verify_new_summary=True,
+            )
+        elif args.resume_after_correction is None:
             check.run_segment1()
+            check.run_segment2()
         else:
             prior_output = args.resume_after_correction.resolve()
             check.check(
@@ -731,7 +840,7 @@ def main() -> int:
             )
             segment1_root, session_id = check.adopt_prior_segment1(prior_output)
             check.run_segment1_after_correction(segment1_root, session_id)
-        check.run_segment2()
+            check.run_segment2()
         check.finish_budget()
         check.report["gate"] = "PENDING_SEMANTIC_REVIEW"
         return_code = 3
