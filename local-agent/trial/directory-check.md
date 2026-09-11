@@ -1,8 +1,8 @@
 # 受限目录发现验收记录
 
-## 当前任务入口（2026-09-10）
+## 当前任务入口（2026-09-11）
 
-当前为**会话管理里程碑 A 已实现并完成离线核实**。SQLite 状态库、单写者锁、Session CRUD、完整提交幂等、跨会话归属、RunJournal、中断恢复分类、发布未知窗口和一致备份已经落地；会话相关 36 项与 Journal 4 项测试通过且无 `ResourceWarning`。这证明“保存后找得回”的存储基础，不代表当前 Runtime、页面或 CLI 已能连续会话，也不代表真实模型验收完成。设计及审查记录见[会话管理模块设计 §0](../../docs/superpowers/specs/2026-09-10-session-management-design.md)，执行状态见[会话管理实施计划 §0](../../docs/superpowers/plans/2026-09-10-session-management.md)。下一步从 Task 4 接入显式 Journal seam；不恢复旧专名加固，不重复目录固定组，也不调用真实模型。
+当前为**会话管理 Task 1–11 已实现并通过固定验收**。Runtime、工具结果、上下文、历史查询、CLI、页面、长历史摘要和进程恢复已接入持久 Session；完整 Python 381 项与三组浏览器回归通过，S1–S13 没有剩余 P0/P1 阻断。受限真实 DeepSeek 在 6 次用户提交、18 次模型请求内完成重启连续、更正、重新取证、报告发布、长历史摘要和旧调用回查；两次被程序拒绝的范围错误及后续修复均保留原始证据。设计见[会话管理模块设计 §0](../../docs/superpowers/specs/2026-09-10-session-management-design.md)，实施见[会话管理实施计划 §0](../../docs/superpowers/plans/2026-09-10-session-management.md)，S1–S13 与真实证据见[会话验收记录](session-live-check.md)。会话模块在此停止扩展；流式输出、Memory、MCP 和跨设备同步仍属于后续范围。
 
 ### 已完成的工具层基线
 

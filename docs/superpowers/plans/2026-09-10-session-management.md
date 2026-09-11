@@ -12,9 +12,9 @@
 
 ## §0 当前进度、范围与停止条件
 
-- 状态：**Task 1–10 与 Task 11 的离线部分已实现并核实。** Runtime、工具结果、上下文、历史查询、CLI、网页、长历史摘要和进程恢复均已接入；完整 Python 378 项及三组浏览器回归通过。当前仅剩受限真实 DeepSeek 连续演示、一次实现级 Review Gate 和权威状态收口。
+- 状态：**Task 1–11 已实现并通过最终验收。** Runtime、工具结果、上下文、历史查询、CLI、网页、长历史摘要和进程恢复均已接入；完整 Python 381 项及三组浏览器回归通过。真实 DeepSeek 在 6 次用户提交、18 次模型请求内完成重启连续、更正、重新取证、审批发布、长历史摘要和旧调用回查；最终实现级 Review Gate 的两项历史视图阻断已修复并定向复核为 PASS。
 - 设计依据：[会话管理模块设计](../specs/2026-09-10-session-management-design.md)已通过原文对照 Gate。计划不重新讨论 SQLite、恢复为新 Run、历史查询或逐次审批等已确认取舍。
-- 当前主阻塞：离线 S1–S13 已闭合，尚缺同一代码版本上的受限真实 DeepSeek 报告及语义复核；没有其他 P0/P1 阻断。
+- 当前主阻塞：无。S1–S13、真实机器检查、AI 语义复核与最终实现级 Review Gate 均已闭合；本批按固定停止条件收口。
 - 本批交付：设计 §2 的 Session、Run、Message、ToolCall、Approval、Artifact、摘要、历史查询、网页/CLI 入口和备份。
 - 明确不交付：跨设备、多用户、跨会话 Memory、向量检索、自动恢复执行、目录免重复审批、覆盖文件、后台守护、流式输出和新 Provider。
 - 固定完成条件：设计 §11 的 S1–S13 全部取得对应证据；代码存在、单元测试通过或页面能打开都不能单独称为完成。
@@ -558,15 +558,15 @@ Expected: 里程碑 A 全部 PASS。此时停止检查数据库内容和中断�
 - Modify: `local-agent/tests/test_approvals.py`
 - Create: `local-agent/tests/test_session_runtime.py`
 
-- [ ] **Step 1：写当前 Run 全链保存和旧入口兼容测试**
+- [x] **Step 1：写当前 Run 全链保存和旧入口兼容测试**
 
 测试使用现有 `ScriptedProvider` 和临时 SessionStore。断言第一次模型请求保存 manifest；合法 assistant ToolCall 在执行前落库；工具结果按原 ID 落库后才进入第二次请求；最终回答先落库再由 `run()` 返回。原 `Runtime(provider, tool, trace).run(question, target_path)` 仍可通过显式 `NullRunJournal` 路径运行原测试。
 
-- [ ] **Step 2：写发布数据库故障测试**
+- [x] **Step 2：写发布数据库故障测试**
 
 在 `record_publication_intent()` 抛错时断言目标文件不存在；在实际文件已发布、`record_publication_receipt()` 抛错时断言 Runtime 返回 `WRITE_OUTCOME_UNKNOWN`，当前进程保留实物回执用于展示，不能返回 `completed` 或重新 publish。
 
-- [ ] **Step 3：抽取统一记录器并保持 Trace 次要**
+- [x] **Step 3：抽取统一记录器并保持 Trace 次要**
 
 在 `runtime.py` 增加：
 
@@ -591,15 +591,15 @@ class NullRunJournal:
 
 保存顺序固定为：request＋manifest → 调用 Provider → 原 assistant reply＋校验状态和合法 ToolCall 索引（同一事务，初始为 requested）→ ToolCall started → 实际 result＋tool message → 下一次 request；终态先 `journal.finish_run(result)`，再尽力写 Trace 并返回。Trace 写失败记录 `TRACE_ERROR` 诊断，但不得回滚已保存 Session 或抹去已确认 Artifact。
 
-- [ ] **Step 4：在 ToolRuntime 发布 seam 记录 intent 和 receipt**
+- [x] **Step 4：在 ToolRuntime 发布 seam 记录 intent 和 receipt**
 
 为现有 `ToolRuntime.invoke` 增加 keyword-only `journal=None`，并使用传入的 Journal。在取得发布锁且调用 `publish` 前提交冻结的 target、内容哈希、run/call/approval；提交失败不得 publish。发布并验真后立即提交 receipt，再允许 `policy.accept()` 和最终 Artifact 展示。若 receipt 提交失败，返回 `WRITE_OUTCOME_UNKNOWN` 并停止后续调用；一次许可仍最多进入一次 publish。
 
-- [ ] **Step 5：让审批事件保存决定而不恢复许可**
+- [x] **Step 5：让审批事件保存决定而不恢复许可**
 
 `ApprovalBroker` 的 publish 回调继续提供页面事件。`request()` 必须在 required 记录落库后才能展示并等待；`decide()` 必须在 decision 落库后才能把内存状态改成 allowed。记录包含冻结 preview、规范参数摘要、decision、run/call 和 process generation；Store 中的 allowed 记录不能被 `ApprovalBroker` 加载成新 permit。
 
-- [ ] **Step 6：先跑定向，再跑共享链路**
+- [x] **Step 6：先跑定向，再跑共享链路**
 
 ```sh
 cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent
@@ -610,7 +610,7 @@ python3 -W error::ResourceWarning -m unittest discover -s tests -p 'test_*workfl
 
 Expected: 新持久链和原工具合同全部 PASS；没有真实模型调用。
 
-- [ ] **Step 7：提交 Runtime seam**
+- [x] **Step 7：提交 Runtime seam**
 
 ```sh
 git -C /Users/wujingyu/Desktop/AI/projects/dev-agent add local-agent/local_agent/runtime.py local-agent/local_agent/tool_runtime.py \
@@ -632,15 +632,15 @@ git -C /Users/wujingyu/Desktop/AI/projects/dev-agent commit -m "feat: journal ru
 - Create: `local-agent/tests/test_context.py`
 - Create: `local-agent/tests/test_conversation.py`
 
-- [ ] **Step 1：写重启连续、更正优先和文件新证据测试**
+- [x] **Step 1：写重启连续、更正优先和文件新证据测试**
 
 建立两轮已结束历史：用户先说“报告用表格”，后更正“不要表格，改成三段文字”。第三轮 Conversation Context 必须含两条有角色和 ID 的原文，回答引用更正消息。文件模式第一轮读取 A，修改文件为 B 后新 Run 必须重新调用 `read_file`；旧 A 只能作为“当时记录”，不能进入当前 `FilePolicy.snapshots` 或当前文件 citation。
 
-- [ ] **Step 2：写 Context 预算和完整工具链测试**
+- [x] **Step 2：写 Context 预算和完整工具链测试**
 
 输入 5 个已结束 Run，断言默认最多选择最近 4 个完整 Run；历史 ToolCall 及其结果以一条有关联 ID 的结构化文本记录出现，不生成会被 Provider 当作新调用的原生 `tool_calls`，也不生成孤立 `role=tool`。当前用户输入、当前 ToolCall 和当前完整结果在缩减历史时不得拆开；仅当前链已超过 64 KiB 时返回 `CONTEXT_LIMIT`。
 
-- [ ] **Step 3：实现 ContextBuilder 深模块**
+- [x] **Step 3：实现 ContextBuilder 深模块**
 
 固定 interface：
 
@@ -658,7 +658,7 @@ build(current_request: dict, max_input_bytes: int, *, summarize: callable | None
 
 最终 JSON 序列化后计字节，manifest 保存 Session/Run、规则/schema 版本、选中消息 ID、当前范围、遗漏历史范围、实际字节数和 SHA-256。阶段 B 的 `ContextBuilder` 只读 Store 并返回数据；阶段 C 唯一允许的写入是通过 Store 原子切换校验成功的摘要版本。
 
-- [ ] **Step 4：实现 ConversationPolicy 而不修改文件答案规则**
+- [x] **Step 4：实现 ConversationPolicy 而不修改文件答案规则**
 
 `conversation.py` 定义输出：
 
@@ -670,11 +670,11 @@ build(current_request: dict, max_input_bytes: int, *, summarize: callable | None
 
 同时把 Runtime 中硬编码的 `JSON_REPAIR/IDENTIFIER_REPAIR` 选择移入 policy interface：文件策略返回现有 citation/标识修复提示；ConversationPolicy 返回 references 格式修复提示。Runtime 只根据 `error.code` 调用 `policy.repair_prompt(code)`，不能把文件答案格式发给历史对话。
 
-- [ ] **Step 5：装配 Session 文件策略**
+- [x] **Step 5：装配 Session 文件策略**
 
 在 `file_tools.py` 加 `SessionTaskPolicy`，按已注册工具域委托：`list_files/read_file/write_file` 才能更新 `FilePolicy`；`session_history` 结果不进入文件 scope、快照或 Artifact。每个文件 Run 新建 FilePolicy；历史 SHA/正文不能调用 `record()` 重新授权。Conversation 模式不注册文件工具或 writer。
 
-- [ ] **Step 6：运行定向测试并提交**
+- [x] **Step 6：运行定向测试并提交**
 
 ```sh
 cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent
@@ -702,7 +702,7 @@ Expected: 近期上下文、历史对话和当前文件重新取证均 PASS。
 - Modify: `local-agent/local_agent/file_tools.py`
 - Create: `local-agent/tests/test_session_history.py`
 
-- [ ] **Step 1：写旧调用参数回查和跨会话拒绝测试**
+- [x] **Step 1：写旧调用参数回查和跨会话拒绝测试**
 
 在旧 Run 保存一个合法 ToolCall，路径标记只存在原 `function.arguments` 中，用户消息、最终回答和错误结果均不含该标记。让该 Run 退出近期 Context 后搜索标记，必须返回调用消息；read 必须返回原 `call_id/name/arguments/intent`、`source_run_id` 和对应错误消息引用。
 
@@ -724,11 +724,11 @@ self.assertEqual(page["result_message_id"], failed_result_message_id)
 
 另用 session B 的 tool 查询 A 的 message ID、cursor 和 call ID，三者都返回同一个 `NOT_FOUND` 信封，不泄露是否存在。
 
-- [ ] **Step 2：写游标、Unicode、截止序号和证明测试**
+- [x] **Step 2：写游标、Unicode、截止序号和证明测试**
 
 search 最多 8 条；read 原文页最多 8 KiB，信封最多 12 KiB；首次 read 省略 cursor，后续只能使用服务器返回、绑定 `session_id/before_seq/message_id/offset` 的不透明 cursor。文本范围按 Unicode 码点 `[start,end)`，不能切断代理项。构造 tool 后再追加同会话消息，新消息因 `before_seq` 不可见。伪造 `{ok: true}` 或改写搜索结果时，`verify_success()` 必须拒绝。
 
-- [ ] **Step 3：扩展扁平 schema 的 enum 校验**
+- [x] **Step 3：扩展扁平 schema 的 enum 校验**
 
 当前 `valid_arguments()` 只检查字符串。加入以下通用规则，确保 `action` 的 `enum` 真正生效；search/read 的字段组合仍由工具自身验证：
 
@@ -740,17 +740,17 @@ if allowed is not None and value not in allowed:
 
 `session_history` 的模型 schema 只暴露 `action/query/message_id/cursor/intent`；`session_id`、`before_seq`、最大结果数和字节限制只由构造器注入，不能让模型填写。
 
-- [ ] **Step 4：实现 Store 查询和稳定 `text_view`**
+- [x] **Step 4：实现 Store 查询和稳定 `text_view`**
 
 search 只查询同 Session、`session_seq < before_seq` 的业务消息，使用参数绑定和稳定 `(session_seq,message_id)` 游标。开放用户原话、已校验最终回答、协议合法的 assistant ToolCall 及已验真的工具结果；非法模型回复、system、凭据和程序私有记录不开放。
 
 ToolCall 的 `text_view` 每次从原 assistant message payload 生成固定键序 JSON：`call_id/name/arguments/intent`。`arguments` 和 `intent` 不从 `tool_calls` 索引、错误结果或摘要反推。通过 `(session_id,run_id,call_id)` 关联结果；没有结果时返回空结果引用和 Store 已记录的中断/未知状态，不生成伪 tool message。
 
-- [ ] **Step 5：实现工具结果证明并装配策略**
+- [x] **Step 5：实现工具结果证明并装配策略**
 
 `SessionHistoryTool` 使用 `ToolSpec(name="session_history", risk="low", timeout_seconds=5, max_result_bytes=12288)`。`execute()` 保存 Store 生成的不可变结果证明；`verify_success(arguments,data)` 只接受同一次参数和结果的证明。FilePolicy 只为 `{list_files,read_file,write_file}` 更新文件状态；history 成功或失败均不改变文件 scope、snapshot、`had_error` 或 Artifact。
 
-- [ ] **Step 6：运行定向测试并提交**
+- [x] **Step 6：运行定向测试并提交**
 
 ```sh
 cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent
@@ -776,15 +776,15 @@ Expected: 参数/意图、结果双向关联、隔离、游标和结果证明均
 - Modify: `local-agent/tests/test_session_runtime.py`
 - Modify: `local-agent/tests/test_session_recovery.py`
 
-- [ ] **Step 1：写两轮连续和工作区失效测试**
+- [x] **Step 1：写两轮连续和工作区失效测试**
 
 第一轮保存用户约定，第二轮使用新 Runtime 和同一 Session，断言 Provider 实际收到第一轮原话。关闭 Store 并重开后第三轮仍收到历史。把工作区移走后：conversation Run 仍可查询历史；file/directory Run 返回 `WORKSPACE_UNAVAILABLE`，Provider 调用数为 0。
 
-- [ ] **Step 2：写 continue 创建新 Run 测试**
+- [x] **Step 2：写 continue 创建新 Run 测试**
 
 中断旧 Run 后调用 `continue_interrupted`。断言新 `run_id`、新调用 ID 空集合、新 6 次模型预算、新审批许可为空、`parent_run_id` 指向旧 Run；Context 以程序恢复说明呈现旧问题和进度，不伪造 tool role。未显式给新 `output_path` 时 writer 不注册。
 
-- [ ] **Step 3：实现共用执行入口**
+- [x] **Step 3：实现共用执行入口**
 
 在 `SessionService` 增加：
 
@@ -798,11 +798,11 @@ execute(prepared_run, provider, trace, *, approvals, control, config) -> dict
 
 沿用 Task 4 的 Trace Run ID；SessionService 不生成第二个诊断 ID。Trace 失败不修改数据库中已确认的会话事实。
 
-- [ ] **Step 4：实现继续恢复说明和目标锁检查**
+- [x] **Step 4：实现继续恢复说明和目标锁检查**
 
 继续 Run 的 Context 包含旧 Run ID、原问题、已保存进度和中断分类；旧 ToolCall 仅为历史数据。若旧发布为未知，新提交同一 workspace/target 在执行前返回 `WRITE_OUTCOME_UNKNOWN`；用户选择新输出路径后按普通逐次审批运行。
 
-- [ ] **Step 5：运行里程碑 B 核心测试并提交**
+- [x] **Step 5：运行里程碑 B 核心测试并提交**
 
 ```sh
 cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent
@@ -828,7 +828,7 @@ Expected: S1 的持久/连续核心、S4、S5，以及 S8、S9、S10 的底层�
 - Create: `local-agent/tests/test_session_cli.py`
 - Modify: `local-agent/tests/test_cli.py`
 
-- [ ] **Step 1：写 CLI 解析和无 Provider 管理测试**
+- [x] **Step 1：写 CLI 解析和无 Provider 管理测试**
 
 测试以下命令均使用临时 `--state-dir`：
 
@@ -847,19 +847,19 @@ sessions continue SESSION_ID --run INTERRUPTED_RUN_ID
 
 `list/show/rename/archive/restore/backup` 不构造 Provider；无 API key 也可成功。旧 `demo` 和不带 `--session` 的 `run --workspace` 保持一次性、无持久化语义。
 
-- [ ] **Step 2：写占用、范围和输出路径测试**
+- [x] **Step 2：写占用、范围和输出路径测试**
 
 网页进程持有 state owner 时，第二个 CLI 写命令返回非零和 `STATE_IN_USE`；不创建第二份库。`run --session` 从 Session 读取固定 input scope，不接受新的 workspace/file/discover 来扩大范围。`--output-file` 每 Run 显式提供且不从上一轮继承；`--conversation` 与文件模式参数互斥。
 
-- [ ] **Step 3：实现 argparse 层和结构化退出结果**
+- [x] **Step 3：实现 argparse 层和结构化退出结果**
 
 给 `serve`、持久 `run`、`sessions` 命令增加 `--state-dir`，默认 `Path.home()/".local/share/local-agent"`。创建 nested `sessions` subparser；所有入口只调用 SessionService，不直接执行 SQL。错误码映射固定为：输入 2、未完成 Run 1、成功 0；输出 JSON 包含 `session_id/run_id/state/error`，不输出数据库正文、密钥或进程令牌。
 
-- [ ] **Step 4：实现 CLI 备份和中断继续**
+- [x] **Step 4：实现 CLI 备份和中断继续**
 
 `sessions backup DESTINATION` 调用 SQLite backup interface，拒绝目的地位于会话绑定资料根内；输出数据库备份路径及包含的 Session/Run 数，不复制 Artifact。`sessions continue` 仅创建和执行新 Run；不会恢复旧审批或自动沿用输出路径。
 
-- [ ] **Step 5：运行测试并提交**
+- [x] **Step 5：运行测试并提交**
 
 ```sh
 cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent
@@ -888,7 +888,7 @@ Expected: 持久和旧一次性 CLI 均 PASS；管理命令模型调用数为 0�
 - Modify: `local-agent/tests/web_fixture.py`
 - Create: `local-agent/tests/browser_sessions.cjs`
 
-- [ ] **Step 1：写 HTTP 路由、隔离和迟到响应失败测试**
+- [x] **Step 1：写 HTTP 路由、隔离和迟到响应失败测试**
 
 固定最小路由：
 
@@ -909,21 +909,21 @@ POST /api/sessions/{session_id}/continue
 
 创建 body 的合同固定为 `{"title":"资料整理","scope":{"mode":"file","file":"note.md"}}` 或 `{"title":"目录核对","scope":{"mode":"directory"}}`；workspace 由服务启动时的规范路径绑定。Run 的 `task_type` 只允许 `files` 或 `conversation`，scope 不允许随 Run 重传。
 
-- [ ] **Step 2：重构 WebRuns 只管理在途控制**
+- [x] **Step 2：重构 WebRuns 只管理在途控制**
 
 历史列表、已结束 Run 和分页全部从 SessionService/Store 读取；`WebRuns.jobs` 只保留当前进程的 cancel/control/thread，以 `(session_id,run_id)` 为键。删除“超过 20 个 job 就淘汰业务历史”的含义，页面每页 20 条只是 DB keyset 分页。全服务仍一次只执行一个 Run，但查看或切换其他 Session 不取消后台 Run。
 
-- [ ] **Step 3：解除启动时对 DirectoryTools 的依赖**
+- [x] **Step 3：解除启动时对 DirectoryTools 的依赖**
 
 `WebRuns.__init__` 只接收 SessionService、当前工作区选择和 provider factory，不创建 DirectoryTools。`serve --workspace PATH` 只展示绑定该规范路径的 Session；另支持 `serve --session SESSION_ID` 从 Store 选择已存在 Session。工作区缺失时页面和历史 GET 仍可打开，conversation Run 可用；文件 Run 返回 `WORKSPACE_UNAVAILABLE` 且不调用 Provider。缺 API key 时历史仍可看，新 Run 显示模型未配置。
 
-- [ ] **Step 4：先写离线页面脚本断言，再修改页面**
+- [x] **Step 4：先写离线页面脚本断言，再修改页面**
 
 页面只增加：会话列表、新建/选择/改名/归档恢复；当前 Session 固定 scope；按 Run 展示原问题、回答、工具调用、产物和历史 reference；“核对资料/聊这段记录”选择；中断卡片和继续按钮；旧审批预览只读。首次显示“对话和已读取内容保存在本机”。
 
 JavaScript 用 `sessionId + runId + viewGeneration` 判断响应是否仍属于当前视图；切换 Session 后丢弃迟到的 poll/approval/cancel 响应。所有历史摘录使用服务器给出的 `textContent`，不在浏览器重新计算 Unicode offset。新文件仍逐次预览批准，不展示“记住目录”。
 
-- [ ] **Step 5：实现页面和 HTTP，运行定向测试**
+- [x] **Step 5：实现页面和 HTTP，运行定向测试**
 
 ```sh
 cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent
@@ -936,7 +936,7 @@ python3 -W error::ResourceWarning -m unittest discover -s tests -p 'test_web_app
 
 Expected: 新 HTTP 合同、旧工具页面状态和离线 Session 页面脚本全部 PASS。
 
-- [ ] **Step 6：运行真实浏览器回归**
+- [x] **Step 6：运行真实浏览器回归**
 
 ```sh
 cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent
@@ -950,7 +950,7 @@ python3 /Users/wujingyu/.codex/skills/webapp-testing/scripts/with_server.py \
 
 Expected: 建会话、连续两轮、切换 A/B、迟到响应、审批、归档恢复、中断提示和窄屏布局全部 PASS；fixture 不调用云模型。
 
-- [ ] **Step 7：提交页面切片**
+- [x] **Step 7：提交页面切片**
 
 ```sh
 git -C /Users/wujingyu/Desktop/AI/projects/dev-agent add local-agent/local_agent/web_runs.py local-agent/local_agent/web.py \
@@ -974,29 +974,29 @@ git -C /Users/wujingyu/Desktop/AI/projects/dev-agent commit -m "feat: add persis
 - Modify: `local-agent/tests/test_context.py`
 - Modify: `local-agent/tests/test_session_runtime.py`
 
-- [ ] **Step 1：写 50 轮、摘要预算和失败降级测试**
+- [x] **Step 1：写 50 轮、摘要预算和失败降级测试**
 
 人工插入 50 个完整 Run，总历史超过 128 KiB。触发新 Run 后断言最终每次 request ≤64 KiB；摘要输入自身 ≤64 KiB、输出 ≤6 KiB；覆盖点只跨完整 terminal Run；最近最多 4 轮按实际字节缩减。摘要保留目标、更正、未完成事项和可核对 message ID/range，早期原文仍由 history tool 找回。
 
 再让摘要 Provider 返回超限、非法 JSON、错误 message ID、摘录不匹配和异常；旧摘要和原消息均保持，当前 Run 最多尝试一次摘要，然后用旧摘要＋近期轮次＋遗漏范围继续或明确 `CONTEXT_LIMIT`，不能循环摘要。
 
-- [ ] **Step 2：统一摘要和正常模型调用预算**
+- [x] **Step 2：统一摘要和正常模型调用预算**
 
 把 Runtime 的 Provider 调用整理为一个内部 `_complete(request, purpose)` 路径；`purpose` 只取 `summary` 或 `task`。ContextBuilder 的 `summarize` callback 必须走该路径，因此摘要计入同一 Run 的最多 6 次模型调用、同一 `RunControl` 活动时限、Usage 和 Journal。摘要请求 tools 固定为空；每个用户 Run 最多一次。
 
-- [ ] **Step 3：在文件消息投影之后构建最终 Context**
+- [x] **Step 3：在文件消息投影之后构建最终 Context**
 
 每轮先由 `FilePolicy.model_request()` 完成本轮工具正文的行号视图和当前证据投影，再把该 current request 交 `ContextBuilder.build(current_request, max_input_bytes, summarize=callback)` 合并历史。每次工具返回后重新计算；超限时依次移除最老完整历史投影、派生摘要和更老近期轮次。当前 user、当前 assistant ToolCall 和对应 tool result 不可拆分或静默截断。
 
 历史 ToolCall 使用带 `source_run_id/call_id/status` 的 assistant 文本数据投影，不使用可被 Provider 当作待执行请求的原生 `tool_calls`；历史 tool result 也不制造孤立 `role=tool`。当前 Run 的原生 assistant ToolCall/tool 链保持原协议。
 
-- [ ] **Step 4：实现可追溯结构化摘要**
+- [x] **Step 4：实现可追溯结构化摘要**
 
-摘要 schema 固定为 `goals/constraints/decisions/completed/pending/anchors`；每个事实带来源 message ID 和 Unicode range。程序验证消息属于本 Session、范围逐字匹配、覆盖序号单调后，才在事务内保存新 summary 并切换 `active_summary_id`。摘要只作导航和 Context 数据，不能成为 Conversation reference、文件 evidence 或权限。
+摘要 schema 固定为 `goals/constraints/decisions/completed/pending/anchors`；每个事实带来源 message ID 和 Unicode range。摘要输入只为已验证用户原话和有效助手回答提供程序预计算的 `reference_spans`，模型只能逐字选择，不能自行计算范围或直接引用工具链。程序验证消息属于本 Session、范围逐字匹配、覆盖序号单调后，才在事务内保存新 summary 并切换 `active_summary_id`。摘要只作导航和 Context 数据，不能成为 Conversation reference、文件 evidence 或权限。
 
 摘要模型的原始请求和回复以 `source_kind=summary` 留在 Journal 供审计，但普通历史投影和 `session_history` 默认排除它们；只有已验证的结构化摘要进入 Context，避免把摘要过程当成用户对话重复注入。
 
-- [ ] **Step 5：运行长会话测试并提交**
+- [x] **Step 5：运行长会话测试并提交**
 
 ```sh
 cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent
@@ -1023,11 +1023,11 @@ Expected: S6、S7 通过；测试 Provider 的请求计数证明摘要没有突�
 - Modify: `local-agent/trial/directory-check.md`
 - Create: `local-agent/trial/session-live-check.md`
 
-- [ ] **Step 1：用真实子进程覆盖强制中断和单写者**
+- [x] **Step 1：用真实子进程覆盖强制中断和单写者**
 
 fixture 接收临时 state/workspace 和暂停点 `after_submit/model_in_flight/read_started/approval_waiting/approval_allowed/publication_intent/publication_receipt`；到点后向父进程写入“ready”再等待。测试进程用 `os.kill(pid, signal.SIGKILL)`，随后重开 Store：S8 断言输入、模型和读取阶段分类正确且继续会创建新 Run；S9 断言旧审批失效、新建仍须重新预览批准；S10 断言发布前、意图后和回执后的状态分别为未执行、未知、已确认。所有重启场景的 Provider/工具自动调用数必须为 0。第二进程持锁时，CLI/网页第二所有者明确失败且库未损坏。
 
-- [ ] **Step 2：完成 S1–S13 追踪矩阵**
+- [x] **Step 2：完成 S1–S13 追踪矩阵**
 
 在 `session-live-check.md` 建立固定表，每个场景只引用实际命令、测试名、数据库核对或 trace/manifest 路径：
 
@@ -1049,24 +1049,27 @@ fixture 接收临时 state/workspace 和暂停点 `after_submit/model_in_flight/
 
 缺少证据的格子保持 NOT_RUN/FAILED，不能用工具层旧 295 项替代会话验收。
 
-- [ ] **Step 3：运行完整离线回归**
+- [x] **Step 3：运行完整离线回归**
 
 ```sh
 cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent
 python3 -W error::ResourceWarning -m unittest discover -s tests
 /Users/wujingyu/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node \
   tests/browser_tools.cjs
-/Users/wujingyu/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node \
+python3 /Users/wujingyu/.codex/skills/webapp-testing/scripts/with_server.py \
+  --server 'PYTHONPATH=. python3 tests/web_fixture.py --port 8767' --port 8767 \
+  -- env NODE_PATH=/Users/wujingyu/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules \
+  /Users/wujingyu/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node \
   tests/browser_sessions.cjs
 ```
 
 Expected: 所有 Python、工具页面和会话页面离线检查 PASS。记录实际测试数量和耗时，不预填数字。
 
-- [ ] **Step 4：运行一次真实浏览器回归**
+- [x] **Step 4：运行一次真实浏览器回归**
 
 沿 Task 9 的 `with_server.py` 命令运行 `tests/browser_web.cjs`。Expected: PASS；网络请求仅 loopback，fixture Provider 为模拟，不使用 DeepSeek。
 
-- [ ] **Step 5：执行有限真实模型验收**
+- [x] **Step 5：执行有限真实模型验收**
 
 在已通过离线回归的同一代码版本上执行两段：
 
@@ -1075,11 +1078,11 @@ Expected: 所有 Python、工具页面和会话页面离线检查 PASS。记录�
 
 每段保存实际 `session_id/run_id`、Usage、Context manifest、回答引用、数据库状态和 Artifact 哈希。第一段最多 4 次用户提交、第二段最多 2 次；每次连摘要最多 6 次模型请求，总硬上限 36，不要求用满。创建、查看、切换、重启、批准、归档和备份本身不得调用模型。失败只修并重跑受影响场景，不重跑旧目录 12 例。
 
-- [ ] **Step 6：做实现级 Review Gate**
+- [x] **Step 6：做实现级 Review Gate**
 
 对实际 diff、S1–S13 证据和真实结果做一次 Review Gate。P0/P1 必须修复并定向重验；P2 仅在有界条件下处理；固定样例通过后停止，不开展额外 UI 打磨、更多模型统计或目录免审批。
 
-- [ ] **Step 7：更新权威状态并提交**
+- [x] **Step 7：更新权威状态并提交**
 
 只有 S1–S13 全部有证据时，才将 README、`trial/directory-check.md` 和本计划 §0 改为“会话模块已实现并通过”；否则写明具体 NOT_RUN/FAILED 和下一阻塞。最终提交：
 
