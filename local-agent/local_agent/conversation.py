@@ -145,7 +145,11 @@ class ConversationPolicy:
         for left, right, text in segments:
             if left <= start < end <= right:
                 return text[start - left:end - left]
-        raise AnswerError("INVALID_REFERENCE", "INVALID_REFERENCE: range is not visible")
+        raise AnswerError(
+            "INVALID_REFERENCE",
+            "INVALID_REFERENCE: range is not visible",
+            repairable=True,
+        )
 
     def validate(self, content):
         if not isinstance(content, str):
@@ -161,21 +165,37 @@ class ConversationPolicy:
                 or not answer.strip() or not isinstance(references, list):
             raise AnswerError("INVALID_ANSWER", "INVALID_ANSWER: invalid values", repairable=True)
         if status == "answered" and not references:
-            raise AnswerError("INVALID_REFERENCE", "INVALID_REFERENCE: answered requires a source")
+            raise AnswerError(
+                "INVALID_REFERENCE",
+                "INVALID_REFERENCE: answered requires a source",
+                repairable=True,
+            )
         if status == "not_found" and self._queries == 0:
             raise AnswerError("MISSING_HISTORY_QUERY", "MISSING_HISTORY_QUERY: search is required")
         if status == "unable" and self._query_error is None:
             raise AnswerError("INVALID_ANSWER", "INVALID_ANSWER: unable requires a history error")
         if status != "answered" and references:
-            raise AnswerError("INVALID_REFERENCE", "INVALID_REFERENCE: status requires empty references")
+            raise AnswerError(
+                "INVALID_REFERENCE",
+                "INVALID_REFERENCE: status requires empty references",
+                repairable=True,
+            )
         resolved = []
         for reference in references:
             if not isinstance(reference, dict) or set(reference) != {"message_id", "start", "end"}:
-                raise AnswerError("INVALID_REFERENCE", "INVALID_REFERENCE: invalid fields")
+                raise AnswerError(
+                    "INVALID_REFERENCE",
+                    "INVALID_REFERENCE: invalid fields",
+                    repairable=True,
+                )
             message_id = reference["message_id"]
             start, end = reference["start"], reference["end"]
             if not isinstance(message_id, str) or type(start) is not int or type(end) is not int:
-                raise AnswerError("INVALID_REFERENCE", "INVALID_REFERENCE: invalid values")
+                raise AnswerError(
+                    "INVALID_REFERENCE",
+                    "INVALID_REFERENCE: invalid values",
+                    repairable=True,
+                )
             quote = self._load_visible_text(message_id, start, end)
             resolved.append({**reference, "quote": quote})
         value["references"] = resolved

@@ -212,6 +212,45 @@ class SessionRuntimeTests(unittest.TestCase):
         self.assertEqual(third_result["state"], "completed")
         self.assertIn(second_source, json.dumps(third_provider.requests[0], ensure_ascii=False))
 
+    def test_conversation_repairs_one_out_of_range_reference(self):
+        scope = SessionScope("directory", None)
+        session = self.service.create(self.workspace, "约定", scope)
+        question = "更正：标题改为项目复核报告，并继续使用简洁中文。"
+        prepared = self.service.submit(session.id, RunSubmission(
+            "conversation-reference-repair", question, "conversation", scope,
+            None, None, {}))
+        current = self.store.load_run_messages(session.id, prepared.run_id)[0]
+        invalid = {"role": "assistant", "content": json.dumps({
+            "status": "answered",
+            "answer": "现在生效的标题是项目复核报告。",
+            "references": [{
+                "message_id": current.id,
+                "start": 0,
+                "end": len(question) + 5,
+            }],
+        }, ensure_ascii=False)}
+        repaired = {"role": "assistant", "content": json.dumps({
+            "status": "answered",
+            "answer": "现在生效的标题是项目复核报告。",
+            "references": [{
+                "message_id": current.id,
+                "start": 0,
+                "end": len(question),
+            }],
+        }, ensure_ascii=False)}
+        provider = ScriptedProvider([invalid, repaired])
+
+        result = self.service.execute(
+            prepared,
+            provider,
+            Trace(self.root / "runs", self.workspace, run_id=prepared.run_id),
+        )
+
+        self.assertEqual(result["state"], "completed")
+        self.assertEqual(result["model_calls"], 2)
+        self.assertEqual(result["answer"]["references"][0]["quote"], question)
+        self.assertIn("references", provider.requests[1][-1]["content"])
+
     def test_each_file_run_re_reads_changed_source(self):
         session, first = self.prepare()
         self.assertEqual(self.service.execute(
