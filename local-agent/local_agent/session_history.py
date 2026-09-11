@@ -87,8 +87,32 @@ class SessionHistoryTool:
             if row[3] == "tool" and row[6] == "valid" and payload:
                 call_id = payload.get("tool_call_id")
                 if isinstance(call_id, str):
-                    results[(row[1], call_id)] = (row[0], payload.get("result"))
+                    results[(row[1], call_id)] = {
+                        "message_id": row[0],
+                        "session_seq": row[2],
+                        "result": payload.get("result"),
+                    }
+        call_states = {
+            (row[0], row[1]): {
+                "assistant_message_id": row[2],
+                "result_message_id": row[3],
+                "stage": row[4],
+                "recovery_state": row[5],
+            }
+            for row in self.store.connection().execute(
+                """SELECT t.run_id, t.call_id, t.assistant_message_id,
+                          t.result_message_id, t.stage, t.recovery_state
+                   FROM tool_calls t
+                   JOIN messages m
+                     ON m.id=t.assistant_message_id
+                    AND m.session_id=t.session_id
+                    AND m.run_id=t.run_id
+                   WHERE t.session_id=? AND m.session_seq < ?""",
+                (self.session_id, self.before_seq),
+            ).fetchall()
+        }
         views = []
+        calls_by_key = {}
         for row in rows:
             message_id, run_id, seq, role, source_kind, raw, validation = row
             payload = self._parsed(raw)
@@ -105,6 +129,10 @@ class SessionHistoryTool:
                               "text": payload["content"]})
             elif role == "assistant" and validation == "tool_calls_valid" \
                     and isinstance(payload.get("tool_calls"), list):
+                call_views = []
+                call_links = []
+                segments = []
+                offset = 0
                 for call in payload["tool_calls"]:
                     function = call.get("function") if isinstance(call, dict) else None
                     call_id = call.get("id") if isinstance(call, dict) else None
@@ -118,13 +146,67 @@ class SessionHistoryTool:
                     intent = arguments.pop("intent", None) if isinstance(arguments, dict) else None
                     text = _canonical({"call_id": call_id, "name": function.get("name"),
                                        "arguments": arguments, "intent": intent})
+                    if call_views:
+                        offset += 1
+                    start = offset
+                    offset += len(text)
+                    state = call_states.get((run_id, call_id), {})
                     result = results.get((run_id, call_id))
-                    views.append({"message_id": message_id, "source_run_id": run_id,
-                                  "session_seq": seq, "source_kind": "tool_call",
-                                  "call_id": call_id, "name": function.get("name"),
-                                  "text": text,
-                                  "result_message_id": result[0] if result else None,
-                                  "result": result[1] if result else None})
+                    result_message_id = (
+                        result["message_id"] if result else state.get("result_message_id")
+                    )
+                    link = {
+                        "call_id": call_id,
+                        "name": function.get("name"),
+                        "result_message_id": result_message_id,
+                        "status": state.get("recovery_state")
+                        if state.get("recovery_state") not in {None, "none"}
+                        else state.get("stage"),
+                    }
+                    call_views.append(text)
+                    call_links.append(link)
+                    segments.append({"start": start, "end": offset,
+                                     "call_id": call_id,
+                                     "name": function.get("name")})
+                    calls_by_key[(run_id, call_id)] = {
+                        "call_message_id": message_id,
+                        "name": function.get("name"),
+                    }
+                if call_views:
+                    view = {"message_id": message_id, "source_run_id": run_id,
+                            "session_seq": seq, "source_kind": "tool_call",
+                            "text": "\n".join(call_views), "calls": call_links,
+                            "segments": segments}
+                    if len(call_links) == 1:
+                        link = call_links[0]
+                        view.update(link)
+                        result = results.get((run_id, link["call_id"]))
+                        if result:
+                            view["inline_result"] = result["result"]
+                    views.append(view)
+        for (run_id, call_id), result in results.items():
+            call = calls_by_key.get((run_id, call_id))
+            if call is None:
+                continue
+            raw_result = result["result"]
+            data = raw_result.get("data") if isinstance(raw_result, dict) else None
+            if (isinstance(raw_result, dict) and raw_result.get("ok") is True
+                    and isinstance(data, dict) and isinstance(data.get("content"), str)):
+                text = data["content"]
+            else:
+                text = _canonical(raw_result)
+            views.append({
+                "message_id": result["message_id"],
+                "source_run_id": run_id,
+                "session_seq": result["session_seq"],
+                "source_kind": "tool_result",
+                "call_id": call_id,
+                "name": call["name"],
+                "call_message_id": call["call_message_id"],
+                "result_message_id": result["message_id"],
+                "text": text,
+            })
+        views.sort(key=lambda view: (view["session_seq"], view["message_id"]))
         return views
 
     def _cursor(self, message_id, offset):
@@ -170,8 +252,18 @@ class SessionHistoryTool:
                 continue
             start, end = max(0, index - 80), min(len(view["text"]), index + len(query) + 80)
             hit = {key: copy.deepcopy(view[key]) for key in (
-                "message_id", "source_run_id", "session_seq", "source_kind", "call_id", "name"
+                "message_id", "source_run_id", "session_seq", "source_kind",
+                "call_id", "name", "call_message_id", "result_message_id"
             ) if key in view}
+            for segment in view.get("segments", ()):
+                if segment["start"] <= index < segment["end"]:
+                    hit["call_id"] = segment["call_id"]
+                    hit["name"] = segment["name"]
+                    link = next((item for item in view["calls"]
+                                 if item["call_id"] == segment["call_id"]), None)
+                    if link is not None:
+                        hit["result_message_id"] = link["result_message_id"]
+                    break
             hit.update(start=start, end=end, excerpt=view["text"][start:end])
             hits.append(hit)
             if len(hits) == self.SEARCH_LIMIT:
@@ -197,11 +289,18 @@ class SessionHistoryTool:
         result = {"ok": True, "action": "read", "message_id": message_id,
                   "source_run_id": view["source_run_id"], "source_kind": view["source_kind"],
                   "start": offset, "end": end, "text": text}
-        for key in ("call_id", "name", "result_message_id", "result"):
+        for key in ("call_id", "name", "call_message_id", "result_message_id",
+                    "status", "calls"):
             if key in view:
                 result[key] = copy.deepcopy(view[key])
         if end < len(view["text"]):
             result["cursor"] = self._cursor(message_id, end)
+        if "inline_result" in view:
+            with_inline = copy.deepcopy(result)
+            with_inline["result"] = copy.deepcopy(view["inline_result"])
+            data = {key: value for key, value in with_inline.items() if key != "ok"}
+            if len(_canonical({"ok": True, "data": data}).encode("utf-8")) <= self.RESULT_BYTES:
+                result = with_inline
         return result
 
     def execute(self, arguments):

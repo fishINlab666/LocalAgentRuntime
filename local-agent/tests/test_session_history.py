@@ -57,6 +57,102 @@ class SessionHistoryTests(unittest.TestCase):
         )
         self.assertEqual(verified["call_id"], "call-1")
 
+    def test_verified_tool_result_is_searchable_and_paginated_by_its_message_id(self):
+        old = self.service.submit(self.session.id, RunSubmission(
+            "large-result", "保存长工具结果", "conversation", self.session.scope,
+            None, None, {}))
+        old.journal.record_model_request({"messages": []}, {"kind": "fixture"})
+        call = {"id": "call-large", "type": "function", "function": {
+            "name": "read_file", "arguments": json.dumps({
+                "path": "large.md", "intent": "核对长结果"}, ensure_ascii=False)}}
+        assistant_id = old.journal.record_model_reply(
+            {"role": "assistant", "content": None, "tool_calls": [call]},
+            None, "tool_calls_valid")
+        content = "页首-" + "甲" * 6000 + "-result-tail-91"
+        result_id = old.journal.record_tool_result("call-large", {
+            "ok": True, "data": {"content": content}})
+        old.journal.record_model_request({"messages": []}, {"kind": "fixture-2"})
+        old.journal.record_model_reply(
+            {"role": "assistant", "content": "已读取"}, None, "answer_valid")
+        old.journal.finish_run({"state": "completed", "answer": "已读取"})
+        cutoff = self.store.connection().execute(
+            "SELECT MAX(session_seq)+1 FROM messages WHERE session_id=?",
+            (self.session.id,),
+        ).fetchone()[0]
+        tool = SessionHistoryTool(self.store, self.session.id, before_seq=cutoff)
+
+        hit = tool.execute({"action": "search", "query": "result-tail-91"})["hits"][0]
+        self.assertEqual(hit["source_kind"], "tool_result")
+        self.assertEqual(hit["message_id"], result_id)
+        self.assertEqual(hit["call_message_id"], assistant_id)
+        self.assertEqual(hit["call_id"], "call-large")
+
+        call_page = tool.execute({"action": "read", "message_id": assistant_id})
+        self.assertTrue(call_page["ok"], call_page)
+        self.assertEqual(call_page["result_message_id"], result_id)
+        self.assertNotIn("result", call_page)
+
+        pages = []
+        arguments = {"action": "read", "message_id": result_id}
+        while True:
+            page = tool.execute(arguments)
+            self.assertTrue(page["ok"], page)
+            pages.append(page)
+            if "cursor" not in page:
+                break
+            arguments = {"action": "read", "message_id": result_id,
+                         "cursor": page["cursor"]}
+        self.assertEqual("".join(page["text"] for page in pages), content)
+        self.assertTrue(all(page["source_kind"] == "tool_result" for page in pages))
+        self.assertTrue(all(page["call_message_id"] == assistant_id for page in pages))
+
+    def test_multiple_tool_calls_share_one_stable_message_view(self):
+        old = self.service.submit(self.session.id, RunSubmission(
+            "multi-call", "保存多工具调用", "conversation", self.session.scope,
+            None, None, {}))
+        old.journal.record_model_request({"messages": []}, {"kind": "fixture"})
+        calls = [
+            {"id": "call-first", "type": "function", "function": {
+                "name": "read_file", "arguments": json.dumps({
+                    "path": "first.md", "intent": "读取第一份"}, ensure_ascii=False)}},
+            {"id": "call-second", "type": "function", "function": {
+                "name": "read_file", "arguments": json.dumps({
+                    "path": "second-only-42.md", "intent": "读取第二份"}, ensure_ascii=False)}},
+        ]
+        assistant_id = old.journal.record_model_reply(
+            {"role": "assistant", "content": None, "tool_calls": calls},
+            None, "tool_calls_valid")
+        first_result_id = old.journal.record_tool_result(
+            "call-first", {"ok": False, "error": {
+                "code": "FILE_NOT_FOUND", "message": "first missing"}})
+        second_result_id = old.journal.record_tool_result(
+            "call-second", {"ok": False, "error": {
+                "code": "FILE_NOT_FOUND", "message": "second missing"}})
+        old.journal.record_model_request({"messages": []}, {"kind": "fixture-2"})
+        old.journal.record_model_reply(
+            {"role": "assistant", "content": "均未找到"}, None, "answer_valid")
+        old.journal.finish_run({"state": "completed", "answer": "均未找到"})
+        cutoff = self.store.connection().execute(
+            "SELECT MAX(session_seq)+1 FROM messages WHERE session_id=?",
+            (self.session.id,),
+        ).fetchone()[0]
+        tool = SessionHistoryTool(self.store, self.session.id, before_seq=cutoff)
+
+        hit = tool.execute({"action": "search", "query": "second-only-42.md"})["hits"][0]
+        self.assertEqual(hit["message_id"], assistant_id)
+        self.assertEqual(hit["call_id"], "call-second")
+        page = tool.execute({"action": "read", "message_id": assistant_id})
+        self.assertTrue(page["ok"], page)
+        self.assertIn('"path":"first.md"', page["text"])
+        self.assertIn('"path":"second-only-42.md"', page["text"])
+        self.assertEqual(
+            [(call["call_id"], call["result_message_id"]) for call in page["calls"]],
+            [("call-first", first_result_id), ("call-second", second_result_id)],
+        )
+        result_page = tool.execute({"action": "read", "message_id": second_result_id})
+        self.assertEqual(result_page["call_message_id"], assistant_id)
+        self.assertEqual(result_page["call_id"], "call-second")
+
     def test_cutoff_and_session_boundary_hide_later_or_foreign_messages(self):
         later = self.service.submit(self.session.id, RunSubmission(
             "later", "later-secret-91", "conversation", self.session.scope, None, None, {}))
