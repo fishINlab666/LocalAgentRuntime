@@ -103,12 +103,12 @@ class ContextBuilderTests(unittest.TestCase):
             if record.get("source_kind") == "user"
         ]
         record = records[0]
-        text = record["text"][:12]
+        span = record["reference_spans"][0]
         fact = {
-            "text": text,
+            "text": span["text"],
             "message_id": record["message_id"],
-            "start": 0,
-            "end": len(text),
+            "start": span["start"],
+            "end": span["end"],
         }
         payload = {
             "goals": [fact],
@@ -278,6 +278,34 @@ class ContextBuilderTests(unittest.TestCase):
         self.assertGreater(raw_history_bytes, 128 * 1024)
         summary_request, summary_manifest = summary_requests[0]
         self.assertEqual(summary_request["tools"], [])
+        summary_source = json.loads(summary_request["messages"][-1]["content"])
+        summary_records = [
+            record
+            for run in summary_source["source_runs"]
+            for record in run["records"]
+        ]
+        self.assertTrue(summary_records)
+        self.assertFalse(any(
+            record.get("source_kind") == "tool_chain"
+            for record in summary_records
+        ))
+        self.assertTrue(all(
+            record.get("reference_spans")
+            and "text" not in record
+            for record in summary_records
+        ))
+        for record in summary_records:
+            message = self.store.connection().execute(
+                "SELECT payload_json FROM messages WHERE id=?",
+                (record["message_id"],),
+            ).fetchone()
+            source_text = json.loads(message[0])["content"]
+            spans = record["reference_spans"]
+            self.assertEqual("".join(span["text"] for span in spans), source_text)
+            for span in spans:
+                self.assertEqual(
+                    source_text[span["start"]:span["end"]], span["text"]
+                )
         self.assertLessEqual(
             len(json.dumps(summary_request, ensure_ascii=False, sort_keys=True,
                            separators=(",", ":")).encode("utf-8")),
