@@ -12,7 +12,7 @@
 
 ## §0 当前进度与停止条件
 
-2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过。四项规格与代码质量 Gate 均为 PASS；Task 4 Gate 发现并修复了“路径短暂替换可使 original 与 chunk 内容不一致”的竞态，解析子进程现在继承父进程固定并校验的只读文件描述符。Darwin 因系统共享地址空间预映射采用“启动时 VSZ + 512 MiB”新增预算，其他平台保持绝对 512 MiB；无法安装限制时仍明确不可用。下一步执行 Task 5，用统一 Resolver 将完整发布接入持久 Session 与 Web、CLI、直接执行入口；不先接上传页面、搜索工具或 Artifact 写入。
+2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过。五项规格与代码质量 Gate 均为 PASS；Task 4 Gate 发现并修复了“路径短暂替换可使 original 与 chunk 内容不一致”的竞态，Task 5 Gate 修复了恢复阻断、执行闸门、执行前失败持久化及幂等重放依赖运行环境等问题。Darwin 因系统共享地址空间预映射采用“启动时 VSZ + 512 MiB”新增预算，其他平台保持绝对 512 MiB；无法安装限制时仍明确不可用。下一步执行 Task 6，加入只读 `search_documents`、导入事实账本与原始位置引用；不先接上传页面或 Artifact 写入。
 
 本批完成条件：Task 1–10 的定向测试、完整 Python 回归和既有浏览器回归通过；Task 11 的固定混合资料闭环证明“导入 → 搜索 → 读取 → ToolCall 结果进入下一轮 → 原始位置引用 → 重启追问 → 隔离与恢复”。离线证据全部通过后，最多执行一个真实 DeepSeek 会话、2 个 Run、12 次模型请求；任一核心失败立即停止并保留证据。达到条件后不增加 OCR、同步、资料删除、向量检索或新格式。
 
@@ -518,7 +518,7 @@ git commit -m "Publish recoverable imported workspaces"
 - Modify: `local-agent/tests/test_session_runtime.py`
 - Modify: `local-agent/tests/test_session_cli.py`
 
-- [ ] **Step 1: 写 Web、CLI 和直接执行共享授权的失败测试**
+- [x] **Step 1: 写 Web、CLI 和直接执行共享授权的失败测试**
 
 ```python
 def test_import_session_ignores_forged_database_workspace_path(self):
@@ -541,20 +541,20 @@ def test_tampered_import_stops_direct_execute_before_provider(self):
 
 再覆盖 `before_link_transaction`、`after_link_commit` 两个关联故障点及重复恢复，断言同一 import 最多产生一个 Session；同时覆盖其他 import ID、目录 inode 替换、symlink、`ready` 摘要错误转为 `unavailable`、Web 列表过滤、CLI continue、selected Session 重启和无效导入会话“历史可读、新 Run 拒绝”。普通 workspace 丢失时既有历史会话行为保持；文件 Run 的执行前失败沿用现有持久化结果契约，不抛出未记录的异常。
 
-- [ ] **Step 2: 运行并确认现有代码仍信任 `workspace_path`**
+- [x] **Step 2: 运行并确认现有代码仍信任 `workspace_path`**
 
 Run:
 
 ```zsh
 cd "/Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent"
-PYTHONPATH=. .venv/bin/python -W error::ResourceWarning -m unittest \
+PYTHONPATH=.:tests .venv/bin/python -W error::ResourceWarning -m unittest \
   tests.test_managed_workspace tests.test_session_runtime tests.test_session_web \
   tests.test_session_cli -v
 ```
 
 Expected: 伪造路径或导入 Session 断言 FAIL。
 
-- [ ] **Step 3: 实现 resolver 与事务内 Session 关联**
+- [x] **Step 3: 实现 resolver 与事务内 Session 关联**
 
 ```python
 @dataclass(frozen=True)
@@ -574,17 +574,17 @@ class ManagedWorkspaceResolver:
 
 导入分支只从固定 `ImportStore.root` fd 与 32 位十六进制 ID 派生子目录，逐级 `O_DIRECTORY|O_NOFOLLOW` 打开，校验 DB identity、manifest 摘要与相关文件摘要。`SessionService.attach_import(published, request)` 只接收 Task 4 生成或恢复的 `PublishedImport`，在一个 SQLite 事务中写 parser file 记录、插入带冻结助手快照的 Session、设置唯一 `import_id`、记录两个根 identity 并把 import 置 `ready`。事务前后故障恢复重放同一关联操作，依靠 `sessions.import_id` 唯一约束返回同一个 Session，不能重新解析或产生第二个 Session。
 
-- [ ] **Step 4: 替换所有执行入口的路径来源**
+- [x] **Step 4: 替换所有执行入口的路径来源**
 
 `SessionService.submit()` 在短期 gate activity 内完成 resolve 和入队事务；`execute()` 取得覆盖整次 Runtime 的 activity，再次 resolve，最后在 `finally` 释放。本任务保持现有 `assemble(..., workspace: Path, ...)` 接口，只传 `resolved.read_root`；完整 `ResolvedWorkspace` 保留独立写根，Task 7 再接入 assembly。Task 5 期间导入 Session 的 `output_path` 必须在执行前拒绝，不能临时写入只读资料根。`WebRuns._visible/list_sessions/_require_session` 合并普通绑定 Session 与 resolver 有效的导入 Session。CLI `_open_service/_persistent_run` 构造同一个 ImportStore/resolver；Trace 使用受信 read root。任何入口都不能从导入 Session 的 `workspace_path` 授权。
 
-- [ ] **Step 5: 跑三入口检查并提交**
+- [x] **Step 5: 跑三入口检查并提交**
 
 Run:
 
 ```zsh
 cd "/Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent"
-PYTHONPATH=. .venv/bin/python -W error::ResourceWarning -m unittest \
+PYTHONPATH=.:tests .venv/bin/python -W error::ResourceWarning -m unittest \
   tests.test_managed_workspace tests.test_session_runtime tests.test_session_web \
   tests.test_session_cli -v
 ```
