@@ -90,5 +90,5 @@ if __name__ == '__main__':
         workspace.mkdir()
         (workspace / 'demo-note.md').write_text('项目代号：浏览器-481\n评审人：林澄\n<script>window.injected = true</script>\n')
         (workspace / 'review.md').write_text('演示日期：2026-09-10\n')
-        serve(workspace, root / 'runs', port=args.port,
+        serve(workspace, root / 'runs', state_dir=root / 'state', port=args.port,
               provider_factory=missing_provider if args.missing else BrowserProvider)

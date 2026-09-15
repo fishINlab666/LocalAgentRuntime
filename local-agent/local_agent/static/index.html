@@ -41,6 +41,8 @@
         <div id="session-list" class="session-list" aria-label="会话列表"></div>
         <button type="button" id="session-load-more" class="quiet full-width" hidden>加载更多会话</button>
 
+        <button type="button" class="primary full-width import-trigger" id="import-trigger">导入本地资料</button>
+        <p id="import-summary" class="field-help import-summary" role="status" aria-live="polite" hidden></p>
         <button type="button" class="secondary full-width" id="session-create-toggle" aria-expanded="false" aria-controls="session-create-fields">＋ 新建会话</button>
         <div class="session-create-fields" id="session-create-fields" hidden>
           <label for="session-name">新会话名称</label>
@@ -167,6 +169,11 @@
         <p id="inspector-run-empty" class="field-help">开始任务后，这里会显示检查范围、依据、产物和执行步骤。</p>
         <p class="scope-summary field-help" id="scope-summary" hidden></p>
       </section>
+      <section id="import-sources" class="inspector-block import-sources" aria-labelledby="import-sources-title" hidden>
+        <span class="section-kicker">LOCAL SOURCES</span><h3 id="import-sources-title">本次导入资料</h3>
+        <p id="import-source-count" class="field-help"></p>
+        <div id="import-source-list" class="import-source-list"></div>
+      </section>
       <section id="artifacts" class="artifacts result-card inspector-result" aria-labelledby="artifact-title" hidden><div class="message-label">生成产物</div><h2 id="artifact-title">已创建文件</h2><p id="artifact-note" class="field-help"></p><div id="artifact-list"></div></section>
       <section id="evidence" class="evidence result-card inspector-result" hidden><div class="evidence-heading"><div><span class="message-label">SOURCE CHECK</span><h2>原文依据</h2></div><span id="citation-count"></span></div><div id="citations"></div></section>
       <details id="trace" class="trace result-card inspector-result" hidden><summary>查看执行记录 <span id="event-count"></span></summary><ol id="events"></ol><p class="trace-note">仅展示执行步骤；默认本地日志不保存问题、正文和回答全文。</p><code id="trace-path"></code></details>
@@ -205,6 +212,46 @@
       <footer class="inspector-footer"><span>依据在文件里，判断在你手中。</span></footer>
     </aside>
   </div>
+  <dialog id="import-dialog" class="import-dialog" aria-labelledby="import-title" aria-describedby="import-privacy">
+    <div class="import-dialog-shell">
+      <header class="import-dialog-header">
+        <div><span class="section-kicker">MANAGED LOCAL COPY</span><h2 id="import-title">导入本地资料</h2></div>
+        <button type="button" class="icon-button" id="import-close" aria-label="关闭导入资料面板">×</button>
+      </header>
+      <div class="import-dialog-body">
+        <p class="import-lead">选择文件或整个文件夹。支持 Markdown、文本、带文字层 PDF 和 Word；不支持的文件会列出并忽略。</p>
+        <div class="import-picker-grid">
+          <div class="import-picker">
+            <label for="import-files">选择文件</label>
+            <input id="import-files" type="file" accept=".md,.txt,.pdf,.docx" multiple>
+          </div>
+          <div class="import-picker">
+            <label for="import-directory">选择文件夹</label>
+            <input id="import-directory" type="file" webkitdirectory multiple>
+          </div>
+        </div>
+        <div class="import-fields">
+          <div><label for="import-name">会话名称</label><input id="import-name" maxlength="120" placeholder="例如：产品会议资料"></div>
+          <div><label for="import-agent">使用助手</label><select id="import-agent"></select></div>
+        </div>
+        <section class="import-preflight" aria-labelledby="import-preflight-title">
+          <div class="section-heading"><h3 id="import-preflight-title">导入前检查</h3><span class="import-counts"><strong id="import-supported-count">0</strong> 份支持 · <strong id="import-ignored-count">0</strong> 份忽略</span></div>
+          <div class="import-list-grid">
+            <div><span class="small-label">将保存</span><ul id="import-supported-list" class="import-file-list"></ul></div>
+            <div id="import-ignored-block" hidden><span class="small-label">将忽略</span><ul id="import-ignored-list" class="import-file-list ignored"></ul></div>
+          </div>
+        </section>
+        <p id="import-privacy" class="import-privacy">原文件副本、提取文本和会话记录会保存在本机。当前版本没有应用层加密或自动过期；之后只有 Agent 实际读取的提取文本会发送给模型。</p>
+        <progress id="import-progress" max="1" value="0" hidden></progress>
+        <p id="import-status" class="import-status" role="status" aria-live="polite">请选择资料。</p>
+        <p id="import-error" class="form-error" role="alert" hidden></p>
+      </div>
+      <footer class="import-dialog-actions">
+        <button type="button" class="secondary" id="import-cancel" disabled>取消导入</button>
+        <button type="button" class="primary" id="import-start" disabled>保存副本并创建会话</button>
+      </footer>
+    </div>
+  </dialog>
   <button type="button" id="workspace-backdrop" class="workspace-backdrop" aria-label="关闭面板" hidden></button>
 </body>
 </html>

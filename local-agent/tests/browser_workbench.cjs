@@ -10,8 +10,8 @@ const agent = (id, name, strategy, tools) => ({id, name, strategy, tools, budget
   model: {provider: 'deepseek', name: 'deepseek-chat'}, skills: [], mcp: []});
 const agents = [
   agent('file-qa', '单文件问答', 'file', ['read_file', 'write_file', 'session_history']),
-  agent('directory-qa', '目录问答', 'directory', ['list_files', 'read_file', 'session_history']),
-  agent('project-brief', '项目简报', 'directory', ['list_files', 'read_file', 'write_file', 'session_history']),
+  agent('directory-qa', '目录问答', 'directory', ['list_files', 'read_file', 'search_documents', 'session_history']),
+  agent('project-brief', '项目简报', 'directory', ['list_files', 'read_file', 'search_documents', 'write_file', 'session_history']),
 ];
 const makeSession = number => ({id: `session-${String(number).padStart(2, '0')}`,
   title: `项目会话 ${number}`, scope: {mode: 'file', file: 'demo-note.md'}, status: 'active',
@@ -70,7 +70,10 @@ async function assertComposerVisible(page, width, height) {
     const send = value => route.fulfill({status: 200, contentType: 'application/json',
       body: JSON.stringify(value)});
     if (path === '/api/config') return send({ready: true, workspace: '/synthetic',
-      workspace_available: true, provider: {simulated: true}});
+      workspace_available: true, provider: {simulated: true}, imports: {
+        formats: ['.md', '.txt', '.pdf', '.docx'].map(extension => ({extension, available: true})),
+        limits: {max_items: 500, max_files: 50, max_file_bytes: 20 * 1024 * 1024,
+          max_total_bytes: 100 * 1024 * 1024}}});
     if (path === '/api/agents') return send({agents});
     if (path === '/api/capabilities') return send({skills: [], servers: []});
     if (path === '/api/sessions') {

@@ -10,6 +10,11 @@ let agents = [], capabilities = {skills: [], servers: []}, selectedAgentId = '',
 let sessionListGeneration = 0, visibleSessions = [], sessionPageRequest = null;
 let sessionCursors = {active: null, archived: null};
 const sessionAgentIds = new Map();
+let importGeneration = 0, activeImport = null;
+let importSelection = {kind: 'file', supported: [], ignored: [], errors: []};
+let importCapabilities = {formats: [], limits: {max_items: 500, max_files: 50,
+  max_file_bytes: 20 * 1024 * 1024, max_total_bytes: 100 * 1024 * 1024}};
+const importStateKey = 'local-agent-active-import';
 let pendingApproval = null, approvalSendingId = null, approvalBlockedId = null, approvalDeadline = 0, approvalTimer = null;
 let cancelling = false, cancelSendingId = null;
 let drawerTrigger = null;
@@ -78,6 +83,26 @@ const errors = {
   SKILL_NOT_BOUND: '该 Skill 没有绑定到当前会话版本，请新建会话使用新绑定。',
   SKILL_DEPENDENCIES_MISSING: 'Skill 所需的工具或环境不可用，请查看能力状态中的缺项。',
   MCP_SERVER_DISABLED: 'MCP Server 已停用，请先启用。',
+  IMPORT_FORMAT_UNSUPPORTED: '包含当前版本不支持的文件格式。',
+  IMPORT_LIMIT_EXCEEDED: '所选资料超过数量或大小限制，请减少后重试。',
+  IMPORT_REQUEST_INVALID: '导入信息不完整，请重新选择资料。',
+  IMPORT_PATH_INVALID: '文件夹中包含不安全或重复的相对路径，请重新选择。',
+  IMPORT_LENGTH_MISMATCH: '文件在上传期间发生变化，请重新选择后导入。',
+  IMPORT_SLOT_ALREADY_STORED: '这个文件已经保存，本次不会重复上传。',
+  IMPORT_UPLOAD_INCOMPLETE: '文件上传不完整，请取消后重新导入。',
+  IMPORT_STATE_CONFLICT: '当前有另一批资料正在处理，请稍后重试。',
+  IMPORT_CANCELLED: '本次导入已取消，没有创建会话。',
+  IMPORT_INTEGRITY_ERROR: '本地副本完整性校验失败，请重新导入。',
+  IMPORT_UNAVAILABLE: '这批本地资料当前不可用。',
+  DOCUMENT_PARSER_UNAVAILABLE: '本机缺少对应的 PDF 或 Word 解析器。',
+  TEXT_INVALID_UTF8: 'Markdown 或文本不是有效 UTF-8。',
+  TEXT_INVALID_CHARACTER: '文本包含当前版本不能处理的控制字符。',
+  PDF_TEXT_NOT_FOUND: 'PDF 没有可提取的文字；当前版本不做 OCR。',
+  PDF_ENCRYPTED: 'PDF 需要密码，当前版本不支持。',
+  DOCUMENT_CORRUPT: 'PDF 或 Word 文件损坏或结构无效。',
+  DOCUMENT_LIMIT_EXCEEDED: '文档页数、解压内容或提取文本超过限制。',
+  IMPORT_STORAGE_FAILED: '本地副本未能安全保存，请检查磁盘后重试。',
+  STATE_BUSY: '当前有运行、审批或导入，暂时不能开始这项操作。',
 };
 const eventNames = {'run.started':'任务开始', 'model.requested':'请求模型', 'model.completed':'收到模型回复',
   'tool.requested':'模型请求工具', 'tool.started':'开始执行工具', 'tool.finished':'工具执行结束',
@@ -164,6 +189,521 @@ async function api(path, body) {
   } finally { clearTimeout(deadline); }
 }
 
+function compatibleImportAgents() {
+  const required = ['list_files', 'read_file', 'search_documents'];
+  return agents.filter(agent => agent.enabled !== false
+    && ['directory', 'combined'].includes(agent.strategy)
+    && required.every(name => (agent.tools || []).includes(name)));
+}
+
+function importFormatName(extension) {
+  return ({'.md': 'Markdown', '.txt': '文本', '.pdf': 'PDF', '.docx': 'Word / DOCX'})[extension]
+    || extension || '未知格式';
+}
+
+function importPathSafe(value) {
+  if (typeof value !== 'string' || !value || value.includes('\\')
+      || value.startsWith('/') || value.endsWith('/')) return false;
+  if (value.split('/').some(part => !part || part === '.' || part === '..')) return false;
+  return ![...value].some(character => /\p{C}/u.test(character));
+}
+
+function importNameError() {
+  const value = $('import-name').value.trim();
+  if (!value) return importSelection.supported.length ? '请填写会话名称。' : '';
+  if ([...value].some(character => /\p{C}/u.test(character))) {
+    return '会话名称不能包含控制字符。';
+  }
+  if (new TextEncoder().encode(value).length > 256) {
+    return '会话名称过长，请缩短后重试。';
+  }
+  return '';
+}
+
+function importIsCurrent(run) {
+  return Boolean(run && activeImport === run && run.generation === importGeneration);
+}
+
+function persistImport(run) {
+  if (!run?.id) return;
+  try {
+    sessionStorage.setItem(importStateKey, JSON.stringify({
+      id: run.id, agentId: run.agentId, phase: run.phase,
+    }));
+  } catch (_) {}
+}
+
+function clearPersistedImport() {
+  try { sessionStorage.removeItem(importStateKey); } catch (_) {}
+}
+
+async function importFetch(path, {body, agentId, signal, binary = false} = {}) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener('abort', abort, {once: true});
+  let timedOut = false;
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, binary ? 30000 : 8000);
+  const headers = {'X-Session-Token': token, 'X-Agent-ID': agentId};
+  if (body !== undefined) headers['Content-Type'] = binary
+    ? 'application/octet-stream' : 'application/json';
+  try {
+    const response = await fetch(path, {
+      method: body === undefined ? 'GET' : 'POST', headers,
+      body: body === undefined ? undefined : binary ? body : JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      const error = new Error(messageFor(data.error));
+      error.code = data.error;
+      throw error;
+    }
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError' && signal?.aborted) throw error;
+    if (error.name === 'AbortError' && timedOut) {
+      throw new Error('本地导入请求超时。请保持服务开启后重试，或取消本批导入。');
+    }
+    if (error.name === 'AbortError') throw error;
+    if (typeof error.code === 'string') throw error;
+    throw new Error('与本地导入服务的连接中断。请保持服务开启，并取消后重新选择资料。');
+  } finally {
+    clearTimeout(deadline);
+    signal?.removeEventListener('abort', abort);
+  }
+}
+
+const importJson = (path, body, agentId, signal) => importFetch(
+  path, {body, agentId, signal});
+const importBinary = (path, file, agentId, signal) => importFetch(
+  path, {body: file, agentId, signal, binary: true});
+
+function setImportStatus(text, {summary = false} = {}) {
+  $('import-status').textContent = text;
+  if (summary) {
+    $('import-summary').textContent = text;
+    $('import-summary').hidden = false;
+  }
+}
+
+function renderImportAgents() {
+  const choices = compatibleImportAgents();
+  const wanted = activeImport?.agentId || $('import-agent').value
+    || (choices.some(agent => agent.id === selectedAgentId) ? selectedAgentId : '')
+    || choices[0]?.id || '';
+  selectOptions($('import-agent'), choices.map(agent => ({
+    value: agent.id, label: `${agent.name} · ${agent.strategy === 'combined' ? '组合' : '目录'}`,
+  })), choices.length ? null : '没有可用的导入助手', wanted);
+}
+
+function renderImportList(element, entries) {
+  element.replaceChildren();
+  for (const item of entries) {
+    const row = document.createElement('li');
+    row.textContent = `${item.logicalPath} · ${item.file.size} bytes${item.reason ? ` · ${item.reason}` : ''}`;
+    element.append(row);
+  }
+}
+
+function updateImportControls() {
+  const importing = Boolean(activeImport);
+  const available = importCapabilities.formats.length > 0;
+  const readyToStart = !importing && importSelection.supported.length > 0
+    && importSelection.errors.length === 0 && Boolean($('import-agent').value)
+    && !importNameError() && !fixedSessionSelection && available;
+  $('import-files').disabled = importing;
+  $('import-directory').disabled = importing;
+  $('import-name').disabled = importing;
+  $('import-agent').disabled = importing || compatibleImportAgents().length === 0;
+  $('import-start').disabled = !readyToStart;
+  $('import-start').textContent = importing ? '正在导入…' : '保存副本并创建会话';
+  $('import-cancel').disabled = !activeImport?.id
+    || ['cancelling', 'handoff'].includes(activeImport.phase);
+  $('import-close').disabled = importing;
+  $('import-trigger').disabled = fixedSessionSelection || busy || managing || importing
+    || compatibleImportAgents().length === 0 || !available;
+}
+
+function renderImportPreflight() {
+  $('import-supported-count').textContent = String(importSelection.supported.length);
+  $('import-ignored-count').textContent = String(importSelection.ignored.length);
+  renderImportList($('import-supported-list'), importSelection.supported);
+  renderImportList($('import-ignored-list'), importSelection.ignored);
+  $('import-ignored-block').hidden = importSelection.ignored.length === 0;
+  if (!activeImport) {
+    const validationErrors = [...importSelection.errors];
+    const nameError = importNameError();
+    if (nameError) validationErrors.push(nameError);
+    $('import-error').hidden = validationErrors.length === 0;
+    $('import-error').textContent = validationErrors.join(' ');
+    setImportStatus(importSelection.supported.length
+      ? `已选 ${importSelection.supported.length} 份支持资料，可以保存本地副本。`
+      : '请选择资料。');
+    $('import-progress').hidden = true;
+    $('import-progress').value = 0;
+  }
+  updateImportControls();
+}
+
+function chooseImportFiles(kind, fileList) {
+  if (activeImport) return;
+  importGeneration++;
+  const files = [...fileList];
+  const limits = importCapabilities.limits || {};
+  const availability = new Map((importCapabilities.formats || []).map(
+    item => [String(item.extension || '').toLowerCase(), item.available !== false]));
+  const supportedExtensions = new Set(['.md', '.txt', '.pdf', '.docx']);
+  const supported = [], ignored = [], errors = [], seen = new Set();
+  let totalBytes = 0;
+  for (const file of files) {
+    const logicalPath = kind === 'folder' ? file.webkitRelativePath : file.name;
+    if (!importPathSafe(logicalPath) || seen.has(logicalPath)) {
+      errors.push(`“${logicalPath || file.name}”的相对路径不安全或重复。`);
+      continue;
+    }
+    seen.add(logicalPath);
+    const basename = logicalPath.split('/').at(-1);
+    const dot = basename.lastIndexOf('.');
+    const suffix = dot > 0 ? basename.slice(dot).toLowerCase() : '';
+    const item = {file, logicalPath, extension: suffix};
+    if (!supportedExtensions.has(suffix)) {
+      item.reason = '格式不支持'; ignored.push(item); continue;
+    }
+    if (availability.has(suffix) && !availability.get(suffix)) {
+      errors.push(`${importFormatName(suffix)} 解析器未安装或不可用。`);
+    }
+    if (file.size > (limits.max_file_bytes || 20 * 1024 * 1024)) {
+      errors.push(`“${logicalPath}”超过单文件大小限制。`);
+    }
+    totalBytes += file.size;
+    supported.push(item);
+  }
+  if (files.length > (limits.max_items || 500)) errors.push('所选文件总数超过 500。');
+  if (supported.length > (limits.max_files || 50)) errors.push('支持文件超过 50 份。');
+  if (totalBytes > (limits.max_total_bytes || 100 * 1024 * 1024)) {
+    errors.push('支持文件总大小超过 100 MiB。');
+  }
+  const uniqueErrors = [...new Set(errors)];
+  importSelection = {kind, supported, ignored, errors: uniqueErrors};
+  if (!$('import-name').value.trim() && supported.length) {
+    const first = supported[0].logicalPath;
+    $('import-name').value = kind === 'folder' ? first.split('/')[0]
+      : supported.length === 1 ? first.replace(/\.[^.]+$/u, '') : `${supported.length} 份本地资料`;
+  }
+  renderImportPreflight();
+}
+
+function openImportDialog() {
+  renderImportAgents();
+  renderImportPreflight();
+  if (!$('import-dialog').open) $('import-dialog').showModal();
+  requestAnimationFrame(() => $('import-files').focus());
+}
+
+function closeImportDialog() {
+  if (activeImport) {
+    setImportStatus('导入仍在进行，请先取消本次导入。');
+    return;
+  }
+  importGeneration++;
+  if ($('import-dialog').open) $('import-dialog').close();
+  requestAnimationFrame(() => $('import-trigger').focus());
+}
+
+function importDelay(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    const timerId = setTimeout(done, milliseconds);
+    function aborted() {
+      clearTimeout(timerId);
+      signal?.removeEventListener('abort', aborted);
+      reject(new DOMException('Aborted', 'AbortError'));
+    }
+    function done() {
+      signal?.removeEventListener('abort', aborted);
+      resolve();
+    }
+    signal?.addEventListener('abort', aborted, {once: true});
+  });
+}
+
+function renderImportSources(session) {
+  const sources = session?.import?.files || [];
+  $('import-source-list').replaceChildren();
+  $('import-sources').hidden = sources.length === 0;
+  if (!sources.length) return;
+  $('import-source-count').textContent = `本地副本已保存 · ${sources.length} 份资料`;
+  for (const source of sources) {
+    const card = document.createElement('article');
+    const title = document.createElement('strong');
+    const details = document.createElement('span');
+    const hash = document.createElement('code');
+    card.className = 'import-source-card';
+    title.textContent = source.logical_path;
+    const stats = source.stats || {};
+    const units = stats.page_count ? `${stats.page_count} 页`
+      : stats.unit_count !== undefined ? `${stats.unit_count} 个内容单元` : '';
+    details.textContent = `${String(source.format || '').toUpperCase()} · ${source.bytes} bytes · ${source.chunks} 个块`
+      + (units ? ` · ${units}` : '')
+      + ((source.warnings || []).length ? ` · ${(source.warnings || []).length} 条提取警告` : '');
+    hash.textContent = `SHA-256 ${source.sha256}`;
+    card.append(title, details, hash); $('import-source-list').append(card);
+  }
+}
+
+async function finishImport(run, snapshot) {
+  if (!importIsCurrent(run) || snapshot.status !== 'ready' || !snapshot.session_id) return;
+  run.phase = 'handoff';
+  updateImportControls();
+  selectedAgentId = run.agentId;
+  $('agent-select').value = run.agentId;
+  try {
+    const loaded = await loadSessions(snapshot.session_id, fixedSessionSelection);
+    if (!loaded || activeSession?.id !== snapshot.session_id
+        || activeSession?.agent_id !== run.agentId) {
+      throw new Error('本地副本已经保存，但新会话未能打开；请刷新页面重试。');
+    }
+  } catch (error) {
+    if (importIsCurrent(run)) {
+      $('import-error').textContent = '本地副本已经保存，但会话列表刷新失败；请刷新页面。';
+      $('import-error').hidden = false;
+    }
+    return;
+  }
+  if (!importIsCurrent(run)) return;
+  const count = snapshot.total_files || run.files.length;
+  clearPersistedImport();
+  setImportStatus(`本地副本已保存 · ${count} 份资料`, {summary: true});
+  $('import-error').hidden = true;
+  $('import-progress').hidden = true;
+  activeImport = null;
+  importGeneration++;
+  updateControls();
+  if ($('import-dialog').open) $('import-dialog').close();
+  if (document.body.dataset.drawer) setDrawer(null, false);
+  requestAnimationFrame(() => $('question').focus());
+}
+
+async function pollImport(run, snapshot = null) {
+  let current = snapshot;
+  while (importIsCurrent(run)) {
+    if (current?.status === 'ready') {
+      if (typeof current.session_id !== 'string' || !current.session_id) {
+        clearPersistedImport();
+        activeImport = null;
+        $('import-progress').hidden = true;
+        $('import-error').textContent = '服务端已完成导入，但没有返回可打开的会话。请刷新页面检查。';
+        $('import-error').hidden = false;
+        setImportStatus('本次导入无法进入会话。');
+        updateControls();
+        return;
+      }
+      return finishImport(run, current);
+    }
+    if (['failed', 'cancelled'].includes(current?.status)) {
+      clearPersistedImport();
+      activeImport = null;
+      $('import-progress').hidden = true;
+      const code = current.error_code || (current.status === 'cancelled' ? 'IMPORT_CANCELLED' : 'IMPORT_STORAGE_FAILED');
+      $('import-error').textContent = messageFor(code);
+      $('import-error').hidden = false;
+      setImportStatus(current.status === 'cancelled' ? '本次导入已取消。' : '本次导入未完成。');
+      updateControls();
+      return;
+    }
+    try {
+      setImportStatus('正在解析、建立索引并创建会话…');
+      await importDelay(250, run.controller.signal);
+      if (!importIsCurrent(run)) return;
+      current = await importJson(`/api/imports/${encodeURIComponent(run.id)}`,
+        undefined, run.agentId, run.controller.signal);
+    } catch (error) {
+      if (!importIsCurrent(run) || error.name === 'AbortError') return;
+      $('import-error').textContent = error.message;
+      $('import-error').hidden = false;
+      setImportStatus('暂时无法取得导入进度，正在重试…');
+      try { await importDelay(1000, run.controller.signal); }
+      catch (_) { return; }
+    }
+  }
+}
+
+async function startImport() {
+  if (activeImport) return;
+  renderImportPreflight();
+  if ($('import-start').disabled) return;
+  const generation = ++importGeneration;
+  const agentId = $('import-agent').value;
+  const files = importSelection.supported.map(item => ({...item}));
+  const ignored = importSelection.ignored.map(item => ({...item}));
+  const controller = new AbortController();
+  const run = {generation, agentId, files, ignored, controller, id: null,
+    phase: 'begin', completeSent: false};
+  activeImport = run;
+  $('import-error').hidden = true;
+  $('import-progress').hidden = false;
+  $('import-progress').max = Math.max(1, files.length);
+  $('import-progress').value = 0;
+  setImportStatus('正在建立安全的本地副本…');
+  updateControls();
+  const metadata = {
+    kind: importSelection.kind,
+    name: $('import-name').value.trim(),
+    agent_id: agentId,
+    files: files.map(item => ({logical_path: item.logicalPath, bytes: item.file.size})),
+    ignored: ignored.map(item => ({logical_path: item.logicalPath, bytes: item.file.size})),
+  };
+  try {
+    const batch = await importJson('/api/imports', metadata, agentId, controller.signal);
+    if (!importIsCurrent(run)) return;
+    run.id = batch.id;
+    run.phase = 'uploading';
+    persistImport(run);
+    updateImportControls();
+    const selected = new Map(files.map(item => [item.logicalPath, item]));
+    if (!Array.isArray(batch.files) || batch.files.length !== files.length) {
+      const error = new Error(messageFor('IMPORT_REQUEST_INVALID'));
+      error.code = 'IMPORT_REQUEST_INVALID'; throw error;
+    }
+    for (let index = 0; index < batch.files.length; index++) {
+      const slot = batch.files[index];
+      const item = selected.get(slot.logical_path);
+      if (!item || item.file.size !== slot.declared_bytes) {
+        const error = new Error(messageFor('IMPORT_LENGTH_MISMATCH'));
+        error.code = 'IMPORT_LENGTH_MISMATCH'; throw error;
+      }
+      setImportStatus(`正在复制 ${index + 1} / ${files.length} · ${item.logicalPath}`);
+      await importBinary(
+        `/api/imports/${encodeURIComponent(run.id)}/files/${encodeURIComponent(slot.slot_id)}`,
+        item.file, agentId, controller.signal);
+      if (!importIsCurrent(run)) return;
+      $('import-progress').value = index + 1;
+      setImportStatus(`已复制 ${index + 1} / ${files.length} · ${item.logicalPath}`);
+    }
+    run.phase = 'finalizing';
+    run.completeSent = true;
+    persistImport(run);
+    setImportStatus(`已复制 ${files.length} / ${files.length}，正在开始解析…`);
+    const snapshot = await importJson(
+      `/api/imports/${encodeURIComponent(run.id)}/complete`, {}, agentId, controller.signal);
+    if (!importIsCurrent(run)) return;
+    await pollImport(run, snapshot);
+  } catch (error) {
+    if (!importIsCurrent(run) || error.name === 'AbortError') return;
+    if (run.completeSent) {
+      $('import-error').textContent = error.message;
+      $('import-error').hidden = false;
+      setImportStatus('无法确认解析请求结果，正在查询服务端状态…');
+      await pollImport(run);
+      return;
+    }
+    $('import-error').textContent = error.message;
+    $('import-error').hidden = false;
+    setImportStatus(run.completeSent
+      ? '无法确认解析状态；请取消后重新导入。'
+      : run.id ? '导入中断；请取消本批后重新选择资料。'
+        : '导入没有开始，请检查后重试。');
+    run.phase = 'upload-error';
+    persistImport(run);
+    if (!run.id) {
+      activeImport = null;
+      clearPersistedImport();
+      $('import-progress').hidden = true;
+    }
+    updateControls();
+  }
+}
+
+async function cancelImport() {
+  const previous = activeImport;
+  if (!previous) return;
+  previous.controller?.abort();
+  const run = {...previous, generation: ++importGeneration, controller: null,
+    phase: 'cancelling'};
+  activeImport = run;
+  setImportStatus('正在取消并清理本次临时副本…');
+  updateControls();
+  try {
+    let snapshot = null;
+    if (run.id) {
+      try {
+        snapshot = await importJson(
+          `/api/imports/${encodeURIComponent(run.id)}/cancel`, {}, run.agentId);
+      } catch (error) {
+        if (error.code !== 'IMPORT_STATE_CONFLICT') throw error;
+        snapshot = await importJson(
+          `/api/imports/${encodeURIComponent(run.id)}`, undefined, run.agentId);
+      }
+    }
+    if (!importIsCurrent(run)) return;
+    if (snapshot?.status === 'ready') {
+      run.controller = new AbortController();
+      return finishImport(run, snapshot);
+    }
+    if (snapshot?.status === 'finalizing') {
+      run.phase = 'finalizing';
+      run.controller = new AbortController();
+      persistImport(run);
+      updateControls();
+      return pollImport(run, snapshot);
+    }
+    clearPersistedImport();
+    activeImport = null;
+    $('import-progress').hidden = true;
+    $('import-error').hidden = true;
+    setImportStatus('本次导入已取消，可以重新选择资料。');
+    updateControls();
+  } catch (error) {
+    if (!importIsCurrent(run)) return;
+    $('import-error').textContent = error.message;
+    $('import-error').hidden = false;
+    setImportStatus('取消未完成，请保持服务开启后重试。');
+    run.phase = 'error';
+    updateControls();
+  }
+}
+
+async function resumePersistedImport() {
+  let saved;
+  try { saved = JSON.parse(sessionStorage.getItem(importStateKey) || 'null'); }
+  catch (_) { clearPersistedImport(); return; }
+  if (!saved || typeof saved.id !== 'string' || typeof saved.agentId !== 'string') return;
+  const run = {id: saved.id, agentId: saved.agentId, phase: saved.phase,
+    generation: ++importGeneration, controller: new AbortController(), files: [], ignored: []};
+  activeImport = run;
+  renderImportAgents();
+  openImportDialog();
+  if (['uploading', 'begin', 'upload-error', 'error'].includes(saved.phase)) {
+    run.controller = null;
+    $('import-error').textContent = '页面刷新后无法重新取得浏览器文件，请取消本批并重新选择。';
+    $('import-error').hidden = false;
+    setImportStatus('这批文件尚未上传完成。');
+    updateImportControls();
+    return;
+  }
+  setImportStatus('正在恢复导入进度…');
+  try {
+    const snapshot = await importJson(
+      `/api/imports/${encodeURIComponent(run.id)}`, undefined, run.agentId, run.controller.signal);
+    if (importIsCurrent(run)) await pollImport(run, snapshot);
+  } catch (error) {
+    if (!importIsCurrent(run) || error.name === 'AbortError') return;
+    clearPersistedImport();
+    activeImport = null;
+    $('import-error').textContent = error.message;
+    $('import-error').hidden = false;
+    setImportStatus('无法恢复上一批导入。');
+    updateControls();
+  }
+}
+
 function currentAgent() {
   // An old session without a recorded snapshot must not inherit today's bindings.
   if (activeSessionId) return activeSession?.agent_snapshot || null;
@@ -180,7 +720,7 @@ function renderAgentList() {
     const name = document.createElement('strong'), details = document.createElement('span');
     button.type = 'button'; button.className = 'agent-nav-item'; button.dataset.agentId = agent.id;
     button.setAttribute('aria-pressed', String(agent.id === currentId));
-    button.disabled = busy || managing;
+    button.disabled = busy || managing || Boolean(activeImport);
     name.textContent = agent.name;
     details.textContent = `${agent.strategy === 'file' ? '单文件' : '目录'} · ${agent.enabled === false ? '已停用' : '可用'}`;
     button.addEventListener('click', () => {
@@ -250,7 +790,8 @@ function renderRunChoices() {
 function updateAgentControls() {
   const selected = agents.find(agent => agent.id === selectedAgentId);
   const snapshot = currentAgent(), limits = snapshot?.budgets;
-  $('agent-select').disabled = busy || managing || fixedSessionSelection;
+  const importing = Boolean(activeImport);
+  $('agent-select').disabled = busy || managing || importing || fixedSessionSelection;
   $('agent-status').textContent = activeSessionId
     ? `会话助手：${activeSession?.agent_id || '正在加载'} · 修订 ${activeSession?.agent_revision || '未知'}。旧会话保持此修订。`
     : selected ? `${selected.name} · 修订 ${(selected.revision || '').slice(0, 12)}${selected.enabled === false ? ' · 已停用' : ''}`
@@ -264,23 +805,23 @@ function updateAgentControls() {
     $('session-mode').value = mode;
     if (!activeSessionId) $('discover').checked = mode === 'directory';
   }
-  $('session-mode').disabled = busy || Boolean(selected) || fixedSessionSelection;
-  $('session-file').disabled = busy || $('session-mode').value === 'directory';
-  $('session-select').disabled = busy || managing;
-  $('discover').disabled = busy || Boolean(activeSessionId) || Boolean(selected) || !ready;
-  $('file').disabled = busy || Boolean(activeSessionId) || $('discover').checked;
+  $('session-mode').disabled = busy || importing || Boolean(selected) || fixedSessionSelection;
+  $('session-file').disabled = busy || importing || $('session-mode').value === 'directory';
+  $('session-select').disabled = busy || managing || importing;
+  $('discover').disabled = busy || importing || Boolean(activeSessionId) || Boolean(selected) || !ready;
+  $('file').disabled = busy || importing || Boolean(activeSessionId) || $('discover').checked;
   $('file').required = !activeSessionId && !$('discover').checked;
   const current = agents.find(agent => agent.id === (activeSession?.agent_id || selectedAgentId));
   if (current?.enabled === false) $('start').disabled = true;
   if (selected?.enabled === false) $('session-create').disabled = true;
-  for (const element of document.querySelectorAll('[data-management]')) element.disabled = busy || managing;
-  $('agent-toggle').disabled = busy || managing || !selected;
+  for (const element of document.querySelectorAll('[data-management]')) element.disabled = busy || managing || importing;
+  $('agent-toggle').disabled = busy || managing || importing || !selected;
   $('agent-toggle').textContent = selected?.enabled === false ? '启用当前助手' : '停用当前助手';
   for (const button of document.querySelectorAll('[data-bind-kind]')) {
-    button.disabled = busy || managing || !selected || selected.enabled === false || button.dataset.bound === 'true';
+    button.disabled = busy || managing || importing || !selected || selected.enabled === false || button.dataset.bound === 'true';
   }
   for (const button of document.querySelectorAll('[data-agent-id],[data-session-id]')) {
-    button.disabled = busy || managing;
+    button.disabled = busy || managing || importing;
   }
   renderRunChoices();
 }
@@ -359,11 +900,11 @@ async function loadExtensions() {
     label: `${agent.name}${agent.enabled === false ? '（已停用）' : ''}`})), '自动选择（按单文件 / 目录模式）', selectedAgentId);
   selectOptions($('agent-template'), agents.map(agent => ({value: agent.id, label: agent.name})), null);
   if (!templateWas) fillAgentTemplate();
-  renderAgentList(); renderCapabilities(); updateControls();
+  renderAgentList(); renderCapabilities(); renderImportAgents(); updateControls();
 }
 
 async function manage(action) {
-  if (busy || managing) return;
+  if (busy || managing || activeImport) return;
   managing = true; $('extension-error').hidden = true; $('extension-status').textContent = '正在处理…'; updateControls();
   try { await action(); }
   catch (error) { $('extension-status').textContent = ''; showError(error, 'extension-error'); }
@@ -371,7 +912,7 @@ async function manage(action) {
 }
 
 async function selectAgent(agentId) {
-  if (busy) return;
+  if (busy || activeImport) return;
   selectedAgentId = agentId;
   activeSessionId = null; activeSession = null; viewGeneration++;
   $('session-select').value = ''; $('session-actions').hidden = true; $('session-scope').hidden = true;
@@ -393,21 +934,23 @@ function updateControls() {
   const sessionMode = Boolean(activeSessionId);
   const conversation = sessionMode && $('task-type').value === 'conversation';
   const archived = activeSession?.status === 'archived';
+  const importing = Boolean(activeImport);
   const missingScope = !sessionMode && !$('discover').checked && !$('file').value.trim();
-  $('start').disabled = busy || !ready || archived || (sessionMode && !conversation && !workspaceAvailable);
+  $('start').disabled = busy || importing || !ready || archived
+    || (sessionMode && !conversation && !workspaceAvailable);
   $('start').textContent = busy ? '处理中…' : '发送';
   $('thread-panel').setAttribute('aria-busy', String(busy));
   $('cancel').hidden = !busy || !activeId;
-  $('discover').disabled = sessionMode || busy || !ready;
-  $('file').disabled = sessionMode || busy || $('discover').checked;
+  $('discover').disabled = sessionMode || busy || importing || !ready;
+  $('file').disabled = sessionMode || busy || importing || $('discover').checked;
   $('file').required = !sessionMode && !$('discover').checked;
-  $('task-type').disabled = busy || !sessionMode;
-  $('output-file').disabled = busy || conversation;
-  for (const element of [$('question'), $('sample'), ...document.querySelectorAll('[data-question]')]) element.disabled = busy;
-  $('session-create').disabled = busy || fixedSessionSelection;
-  $('session-rename').disabled = busy || !activeSessionId;
-  $('session-archive').disabled = busy || !activeSessionId;
-  $('session-restore').disabled = busy || !activeSessionId;
+  $('task-type').disabled = busy || importing || !sessionMode;
+  $('output-file').disabled = busy || importing || conversation;
+  for (const element of [$('question'), $('sample'), ...document.querySelectorAll('[data-question]')]) element.disabled = busy || importing;
+  $('session-create').disabled = busy || importing || fixedSessionSelection;
+  $('session-rename').disabled = busy || importing || !activeSessionId;
+  $('session-archive').disabled = busy || importing || !activeSessionId;
+  $('session-restore').disabled = busy || importing || !activeSessionId;
   $('privacy').textContent = simulated ? '演示模式：只在本机读取资料，不向模型发送内容。原文件保持只读。'
     : conversation ? '本轮只把问题和本会话的受限历史发送给 DeepSeek，不读取工作区文件。'
     : $('discover').checked ? '开始后，问题、目录元数据和已读取的资料内容将发送给 DeepSeek。原文件保持只读。'
@@ -420,6 +963,7 @@ function updateControls() {
     : `文件：${$('file').value.trim()}`;
   updateAgentControls();
   updateApprovalControls();
+  updateImportControls();
 }
 
 function status(text, type = 'neutral') { $('run-status').textContent = text; $('run-status').className = `badge ${type}`; }
@@ -685,7 +1229,7 @@ function renderSessionList() {
     const details = document.createElement('span');
     button.type = 'button'; button.className = 'session-nav-item'; button.dataset.sessionId = session.id;
     if (session.id === activeSessionId) button.setAttribute('aria-current', 'true');
-    button.disabled = busy || managing;
+    button.disabled = busy || managing || Boolean(activeImport);
     title.textContent = session.title;
     const scope = session.scope?.mode === 'directory' ? '目录' : session.scope?.file || '单文件';
     const when = formatTimestamp(session.updated_at || session.created_at);
@@ -697,7 +1241,7 @@ function renderSessionList() {
     button.append(title, details); list.append(button);
   }
   $('session-load-more').hidden = fixedSessionSelection || (!sessionCursors.active && !sessionCursors.archived);
-  $('session-load-more').disabled = currentSessionPageLoading() || busy || managing;
+  $('session-load-more').disabled = currentSessionPageLoading() || busy || managing || Boolean(activeImport);
 }
 
 function currentSessionPageLoading() {
@@ -706,7 +1250,7 @@ function currentSessionPageLoading() {
 }
 
 async function loadMoreSessions() {
-  if (fixedSessionSelection || currentSessionPageLoading()
+  if (fixedSessionSelection || activeImport || currentSessionPageLoading()
       || (!sessionCursors.active && !sessionCursors.archived)) return;
   const generation = sessionListGeneration, requestedAgent = selectedAgentId;
   const cursors = {...sessionCursors};
@@ -738,8 +1282,9 @@ async function selectSession(sessionId) {
   $('session-error').hidden = true;
   if (!activeSessionId) {
     $('session-actions').hidden = true; $('session-scope').hidden = true;
+    renderImportSources(null);
     runHistoryCursor = null; renderRunHistory([]); renderSessionList(); renderAgentList();
-    $('task-type').value = 'files'; clearRunView(); return;
+    $('task-type').value = 'files'; clearRunView(); updateControls(); return true;
   }
   try {
     const [sessionResponse, runsResponse] = await Promise.all([
@@ -747,6 +1292,7 @@ async function selectSession(sessionId) {
     ]);
     if (generation !== viewGeneration || sessionId !== activeSessionId) return;
     activeSession = sessionResponse.session;
+    renderImportSources(activeSession);
     $('session-select').value = activeSession.id;
     $('session-actions').hidden = false;
     $('session-rename-title').value = activeSession.title;
@@ -756,23 +1302,32 @@ async function selectSession(sessionId) {
     const directory = activeSession.scope.mode === 'directory';
     $('discover').checked = directory; $('file').value = activeSession.scope.file || '';
     $('session-scope').hidden = false;
-    $('session-scope').textContent = `固定资料范围：${directory ? '当前工作区目录发现' : activeSession.scope.file}`
+    const scopeLabel = activeSession.import
+      ? `${activeSession.import.files?.length || 0} 份本地导入资料`
+      : directory ? '当前工作区目录发现' : activeSession.scope.file;
+    $('session-scope').textContent = `固定资料范围：${scopeLabel}`
       + (activeSession.agent_id ? ` · 助手 ${activeSession.agent_id} · 修订 ${(activeSession.agent_revision || '未知').slice(0, 12)}（旧会话保留此版本）` : '')
       + (workspaceAvailable ? '' : ' · 原工作区当前不可用');
     runHistoryCursor = runsResponse.next_cursor || null;
     renderRunHistory(runsResponse.runs);
     if (runsResponse.runs.length) await openSessionRun(runsResponse.runs[0].id);
     else clearRunView();
+    const loaded = activeSession?.id === sessionId;
+    updateControls();
+    return loaded;
   } catch (error) {
-    if (generation === viewGeneration) showError(error, 'session-error');
+    if (generation === viewGeneration) {
+      showError(error, 'session-error');
+      updateControls();
+    }
+    return false;
   }
-  updateControls();
 }
 
 async function loadSessions(selectedId = null, fixed = fixedSessionSelection) {
   const generation = ++sessionListGeneration, requestedAgent = selectedAgentId;
   const [active, archived] = await Promise.all([api('/api/sessions'), api('/api/sessions?archived=1')]);
-  if (generation !== sessionListGeneration || requestedAgent !== selectedAgentId) return;
+  if (generation !== sessionListGeneration || requestedAgent !== selectedAgentId) return false;
   fixedSessionSelection = Boolean(fixed);
   visibleSessions = [...new Map([...(active.sessions || []), ...(archived.sessions || [])]
     .map(item => [item.id, item])).values()];
@@ -782,10 +1337,11 @@ async function loadSessions(selectedId = null, fixed = fixedSessionSelection) {
   $('session-create-toggle').hidden = fixedSessionSelection;
   if (fixedSessionSelection) setSessionCreateOpen(false);
   const wanted = selectedId || active.sessions?.[0]?.id || null;
-  if (wanted) { $('session-select').value = wanted; await selectSession(wanted); }
+  if (wanted) { $('session-select').value = wanted; return selectSession(wanted); }
   else {
-    $('session-select').value = ''; await selectSession('');
+    $('session-select').value = ''; const loaded = await selectSession('');
     if (document.activeElement === document.body) $('question').focus();
+    return loaded;
   }
 }
 
@@ -918,6 +1474,13 @@ async function initialize() {
     $('workspace').textContent = config.workspace;
     ready = config.ready; simulated = Boolean(config.provider?.simulated);
     workspaceAvailable = config.workspace_available !== false;
+    fixedSessionSelection = Boolean(config.selected_session_id);
+    if (config.imports && typeof config.imports === 'object') {
+      importCapabilities = {
+        formats: Array.isArray(config.imports.formats) ? config.imports.formats : [],
+        limits: {...importCapabilities.limits, ...(config.imports.limits || {})},
+      };
+    }
     $('connection').textContent = simulated ? '模拟演示 · 未调用模型' : ready ? 'DeepSeek 已配置' : '模型未配置';
     $('connection').className = `badge ${simulated || !ready ? 'warning' : ''}`;
     if (simulated || !ready) {
@@ -934,6 +1497,7 @@ async function initialize() {
     try { await loadExtensions(); }
     catch (error) { showError(error, 'extension-error'); }
     await loadSessions(config.selected_session_id, Boolean(config.selected_session_id));
+    if (!fixedSessionSelection) await resumePersistedImport();
     if (config.latest_run_id && !activeSessionId) {
       busy = true; updateControls();
       const job = await api(`/api/runs/${config.latest_run_id}`);
@@ -961,6 +1525,24 @@ $('file').addEventListener('invalid', event => {
   showError(new Error('请先选择要核对的文件，或在本轮设置中启用目录发现。'));
   requestAnimationFrame(() => $('file').focus());
 });
+$('import-trigger').addEventListener('click', openImportDialog);
+$('import-close').addEventListener('click', closeImportDialog);
+$('import-dialog').addEventListener('cancel', event => {
+  event.preventDefault();
+  closeImportDialog();
+});
+$('import-files').addEventListener('change', event => {
+  $('import-directory').value = '';
+  chooseImportFiles('file', event.currentTarget.files);
+});
+$('import-directory').addEventListener('change', event => {
+  $('import-files').value = '';
+  chooseImportFiles('folder', event.currentTarget.files);
+});
+$('import-name').addEventListener('input', renderImportPreflight);
+$('import-agent').addEventListener('change', updateImportControls);
+$('import-start').addEventListener('click', startImport);
+$('import-cancel').addEventListener('click', cancelImport);
 $('agent-select').addEventListener('change', () => selectAgent($('agent-select').value));
 $('agent-template').addEventListener('change', fillAgentTemplate);
 $('agent-create').addEventListener('click', () => manage(async () => {
