@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from tests.test_import_store import ImportFinalizeFixture
 
 from local_agent.approvals import ApprovalBroker, ApprovalError
 from local_agent.session_store import SessionStore, StoreError
@@ -764,6 +766,94 @@ class SessionRecoveryTests(unittest.TestCase):
         }
         self.assertEqual(after, before)
         self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+
+
+class ImportPublishRecoveryTests(ImportFinalizeFixture, unittest.TestCase):
+    def test_recovery_fails_abandoned_upload_and_missing_finalizing_directory(self):
+        from tests.test_import_store import ImportStoreUploadTests
+        store = self.store()
+        uploading = store.begin(ImportStoreUploadTests.folder_request([
+            {"logical_path": "pending.txt", "bytes": 2},
+        ]))
+        finalizing_store, finalizing = self.upload([("stored.txt", b"ok")])
+        finalizing_store.start_finalize(finalizing.id)
+        finalizing_store._remove_staging_batch(finalizing.id)
+        orphan = store.staging / ("f" * 32)
+        orphan.mkdir(mode=0o700)
+        (orphan / "copy").write_bytes(b"orphan")
+        self.session_store.close()
+        self.session_store = SessionStore.open(self.state)
+        recovered = self.store()
+        recovered.recover_interrupted()
+        self.assertEqual((recovered.snapshot(uploading.id).status, recovered.snapshot(uploading.id).error_code),
+                         ("failed", "IMPORT_UPLOAD_INCOMPLETE"))
+        self.assertFalse((recovered.staging / uploading.id).exists())
+        self.assertEqual((recovered.snapshot(finalizing.id).status, recovered.snapshot(finalizing.id).error_code),
+                         ("failed", "IMPORT_INTEGRITY_ERROR"))
+        self.assertFalse(orphan.exists())
+
+    def test_three_publish_crash_windows_recover_the_same_job_without_sessions(self):
+        class Crash(BaseException):
+            pass
+        for point in ("after_parse_fsync", "after_publish_rename", "after_parent_fsync"):
+            with self.subTest(point=point):
+                def crash(actual):
+                    if actual == point:
+                        raise Crash()
+                store, batch = self.upload([("x.txt", b"one\ntwo")], fault=crash)
+                job = store.start_finalize(batch.id)
+                with self.assertRaises(Crash):
+                    job.run()
+                with self.session_store.maintenance_gate.maintenance():
+                    pass
+                self.session_store.close()
+                self.session_store = SessionStore.open(self.state)
+                recovered = self.store()
+                recovered.recover_interrupted()
+                same_job = recovered.start_finalize(batch.id)
+                self.assertEqual(same_job.job_id, job.job_id)
+                if point != "after_parse_fsync":
+                    with patch("local_agent.imports.parse_document_in_worker", side_effect=AssertionError("reparsed")):
+                        published = same_job.run()
+                else:
+                    published = same_job.run()
+                self.assertEqual(published.status, "published_unlinked")
+                self.assertEqual(published, recovered.start_finalize(batch.id).run())
+                self.no_session(recovered, batch)
+                self.assertFalse((recovered.staging / batch.id).exists())
+
+    def test_recovery_cleans_only_formal_orphans_without_database_rows(self):
+        store, batch = self.upload([("x.txt", b"ok")])
+        _, published = self.finalize(store, batch)
+        orphan = store.root / ("e" * 32)
+        orphan.mkdir(mode=0o700)
+        (orphan / "partial").write_bytes(b"orphan")
+        self.session_store.close()
+        self.session_store = SessionStore.open(self.state)
+        recovered = self.store()
+        recovered.recover_interrupted()
+        self.assertFalse(orphan.exists())
+        self.assertEqual(recovered.start_finalize(batch.id).run(), published)
+
+    def test_recovery_refuses_missing_or_tampered_manifest_and_directory_identity(self):
+        for damage in ("manifest", "locations", "workspace"):
+            with self.subTest(damage=damage):
+                store, batch = self.upload([("x.txt", b"ok")])
+                _, published = self.finalize(store, batch)
+                if damage == "manifest":
+                    published.manifest.unlink()
+                elif damage == "locations":
+                    published.locations.write_bytes(b"{}")
+                else:
+                    published.workspace.rename(published.root / "held-workspace")
+                    published.workspace.mkdir(mode=0o700)
+                self.session_store.close()
+                self.session_store = SessionStore.open(self.state)
+                recovered = self.store()
+                recovered.recover_interrupted()
+                self.assert_store_error("IMPORT_INTEGRITY_ERROR", lambda: recovered.start_finalize(batch.id))
+                self.assertTrue(published.root.exists())
+                self.no_session(recovered, batch)
 
 
 if __name__ == "__main__":

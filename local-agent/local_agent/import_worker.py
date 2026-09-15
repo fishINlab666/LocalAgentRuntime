@@ -1,11 +1,13 @@
 """Bounded subprocess transport for local document parsing."""
 
 from dataclasses import asdict, fields
+import fcntl
 import json
 import math
 import os
 from pathlib import Path
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -92,13 +94,42 @@ def _validate_limits(value):
 
 def _decode_request(raw):
     value = _load_json(raw)
-    if not isinstance(value, dict) or set(value) != {"source_path", "logical_path", "limits"}:
+    path_fields = {"source_path", "logical_path", "limits"}
+    fd_fields = {"source_fd", "source_identity", "source_size", "logical_path", "limits"}
+    if not isinstance(value, dict) or set(value) not in (path_fields, fd_fields):
         _fail("DOCUMENT_CORRUPT")
-    if not isinstance(value["source_path"], str) or not isinstance(value["logical_path"], str):
+    if not isinstance(value["logical_path"], str) or "\x00" in value["logical_path"]:
         _fail("DOCUMENT_CORRUPT")
-    if "\x00" in value["source_path"] or "\x00" in value["logical_path"]:
+    limits = _validate_limits(value["limits"])
+    if set(value) == fd_fields:
+        details = _checked_source_fd(value["source_fd"], value["source_identity"], limits)
+        if (not _strict_int(value["source_size"])
+                or details.st_size != value["source_size"]):
+            _fail("DOCUMENT_CORRUPT")
+        os.lseek(value["source_fd"], 0, os.SEEK_SET)
+        # /dev/fd duplicates the inherited object on Darwin and Linux. Never
+        # resolve this path back into a name that can be replaced by a caller.
+        return Path(f"/dev/fd/{value['source_fd']}"), value["logical_path"], limits
+    if not isinstance(value["source_path"], str) or "\x00" in value["source_path"]:
         _fail("DOCUMENT_CORRUPT")
-    return Path(value["source_path"]), value["logical_path"], _validate_limits(value["limits"])
+    return Path(value["source_path"]), value["logical_path"], limits
+
+
+def _checked_source_fd(descriptor, identity, limits):
+    if (not _strict_int(descriptor, minimum=3) or not isinstance(identity, (list, tuple))
+            or len(identity) != 2 or not all(_strict_int(value) for value in identity)):
+        _fail("DOCUMENT_CORRUPT")
+    try:
+        details = os.fstat(descriptor)
+        access = fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE
+    except (OSError, ValueError, OverflowError):
+        _fail("DOCUMENT_CORRUPT")
+    if (access != os.O_RDONLY or not stat.S_ISREG(details.st_mode)
+            or (details.st_dev, details.st_ino) != tuple(identity)):
+        _fail("DOCUMENT_CORRUPT")
+    if details.st_size > limits.max_file_bytes:
+        _fail("DOCUMENT_LIMIT_EXCEEDED")
+    return details
 
 
 def _document_payload(document):
@@ -328,6 +359,8 @@ def parse_document_in_worker(
         *,
         timeout_seconds=20,
         cancelled=None,
+        source_fd=None,
+        source_identity=None,
 ):
     """Parse in a resource-limited child and return a validated document."""
     if not isinstance(source, Path) or not isinstance(logical_path, str):
@@ -341,11 +374,18 @@ def parse_document_in_worker(
         _fail("DOCUMENT_CORRUPT")
     if cancelled is not None and cancelled():
         _fail("DOCUMENT_PARSER_CANCELLED")
-    request = _encode_payload({
-        "source_path": str(source.resolve()),
-        "logical_path": logical_path,
-        "limits": asdict(limits),
-    })
+    payload = {"logical_path": logical_path, "limits": asdict(limits)}
+    if source_fd is None:
+        if source_identity is not None:
+            _fail("DOCUMENT_CORRUPT")
+        payload["source_path"] = str(source.resolve())
+        inherited = ()
+    else:
+        details = _checked_source_fd(source_fd, source_identity, limits)
+        payload.update({"source_fd": source_fd, "source_identity": list(source_identity),
+                        "source_size": details.st_size})
+        inherited = (source_fd,)
+    request = _encode_payload(payload)
     if len(request) > MAX_WORKER_INPUT_BYTES:
         _fail("DOCUMENT_LIMIT_EXCEEDED")
     with tempfile.TemporaryFile() as stdout_file:
@@ -358,6 +398,7 @@ def parse_document_in_worker(
                 cwd=Path(__file__).resolve().parents[1],
                 env=_minimal_environment(),
                 start_new_session=True,
+                pass_fds=inherited,
             )
         except (OSError, ValueError):
             _fail("DOCUMENT_PARSER_UNAVAILABLE")

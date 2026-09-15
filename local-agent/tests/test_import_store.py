@@ -10,6 +10,9 @@ import re
 import sqlite3
 import stat
 import tempfile
+import threading
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -1059,19 +1062,18 @@ class ImportStoreUploadTests(unittest.TestCase):
             any(batch.id in key for key in store._managed_directory_identities)
         )
 
-    def test_finalize_and_open_refuse_until_task_four_without_changing_state(self):
+    def test_finalize_does_not_open_or_create_a_session(self):
         store = self.store()
         batch = store.begin(self.request())
         slot = batch.files[0]
         store.add_file(batch.id, slot.slot_id, BytesIO(b"abc"), 3)
 
-        self.assert_store_error(
-            "IMPORT_NOT_READY", lambda: self.method(store, "start_finalize")(batch.id)
-        )
+        job = self.method(store, "start_finalize")(batch.id)
+        self.assertEqual(job.import_id, batch.id)
         self.assert_store_error(
             "IMPORT_NOT_READY", lambda: self.method(store, "open")(batch.id)
         )
-        self.assertEqual(store.snapshot(batch.id).status, "uploading")
+        self.assertEqual(store.snapshot(batch.id).status, "finalizing")
         self.assertFalse((self.state / "imports" / batch.id).exists())
 
     def test_cancel_does_not_change_ready_or_delete_formal_import(self):
@@ -1094,6 +1096,414 @@ class ImportStoreUploadTests(unittest.TestCase):
         self.assertEqual(store.snapshot(batch.id).status, "ready")
         self.assertEqual(marker.read_bytes(), b"keep")
         self.assertTrue(batch_root.is_dir())
+
+
+class ImportFinalizeFixture:
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state = Path(self.tmp.name) / "state"
+        self.session_store = SessionStore.open(self.state)
+        self.state = self.session_store.state_dir
+        self.addCleanup(lambda: self.session_store.close())
+
+    store = ImportStoreUploadTests.store
+    assert_store_error = ImportStoreUploadTests.assert_store_error
+
+    def upload(self, files, **options):
+        store = self.store(**options)
+        request = ImportStoreUploadTests.folder_request(
+            [{"logical_path": name, "bytes": len(raw)} for name, raw in files]
+        )
+        batch = store.begin(request)
+        for slot, (_, raw) in zip(batch.files, files):
+            store.add_file(batch.id, slot.slot_id, BytesIO(raw), len(raw))
+        return store, batch
+
+    def finalize(self, store, batch):
+        try:
+            job = store.start_finalize(batch.id)
+        except Exception as error:
+            self.fail(f"finalize must start for stored slots: {error}")
+        self.assertTrue(callable(getattr(job, "run", None)), "ImportJob.run missing")
+        return job, job.run()
+
+    def no_session(self, store, batch):
+        self.assertIsNone(store.snapshot(batch.id).session_id)
+        self.assertEqual(self.session_store.connection().execute(
+            "SELECT COUNT(*) FROM sessions"
+        ).fetchone()[0], 0)
+        self.assert_store_error("IMPORT_NOT_READY", lambda: store.open(batch.id))
+
+
+class ImportFinalizeTests(ImportFinalizeFixture, unittest.TestCase):
+    def test_two_long_texts_publish_exact_chunks_locations_hashes_and_permissions(self):
+        raw_a = ("甲" * 5000 + "\r\n\r\n下一行\r尾").encode()
+        raw_b = ("项目数据\n" * 1800 + "末行").encode()
+        store, batch = self.upload([("目录/一.TXT", raw_a), ("二.md", raw_b)])
+        job, published = self.finalize(store, batch)
+        self.assertEqual(published.status, "published_unlinked")
+        self.assertEqual(published.import_id, batch.id)
+        self.assertEqual(published.job_id, job.job_id)
+        self.assertEqual(published.root, self.state / "imports" / batch.id)
+        self.assertFalse((store.staging / batch.id).exists())
+        self.assertEqual(store.snapshot(batch.id).status, "finalizing")
+        self.no_session(store, batch)
+        self.assertGreaterEqual(len(published.chunk_paths), 4)
+        self.assertLessEqual(len(published.chunk_paths), 256)
+        manifest = json.loads(published.manifest.read_bytes())
+        locations = json.loads(published.locations.read_bytes())
+        self.assertEqual(manifest["status"], "parsed")
+        self.assertEqual(manifest["import_id"], batch.id)
+        self.assertEqual(len(published.file_records), 2)
+        expected_hashes = {}
+        for path in published.root.rglob("*"):
+            self.assertFalse(path.is_symlink())
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o700 if path.is_dir() else 0o600)
+            if path.is_file() and path != published.manifest:
+                expected_hashes[path.relative_to(published.root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.assertEqual(published.manifest_hashes, expected_hashes)
+        self.assertEqual(manifest["hashes"], expected_hashes)
+        self.assertEqual(published.manifest.read_bytes(), json.dumps(
+            manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ).encode())
+        for slot, raw in zip(batch.files, (raw_a, raw_b)):
+            paths = sorted(path for path in published.chunk_paths if path.parent.name == slot.source_id)
+            expected = raw.decode().replace("\r\n", "\n").replace("\r", "\n")
+            self.assertEqual("".join(path.read_text() for path in paths), expected)
+            for path in paths:
+                self.assertLessEqual(path.stat().st_size, 12 * 1024)
+                mapping = locations[path.relative_to(published.workspace).as_posix()]
+                lines = path.read_text().splitlines()
+                self.assertEqual(set(mapping), {str(i) for i in range(1, len(lines) + 1)})
+                self.assertTrue(all(value[0]["kind"] == "text_lines" for value in mapping.values()))
+        index = (published.workspace / "index.md").read_text()
+        self.assertLessEqual(len(index.encode()), 16 * 1024)
+        self.assertIn("目录/一.TXT", index)
+        self.assertNotIn("下一行", index)
+        self.assertNotIn(str(self.state), index)
+        for name in ("workspace", "artifacts"):
+            details = (published.root / name).stat()
+            self.assertEqual(published.identities[name], (details.st_dev, details.st_ino))
+        with self.assertRaises(FrozenInstanceError):
+            published.status = "ready"
+        with self.assertRaises(TypeError):
+            published.manifest_hashes["locations.json"] = "changed"
+
+    def test_pdf_pages_and_docx_paragraph_table_order_have_original_locations(self):
+        from tests.import_fixtures import write_text_pdf, write_docx
+        pdf = Path(self.tmp.name) / "sample.pdf"
+        docx = Path(self.tmp.name) / "sample.docx"
+        write_text_pdf(pdf, ["Page one", "Page two"])
+        write_docx(docx)
+        store, batch = self.upload([("two.pdf", pdf.read_bytes()), ("word.docx", docx.read_bytes())])
+        _, published = self.finalize(store, batch)
+        locations = json.loads(published.locations.read_bytes())
+        found = []
+        for path in published.chunk_paths:
+            found.extend(location for values in locations[path.relative_to(published.workspace).as_posix()].values()
+                         for location in values)
+        self.assertIn({"kind": "pdf_page", "page": 1}, found)
+        self.assertIn({"kind": "pdf_page", "page": 2}, found)
+        self.assertIn({"kind": "docx_paragraph", "paragraph": 1}, found)
+        self.assertIn({"kind": "docx_paragraph", "paragraph": 2}, found)
+        self.assertIn({"kind": "docx_table_row", "table": 1, "row": 2}, found)
+        text = "".join(path.read_text() for path in published.chunk_paths)
+        self.assertLess(text.index("表格之前"), text.index("项目\t青禾-47"))
+        self.assertLess(text.index("负责人\t林岚"), text.index("表格之后"))
+
+    def test_empty_text_and_docx_have_no_invented_evidence(self):
+        from docx import Document
+        docx = Path(self.tmp.name) / "empty.docx"
+        Document().save(docx)
+        store, batch = self.upload([("empty.txt", b""), ("empty.docx", docx.read_bytes())])
+        _, published = self.finalize(store, batch)
+        self.assertEqual(published.chunk_paths, ())
+        self.assertEqual(json.loads(published.locations.read_bytes()), {})
+        self.assertEqual(len(published.file_records), 2)
+
+    def test_parser_failure_fails_the_entire_batch_without_publication(self):
+        store, batch = self.upload([("good.txt", b"ok"), ("bad.txt", b"\xff")])
+        job = store.start_finalize(batch.id)
+        self.assert_store_error("TEXT_INVALID_UTF8", job.run)
+        snapshot = store.snapshot(batch.id)
+        self.assertEqual((snapshot.status, snapshot.error_code), ("failed", "TEXT_INVALID_UTF8"))
+        self.assertFalse((store.root / batch.id).exists())
+        self.assertFalse((store.staging / batch.id).exists())
+        self.no_session(store, batch)
+
+    def test_incomplete_upload_cannot_enter_finalizing(self):
+        store = self.store()
+        batch = store.begin(ImportStoreUploadTests.folder_request([
+            {"logical_path": "one.txt", "bytes": 1}, {"logical_path": "two.txt", "bytes": 1},
+        ]))
+        store.add_file(batch.id, batch.files[0].slot_id, BytesIO(b"a"), 1)
+        self.assert_store_error("IMPORT_UPLOAD_INCOMPLETE", lambda: store.start_finalize(batch.id))
+        self.assertEqual(store.snapshot(batch.id).status, "uploading")
+        self.assertIsNone(store.snapshot(batch.id).job_id)
+
+    def test_repeated_start_and_run_rebuild_identical_result_without_reparsing(self):
+        store, batch = self.upload([("note.txt", b"one\ntwo")])
+        job, published = self.finalize(store, batch)
+        self.assertEqual(store.start_finalize(batch.id), job)
+        with patch("local_agent.imports.parse_document_in_worker", side_effect=AssertionError("reparsed")):
+            self.assertEqual(job.run(), published)
+            self.assertEqual(store.start_finalize(batch.id).run(), published)
+        self.assertEqual(len(job.job_id), 32)
+        with self.assertRaises(FrozenInstanceError):
+            job.job_id = "changed"
+
+    def test_chunk_count_batch_text_and_index_limits_fail_before_publication(self):
+        for files, limits in (
+            ([("x.txt", b"a" * 13000)], {"max_chunks": 1}),
+            ([("x.txt", b"abcd"), ("y.txt", b"efgh")], {"max_extracted_total_bytes": 7}),
+            ([("x.txt", b"ok")], {"max_index_bytes": 1}),
+        ):
+            with self.subTest(limits=limits):
+                store, batch = self.upload(files, limits=limits)
+                job = store.start_finalize(batch.id)
+                self.assert_store_error("DOCUMENT_LIMIT_EXCEEDED", job.run)
+                self.assertFalse((store.root / batch.id).exists())
+
+    def test_original_tampering_and_formal_tampering_are_rejected(self):
+        store, batch = self.upload([("x.txt", b"original")])
+        original = store.staging / batch.id / "originals" / (batch.files[0].source_id + ".bin")
+        original.write_bytes(b"modified")
+        self.assert_store_error("IMPORT_INTEGRITY_ERROR", store.start_finalize(batch.id).run)
+        store, batch = self.upload([("x.txt", b"original")])
+        job, published = self.finalize(store, batch)
+        published.chunk_paths[0].write_bytes(b"modified")
+        self.assert_store_error("IMPORT_INTEGRITY_ERROR", job.run)
+        self.assert_store_error("IMPORT_INTEGRITY_ERROR", lambda: store.start_finalize(batch.id))
+        self.assertTrue(published.root.exists())
+
+    def test_swapped_original_restored_after_worker_cannot_publish_other_text(self):
+        from local_agent.import_worker import parse_document_in_worker
+        store, batch = self.upload([("note.txt", b"good")])
+        job = store.start_finalize(batch.id)
+        original = store.staging / batch.id / "originals" / (batch.files[0].source_id + ".bin")
+        extracted = []
+        def swap_while_parsing(source, logical_path, limits, **kwargs):
+            held = source.with_name(source.name + ".held")
+            source.rename(held)
+            source.write_bytes(b"evil")
+            source.chmod(0o600)
+            try:
+                document = parse_document_in_worker(source, logical_path, limits, **kwargs)
+                extracted.append("".join(unit.text for unit in document.units))
+                return document
+            finally:
+                source.unlink()
+                held.rename(source)
+        with patch("local_agent.imports.parse_document_in_worker", side_effect=swap_while_parsing):
+            try:
+                published = job.run()
+            except Exception as error:
+                self.assertEqual(getattr(error, "code", None), "IMPORT_INTEGRITY_ERROR")
+            else:
+                self.fail(f"swapped content was published: original=good, chunk={published.chunk_paths[0].read_text()!r}")
+        self.assertEqual(extracted, ["good"])
+        self.assertFalse((store.root / batch.id).exists())
+        self.assertEqual(store.snapshot(batch.id).status, "failed")
+        self.no_session(store, batch)
+
+    def test_worker_fd_source_uses_the_fixed_object_without_resolving_source_path(self):
+        from local_agent.import_worker import parse_document_in_worker
+        original = Path(self.tmp.name) / "original.bin"
+        original.write_bytes(b"fixed")
+        descriptor = os.open(original, os.O_RDONLY)
+        try:
+            details = os.fstat(descriptor)
+            original.rename(original.with_suffix(".held"))
+            document = parse_document_in_worker(
+                original, "logical.txt", source_fd=descriptor,
+                source_identity=(details.st_dev, details.st_ino),
+            )
+            self.assertEqual("".join(unit.text for unit in document.units), "fixed")
+        finally:
+            os.close(descriptor)
+
+    def test_worker_fd_rejects_writable_directory_wrong_identity_and_oversized_source(self):
+        from local_agent.import_parsers import DocumentParseError, ImportLimits
+        from local_agent.import_worker import parse_document_in_worker
+        original = Path(self.tmp.name) / "original.bin"
+        original.write_bytes(b"fixed")
+        for target, flags, wrong_identity, limit, code in (
+            (original, os.O_RDWR, False, 10, "DOCUMENT_CORRUPT"),
+            (original.parent, os.O_RDONLY | os.O_DIRECTORY, False, 10, "DOCUMENT_CORRUPT"),
+            (original, os.O_RDONLY, True, 10, "DOCUMENT_CORRUPT"),
+            (original, os.O_RDONLY, False, 4, "DOCUMENT_LIMIT_EXCEEDED"),
+        ):
+            with self.subTest(flags=flags, wrong_identity=wrong_identity, limit=limit):
+                descriptor = os.open(target, flags)
+                try:
+                    details = os.fstat(descriptor)
+                    identity = (details.st_dev, details.st_ino + int(wrong_identity))
+                    with self.assertRaises(DocumentParseError) as caught:
+                        parse_document_in_worker(
+                            original, "logical.txt", ImportLimits(max_file_bytes=limit),
+                            source_fd=descriptor, source_identity=identity,
+                        )
+                    self.assertEqual(caught.exception.code, code)
+                finally:
+                    os.close(descriptor)
+
+    def test_existing_incomplete_formal_directory_is_never_overwritten(self):
+        store, batch = self.upload([("x.txt", b"ok")])
+        formal = store.root / batch.id
+        formal.mkdir(mode=0o700)
+        marker = formal / "keep"
+        marker.write_bytes(b"keep")
+        self.assert_store_error("IMPORT_INTEGRITY_ERROR", lambda: store.start_finalize(batch.id))
+        self.assertEqual(marker.read_bytes(), b"keep")
+
+    def test_run_holds_one_gate_activity_and_closes_its_thread_connection(self):
+        from local_agent.import_worker import parse_document_in_worker
+        store, batch = self.upload([("x.txt", b"ok")])
+        def parser(source, logical_path, limits, **kwargs):
+            self.assertEqual(source.name, batch.files[0].source_id + ".bin")
+            self.assertEqual(source.parent.name, "originals")
+            self.assertEqual(logical_path, "x.txt")
+            with self.assertRaises(StateBusy):
+                with self.session_store.maintenance_gate.maintenance():
+                    pass
+            self.assertEqual(len(self.session_store.maintenance_gate._active), 1)
+            return parse_document_in_worker(source, logical_path, limits, **kwargs)
+        with patch("local_agent.imports.parse_document_in_worker", side_effect=parser), patch.object(
+            self.session_store, "close_thread_connection", wraps=self.session_store.close_thread_connection,
+        ) as close:
+            self.finalize(store, batch)
+            self.assertTrue(close.called)
+        with self.session_store.maintenance_gate.maintenance():
+            pass
+
+    def test_cancel_terminates_real_parser_process_and_cleans_unpublished_batch(self):
+        store, batch = self.upload([("x.txt", b"ok")])
+        job = store.start_finalize(batch.id)
+        started = threading.Event()
+        children = []
+        real_popen = subprocess.Popen
+        def slow_parser(_args, **kwargs):
+            process = real_popen([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+            children.append(process)
+            started.set()
+            return process
+        errors = []
+        def run():
+            try:
+                job.run()
+            except Exception as error:
+                errors.append(error)
+        with patch("local_agent.import_worker.subprocess.Popen", side_effect=slow_parser):
+            thread = threading.Thread(target=run)
+            thread.start()
+            self.assertTrue(started.wait(5))
+            cancelled = store.cancel(batch.id)
+            thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(cancelled.status, "cancelled")
+        self.assertEqual([error.code for error in errors], ["IMPORT_CANCELLED"])
+        self.assertTrue(all(process.poll() is not None for process in children))
+        self.assertFalse((store.staging / batch.id).exists())
+        self.assertFalse((store.root / batch.id).exists())
+        with self.session_store.maintenance_gate.maintenance():
+            pass
+
+    def test_cancel_after_publication_preserves_complete_directory(self):
+        store, batch = self.upload([("x.txt", b"ok")])
+        _, published = self.finalize(store, batch)
+        self.assert_store_error("IMPORT_STATE_CONFLICT", lambda: store.cancel(batch.id))
+        self.assertTrue(published.manifest.is_file())
+        self.assertEqual(store.snapshot(batch.id).status, "finalizing")
+
+    def test_publication_race_does_not_replace_an_existing_empty_directory(self):
+        occupied = []
+        def reserve(point):
+            if point == "after_parse_fsync":
+                target = store.root / batch.id
+                target.mkdir(mode=0o700)
+                occupied.append(target.stat().st_ino)
+        store, batch = self.upload([("x.txt", b"ok")], fault=reserve)
+        self.assert_store_error("IMPORT_INTEGRITY_ERROR", store.start_finalize(batch.id).run)
+        self.assertEqual((store.root / batch.id).stat().st_ino, occupied[0])
+        self.assertEqual(list((store.root / batch.id).iterdir()), [])
+        self.no_session(store, batch)
+
+    def test_replaced_root_during_finalize_never_leaks_error_or_deletes_replacement(self):
+        moved = self.state / "held-imports"
+        def replace(point):
+            if point == "after_parse_fsync":
+                store.root.rename(moved)
+                store.root.mkdir(mode=0o700)
+                (store.root / "keep").write_bytes(b"keep")
+        store, batch = self.upload([("x.txt", b"ok")], fault=replace)
+        self.assert_store_error("IMPORT_INTEGRITY_ERROR", store.start_finalize(batch.id).run)
+        self.assertEqual((store.root / "keep").read_bytes(), b"keep")
+        self.assertTrue((moved / ".staging" / batch.id / "originals").is_dir())
+
+    def test_unexpected_parser_exception_exposes_only_stable_code(self):
+        store, batch = self.upload([("x.txt", b"ok")])
+        job = store.start_finalize(batch.id)
+        with patch("local_agent.imports.parse_document_in_worker", side_effect=RuntimeError("private detail")):
+            self.assert_store_error("IMPORT_STORAGE_FAILED", job.run)
+        self.assertEqual(store.snapshot(batch.id).status, "failed")
+        self.assertFalse((store.staging / batch.id).exists())
+
+    def test_original_directory_open_failure_closes_all_held_batch_descriptors(self):
+        store, batch = self.upload([("x.txt", b"ok")])
+        job = store.start_finalize(batch.id)
+        opened = []
+        original_open = store._batch_fd
+        def tracked_open(*args, **kwargs):
+            descriptor = original_open(*args, **kwargs)
+            opened.append(descriptor)
+            return descriptor
+        with patch.object(store, "_batch_fd", side_effect=tracked_open), patch.object(
+            store, "_open_originals_directory", side_effect=OSError("failed open"),
+        ):
+            self.assert_store_error("IMPORT_INTEGRITY_ERROR", job.run)
+        for descriptor in opened:
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_recovery_directory_error_has_a_stable_code(self):
+        store, _batch = self.upload([("x.txt", b"ok")])
+        store.root.rename(self.state / "held-imports")
+        store.root.mkdir(mode=0o700)
+        self.assert_store_error("IMPORT_STORAGE_FAILED", store.recover_interrupted)
+
+    def test_same_job_runs_are_serialized_and_parse_only_once(self):
+        from local_agent.import_worker import parse_document_in_worker
+        store, batch = self.upload([("x.txt", b"ok")])
+        job = store.start_finalize(batch.id)
+        results, errors = [], []
+        def run():
+            try:
+                results.append(job.run())
+            except Exception as error:
+                errors.append(error)
+        with patch("local_agent.imports.parse_document_in_worker", wraps=parse_document_in_worker) as parse:
+            threads = [threading.Thread(target=run) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(5)
+            self.assertEqual(errors, [])
+            self.assertEqual(len(results), 2)
+            self.assertEqual(results[0], results[1])
+            self.assertEqual(parse.call_count, 1)
+
+    def test_blank_pdf_page_warning_preserves_nonconsecutive_original_pages(self):
+        from tests.import_fixtures import write_text_pdf
+        pdf = Path(self.tmp.name) / "pages.pdf"
+        write_text_pdf(pdf, ["one", None, "three"])
+        store, batch = self.upload([("pages.pdf", pdf.read_bytes())])
+        _, published = self.finalize(store, batch)
+        source = json.loads(published.manifest.read_bytes())["sources"][0]
+        self.assertEqual(source["warnings"], [{"code": "PDF_PAGE_TEXT_NOT_FOUND", "page": 2}])
+        found = {loc["page"] for mapping in json.loads(published.locations.read_bytes()).values()
+                 for values in mapping.values() for loc in values}
+        self.assertEqual(found, {1, 3})
 
 
 if __name__ == "__main__":
