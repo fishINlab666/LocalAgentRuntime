@@ -12,7 +12,7 @@
 
 ## §0 当前进度与停止条件
 
-2026-09-15：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成：四种格式解析、稳定位置、资源限制及受限子进程的 34 项定向测试通过，规格与代码质量 Gate 均为 PASS。Darwin 因系统共享地址空间预映射采用“启动时 VSZ + 512 MiB”新增预算，其他平台保持绝对 512 MiB；无法安装限制时仍明确不可用。下一步执行 Task 2 的 Schema v3 与维护闸门，不先接上传页面。
+2026-09-15：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过。两项规格与代码质量 Gate 均为 PASS。Darwin 因系统共享地址空间预映射采用“启动时 VSZ + 512 MiB”新增预算，其他平台保持绝对 512 MiB；无法安装限制时仍明确不可用。下一步执行 Task 3 的安全上传与受管副本，不先接上传页面。
 
 本批完成条件：Task 1–10 的定向测试、完整 Python 回归和既有浏览器回归通过；Task 11 的固定混合资料闭环证明“导入 → 搜索 → 读取 → ToolCall 结果进入下一轮 → 原始位置引用 → 重启追问 → 隔离与恢复”。离线证据全部通过后，最多执行一个真实 DeepSeek 会话、2 个 Run、12 次模型请求；任一核心失败立即停止并保留证据。达到条件后不增加 OCR、同步、资料删除、向量检索或新格式。
 
@@ -206,7 +206,7 @@ git commit -m "Add bounded local document parsers"
 - Modify: `local-agent/tests/test_agent_sessions.py`
 - Create: `local-agent/tests/test_state_maintenance.py`
 
-- [ ] **Step 1: 写 v2→v3、旧快照和 gate 竞争的失败测试**
+- [x] **Step 1: 写 v2→v3、旧快照和 gate 竞争的失败测试**
 
 ```python
 def test_v3_schema_adds_import_tables_and_nullable_unique_session_link(self):
@@ -236,7 +236,7 @@ def test_maintenance_refuses_while_activity_exists_and_blocks_new_activity(self)
             gate.start('import', 'import-1')
 ```
 
-- [ ] **Step 2: 运行并确认 schema 仍为 v2 且 gate 不存在**
+- [x] **Step 2: 运行并确认 schema 仍为 v2 且 gate 不存在**
 
 Run:
 
@@ -248,7 +248,7 @@ PYTHONPATH=. .venv/bin/python -W error::ResourceWarning -m unittest \
 
 Expected: 新断言因版本为 2、缺少 import 表或模块而失败；既有测试仍能启动。
 
-- [ ] **Step 3: 实现 schema v3 与冻结旧内置助手**
+- [x] **Step 3: 实现 schema v3 与冻结旧内置助手**
 
 `_migrate_v3()` 在一个事务中执行：
 
@@ -293,7 +293,7 @@ PRAGMA user_version=3;
 
 初始化按当前版本逐级调用 v1、v2、v3。`builtin_agent(mode, *, legacy=False)` 在 `legacy=True` 时永远返回升级前工具集合；`_migrate_v2()` 必须调用 legacy 版本，避免未来迁移静默扩权。`SessionRecord` 最后增加 `import_id: str | None = None`，同步所有 SELECT 的列顺序并保持旧测试构造方式兼容。
 
-- [ ] **Step 4: 实现 `StateMaintenanceGate`**
+- [x] **Step 4: 实现 `StateMaintenanceGate`**
 
 ```python
 class StateBusy(RuntimeError):
@@ -330,7 +330,7 @@ class StateMaintenanceGate:
 
 `ActivityLease.close()` 在锁内幂等移除 key。每个 `SessionStore` 构造一个 `maintenance_gate`；文件锁继续只处理跨进程所有权。
 
-- [ ] **Step 5: 跑迁移和 gate 检查并提交**
+- [x] **Step 5: 跑迁移和 gate 检查并提交**
 
 Run:
 
