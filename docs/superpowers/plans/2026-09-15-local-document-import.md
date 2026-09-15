@@ -12,7 +12,7 @@
 
 ## §0 当前进度与停止条件
 
-2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过。六项规格与代码质量 Gate 均为 PASS；Task 6 Gate 发现并修复了运行中正文替换仍可引用、元数据父目录替换／FIFO 阻塞，以及合法大型位置索引被固定阈值拒绝的问题。Darwin 因系统共享地址空间预映射采用“启动时 VSZ + 512 MiB”新增预算，其他平台保持绝对 512 MiB；无法安装限制时仍明确不可用。下一步执行 Task 7，只实现独立 Artifact 写根、一次性目标授权、执行后验真与受权下载，不提前接上传页面。
+2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过；Task 7 已在 commit `06e4bfe` 完成，导入会话的预声明输出只写独立 `artifacts/`，一次成功、审批、禁止改名/覆盖、真实回执、未知写入恢复和受权下载均已接通。最终 632 项 Python 回归、JavaScript 语法检查和既有浏览器离线交互脚本通过。Task 7 的限定安全检查发现并修复了“验真后再次读取可变原文件”的下载竞态；当前响应只发送已通过大小、SHA-256 和文件身份检查的冻结字节。下一步执行 Task 8，只实现一致备份与原子恢复，不提前接上传页面。
 
 本批完成条件：Task 1–10 的定向测试、完整 Python 回归和既有浏览器回归通过；Task 11 的固定混合资料闭环证明“导入 → 搜索 → 读取 → ToolCall 结果进入下一轮 → 原始位置引用 → 重启追问 → 隔离与恢复”。离线证据全部通过后，最多执行一个真实 DeepSeek 会话、2 个 Run、12 次模型请求；任一核心失败立即停止并保留证据。达到条件后不增加 OCR、同步、资料删除、向量检索或新格式。
 
@@ -721,15 +721,19 @@ git commit -m "Search imported documents with mapped citations"
 - Modify: `local-agent/local_agent/agents.py:176-199`
 - Modify: `local-agent/local_agent/file_tools.py:262-286`
 - Modify: `local-agent/local_agent/agent_runtime.py:365-412`
+- Modify: `local-agent/local_agent/imports.py`
 - Modify: `local-agent/local_agent/sessions.py:672-788`
 - Modify: `local-agent/local_agent/session_store.py:1328-1370`
 - Modify: `local-agent/local_agent/web_runs.py`
 - Modify: `local-agent/local_agent/web.py`
 - Modify: `local-agent/local_agent/static/app.js:478-493`
 - Create: `local-agent/tests/test_import_artifacts.py`
+- Modify: `local-agent/tests/test_managed_workspace.py`
+- Modify: `local-agent/tests/test_session_recovery.py`
 - Modify: `local-agent/tests/test_session_web.py`
+- Modify: `local-agent/tests/browser_tools.cjs`
 
-- [ ] **Step 1: 写独立写根、回执与下载授权的失败测试**
+- [x] **Step 1: 写独立写根、回执与下载授权的失败测试**
 
 ```python
 def test_approved_import_write_creates_only_one_declared_artifact(self):
@@ -743,33 +747,34 @@ def test_download_rejects_cross_session_and_changed_artifact(self):
     artifact = self.create_approved_artifact()
     self.assertEqual(self.http_download(other_session_id, artifact.id).status, 404)
     artifact.path.write_text('changed')
-    self.assertEqual(self.http_download(artifact.session_id, artifact.id).json()['code'],
+    self.assertEqual(self.http_download(artifact.session_id, artifact.id).json()['error'],
                      'IMPORT_INTEGRITY_ERROR')
 ```
 
 继续覆盖：未声明不注册 write、模型改名拒绝、拒绝后无文件、一次成功、不覆盖、symlink、未知发布只检查 `artifacts/`、缺 token/错误 Origin/Agent/Run/Artifact 所属关系拒绝。
 
-- [ ] **Step 2: 运行并确认当前 `WriteFile` 仍写入读取根**
+- [x] **Step 2: 运行并确认当前 `WriteFile` 仍写入读取根**
 
 Run:
 
 ```zsh
 cd "/Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent"
-PYTHONPATH=. .venv/bin/python -W error::ResourceWarning -m unittest \
+PYTHONPATH=.:tests .venv/bin/python -W error::ResourceWarning -m unittest \
   tests.test_import_artifacts tests.test_session_web tests.test_write_file -v
 ```
 
 Expected: 独立根或下载路由断言 FAIL；既有写入测试保持可运行。
 
-- [ ] **Step 3: 贯通独立 `write_root`**
+- [x] **Step 3: 贯通独立 `write_root`**
 
 将装配接口改为：
 
 ```python
 def build_file_engine(agent, read_root, target_path, output_path=None,
                       *, write_root=None, read_identity=None,
-                      write_identity=None, import_workspace=None):
-    write_root = read_root if write_root is None else write_root
+                      write_identity=None, source_mapper=None):
+    # 导入会话由统一 resolver 同时提供独立读写根和两个目录 identity。
+    ...
 
 def adapt_tools(tool, output_path=None, *, agent=None,
                 write_root=None, write_identity=None, policy=None):
@@ -781,34 +786,41 @@ def adapt_tools(tool, output_path=None, *, agent=None,
 
 `SessionService.execute()` 只传 resolver 的根与 identity。`inspect_unknown_publication()` 改接已解析的 write root，不再查询并信任 `workspace_path`。普通 Session 的默认行为不变。
 
-- [ ] **Step 4: 实现 Artifact 查询和二进制下载**
+- [x] **Step 4: 实现 Artifact 查询和二进制下载**
 
-`SessionService.open_artifact(session_id, run_id, artifact_id, agent_id)` 先验证数据库归属，再 resolve write root，以安全目录 fd 打开回执 path，核对普通文件、identity、bytes 和 SHA-256，返回已打开 fd、长度与下载名。`Handler` 使用独立 `respond_file()` 写入 `Content-Type: application/octet-stream`、经过 CR/LF 拒绝和 RFC 5987 编码的 `Content-Disposition: attachment`、`Content-Length` 与既有安全 headers；路由不接受 path 参数。
+`SessionService.open_artifact(session_id, run_id, artifact_id, agent_id)` 先验证数据库归属，再 resolve write root，以安全目录 fd 打开回执 path，核对普通文件、identity、bytes 和 SHA-256；在同一次读取中冻结最多 32 KiB 的已验真字节并关闭原文件 fd，再返回字节、长度与下载名。`Handler` 使用独立 `respond_file()` 只发送该冻结快照，并写入 `Content-Type: application/octet-stream`、经过 CR/LF 拒绝和 RFC 5987 编码的 `Content-Disposition: attachment`、`Content-Length` 与既有安全 headers；路由不接受 path 参数。
 
 Artifact 卡片使用按钮调用带 `X-Session-Token` 与当前 `X-Agent-ID` 的 fetch，成功后创建短生命周期 Blob URL 并触发浏览器下载，随后 revoke；不使用无法附加认证 Header 的裸链接。引用渲染同时识别导入来源的 `kind/name/logical_path/locations`，把 PDF 页、文本行、Word 段落和表格行作为只读定位信息展示，所有动态字段继续只写 `textContent`。
 
-- [ ] **Step 5: 跑 Artifact 回归并提交**
+- [x] **Step 5: 跑 Artifact 回归并提交**
 
 Run:
 
 ```zsh
 cd "/Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent"
-PYTHONPATH=. .venv/bin/python -W error::ResourceWarning -m unittest \
+PYTHONPATH=.:tests .venv/bin/python -W error::ResourceWarning -m unittest \
   tests.test_import_artifacts tests.test_session_web tests.test_write_file -v
 /Users/wujingyu/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node \
   --check local_agent/static/app.js
+/Users/wujingyu/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node \
+  tests/browser_tools.cjs
 ```
 
 Expected: Python 检查与 JavaScript 语法检查全部 PASS；普通 Session 写入和审批回归无变化。
+
+Actual: 最终实现运行 632 项完整 Python 回归并通过；`app.js`、`browser_tools.cjs` 语法检查与既有浏览器离线交互脚本通过。下载竞态回归证明原文件在验真后被等长改写时，HTTP 仍只返回已验真的冻结内容。
 
 Commit:
 
 ```zsh
 git add local-agent/local_agent/agents.py local-agent/local_agent/file_tools.py \
-  local-agent/local_agent/agent_runtime.py local-agent/local_agent/sessions.py \
+  local-agent/local_agent/agent_runtime.py local-agent/local_agent/imports.py \
+  local-agent/local_agent/sessions.py \
   local-agent/local_agent/session_store.py local-agent/local_agent/web_runs.py \
   local-agent/local_agent/web.py local-agent/local_agent/static/app.js \
-  local-agent/tests/test_import_artifacts.py local-agent/tests/test_session_web.py
+  local-agent/tests/test_import_artifacts.py local-agent/tests/test_managed_workspace.py \
+  local-agent/tests/test_session_recovery.py local-agent/tests/test_session_web.py \
+  local-agent/tests/browser_tools.cjs
 git commit -m "Separate and download imported artifacts"
 ```
 
