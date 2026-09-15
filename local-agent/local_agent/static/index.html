@@ -26,6 +26,7 @@
         <h2 id="agent-heading">当前助手</h2>
         <label class="sr-only" for="agent-select">当前助手</label>
         <select id="agent-select"><option value="">自动选择（按单文件 / 目录模式）</option></select>
+        <div id="agent-list" class="agent-list" aria-label="助手列表"></div>
         <p id="agent-status" class="field-help">每个助手有自己的会话、工具与能力绑定。</p>
       </section>
 
@@ -37,6 +38,8 @@
         <p class="field-help">会话固定资料范围，服务重启后仍可继续。</p>
         <label for="session-select">当前会话</label>
         <select id="session-select"><option value="">临时任务（不保存会话）</option></select>
+        <div id="session-list" class="session-list" aria-label="会话列表"></div>
+        <button type="button" id="session-load-more" class="quiet full-width" hidden>加载更多会话</button>
 
         <div class="session-create-fields">
           <label for="session-name">新会话名称</label>
@@ -84,6 +87,7 @@
         <section class="history-block" aria-labelledby="history-heading">
           <div class="section-heading compact-heading"><h2 id="history-heading">对话记录</h2><span class="field-help">选择一轮查看完整结果</span></div>
           <div id="session-history" class="session-history" aria-label="会话历史"></div>
+          <button type="button" id="run-load-more" class="quiet" hidden>加载更早记录</button>
         </section>
 
         <div id="empty" class="empty">
@@ -164,6 +168,7 @@
       <section class="inspector-block module-preview" aria-labelledby="module-preview-title">
         <span class="section-kicker">AVAILABLE NOW</span><h3 id="module-preview-title">可以这样使用</h3>
         <ul><li><strong>单文件问答</strong><span>核对一份 Markdown 或文本资料</span></li><li><strong>目录发现</strong><span>让模型按需查找多份资料</span></li><li><strong>项目助手</strong><span>组合会话、Skill 与 MCP</span></li></ul>
+        <div id="active-capabilities" class="active-capabilities" aria-live="polite"></div>
       </section>
 
       <details id="capability-management" class="capability-management inspector-block">

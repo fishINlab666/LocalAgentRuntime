@@ -5,9 +5,10 @@ const token = document.querySelector('meta[name="session-token"]').content;
 let ready = false, simulated = false, activeId = null, busy = false, timer = null, renderedEvents = 0;
 let viewGeneration = 0, renderedRevision = -1;
 let activeSessionId = null, activeSession = null, fixedSessionSelection = false;
-let workspaceAvailable = true, historyRuns = [];
+let workspaceAvailable = true, historyRuns = [], runHistoryCursor = null, runPageLoading = false;
 let agents = [], capabilities = {skills: [], servers: []}, selectedAgentId = '', managing = false;
-let sessionListGeneration = 0;
+let sessionListGeneration = 0, visibleSessions = [], sessionPageLoading = false;
+let sessionCursors = {active: null, archived: null};
 const sessionAgentIds = new Map();
 let pendingApproval = null, approvalSendingId = null, approvalBlockedId = null, approvalDeadline = 0, approvalTimer = null;
 let cancelling = false, cancelSendingId = null;
@@ -124,6 +125,51 @@ function currentAgent() {
   return agents.find(agent => agent.id === ($('discover').checked ? 'directory-qa' : 'file-qa')) || null;
 }
 
+function renderAgentList() {
+  const list = $('agent-list');
+  list.replaceChildren();
+  const currentId = activeSession?.agent_id || selectedAgentId;
+  for (const agent of agents) {
+    const button = document.createElement('button');
+    const name = document.createElement('strong'), details = document.createElement('span');
+    button.type = 'button'; button.className = 'agent-nav-item'; button.dataset.agentId = agent.id;
+    button.setAttribute('aria-pressed', String(agent.id === currentId));
+    button.disabled = busy || managing;
+    name.textContent = agent.name;
+    details.textContent = `${agent.strategy === 'file' ? '单文件' : '目录'} · ${agent.enabled === false ? '已停用' : '可用'}`;
+    button.addEventListener('click', () => {
+      $('agent-select').value = agent.id;
+      selectAgent(agent.id);
+    });
+    button.append(name, details); list.append(button);
+  }
+}
+
+function renderActiveCapabilities() {
+  const list = $('active-capabilities'), snapshot = currentAgent();
+  list.replaceChildren();
+  if (!snapshot) {
+    const empty = document.createElement('p');
+    empty.className = 'field-help'; empty.textContent = '选择一个助手后查看它可以调用的能力。';
+    list.append(empty); return;
+  }
+  const entries = [
+    ...(snapshot.tools || []).map(name => ({kind: '工具', name})),
+    ...(snapshot.skills || []).map(item => ({kind: 'Skill', name: item.id})),
+    ...(snapshot.mcp || []).map(item => ({kind: 'MCP', name: item.id})),
+  ];
+  if (!entries.length) {
+    const empty = document.createElement('p');
+    empty.className = 'field-help'; empty.textContent = '这个助手当前没有已绑定能力。';
+    list.append(empty); return;
+  }
+  for (const entry of entries) {
+    const item = document.createElement('span');
+    item.className = 'capability-chip'; item.textContent = `${entry.kind} · ${entry.name}`;
+    list.append(item);
+  }
+}
+
 function selectOptions(element, entries, emptyLabel, wanted = element.value) {
   element.replaceChildren();
   const options = emptyLabel === null ? entries : [{value: '', label: emptyLabel}, ...entries];
@@ -152,6 +198,7 @@ function renderRunChoices() {
   selectOptions($('run-prompt'), prompts, '不指定模板');
   $('run-skill').disabled = busy || !skills.length;
   $('run-prompt').disabled = busy || !prompts.length;
+  renderActiveCapabilities();
 }
 
 function updateAgentControls() {
@@ -185,6 +232,9 @@ function updateAgentControls() {
   $('agent-toggle').textContent = selected?.enabled === false ? '启用当前助手' : '停用当前助手';
   for (const button of document.querySelectorAll('[data-bind-kind]')) {
     button.disabled = busy || managing || !selected || selected.enabled === false || button.dataset.bound === 'true';
+  }
+  for (const button of document.querySelectorAll('[data-agent-id],[data-session-id]')) {
+    button.disabled = busy || managing;
   }
   renderRunChoices();
 }
@@ -263,7 +313,7 @@ async function loadExtensions() {
     label: `${agent.name}${agent.enabled === false ? '（已停用）' : ''}`})), '自动选择（按单文件 / 目录模式）', selectedAgentId);
   selectOptions($('agent-template'), agents.map(agent => ({value: agent.id, label: agent.name})), null);
   if (!templateWas) fillAgentTemplate();
-  renderCapabilities(); updateControls();
+  renderAgentList(); renderCapabilities(); updateControls();
 }
 
 async function manage(action) {
@@ -280,7 +330,7 @@ async function selectAgent(agentId) {
   activeSessionId = null; activeSession = null; viewGeneration++;
   $('session-select').value = ''; $('session-actions').hidden = true; $('session-scope').hidden = true;
   $('question').value = ''; $('output-file').value = ''; countQuestion();
-  renderRunHistory([]); clearRunView(); renderCapabilities();
+  renderRunHistory([]); clearRunView(); renderAgentList(); renderCapabilities();
   try { await loadSessions(); }
   catch (error) { showError(error, 'session-error'); }
   updateControls();
@@ -419,16 +469,44 @@ function clearRunView() {
   $('continue-run').hidden = true; updateControls();
 }
 
-function renderRunHistory(runs) {
-  historyRuns = runs;
+function markCurrentRun(runId) {
+  for (const button of $('session-history').querySelectorAll('[data-run-id]')) {
+    if (button.dataset.runId === runId) button.setAttribute('aria-current', 'true');
+    else button.removeAttribute('aria-current');
+  }
+}
+
+function renderRunHistory(runs, append = false) {
+  const merged = append ? [...historyRuns, ...runs] : [...runs];
+  historyRuns = [...new Map(merged.map(item => [item.id, item])).values()];
   $('session-history').replaceChildren();
-  for (const item of runs) {
+  for (const item of historyRuns) {
     const button = document.createElement('button');
-    button.type = 'button';
+    button.type = 'button'; button.dataset.runId = item.id;
     button.textContent = `${item.state === 'completed' ? '✓' : '·'} ${item.question}`;
     button.title = item.question;
     button.addEventListener('click', () => openSessionRun(item.id));
     $('session-history').append(button);
+  }
+  markCurrentRun(activeId);
+  $('run-load-more').hidden = !runHistoryCursor;
+  $('run-load-more').disabled = runPageLoading || busy;
+}
+
+async function loadMoreRuns() {
+  if (!activeSessionId || !runHistoryCursor || runPageLoading) return;
+  const sessionId = activeSessionId, generation = viewGeneration, cursor = runHistoryCursor;
+  runPageLoading = true; $('run-load-more').disabled = true;
+  try {
+    const response = await api(`/api/sessions/${sessionId}/runs?cursor=${encodeURIComponent(cursor)}`);
+    if (sessionId !== activeSessionId || generation !== viewGeneration) return;
+    runHistoryCursor = response.next_cursor || null;
+    renderRunHistory(response.runs || [], true);
+  } catch (error) {
+    if (sessionId === activeSessionId && generation === viewGeneration) showError(error, 'session-error');
+  } finally {
+    runPageLoading = false;
+    if (sessionId === activeSessionId && generation === viewGeneration) renderRunHistory([], true);
   }
 }
 
@@ -443,9 +521,82 @@ async function openSessionRun(runId) {
     $('question').value = job.question; countQuestion(); $('task-type').value = job.task_type;
     $('output-file').value = job.output_file || '';
     prepareOutput(job); render(job);
+    markCurrentRun(job.id);
     if (busy) timer = setTimeout(poll, 450);
   } catch (error) {
     if (sessionId === activeSessionId && generation === viewGeneration) showError(error, 'session-error');
+  }
+}
+
+function sessionListPath(kind, cursor = null) {
+  const parameters = new URLSearchParams();
+  if (kind === 'archived') parameters.set('archived', '1');
+  if (cursor) parameters.set('cursor', cursor);
+  const query = parameters.toString();
+  return `/api/sessions${query ? `?${query}` : ''}`;
+}
+
+function renderSessionOptions() {
+  sessionAgentIds.clear();
+  const select = $('session-select'), temporary = select.firstElementChild;
+  select.replaceChildren(temporary);
+  for (const session of visibleSessions) {
+    if (session.agent_id) sessionAgentIds.set(session.id, session.agent_id);
+    const option = document.createElement('option'); option.value = session.id;
+    option.textContent = session.title + (session.status === 'archived' ? '（已归档）' : '');
+    select.append(option);
+  }
+  temporary.hidden = fixedSessionSelection;
+  if (activeSessionId && visibleSessions.some(item => item.id === activeSessionId)) select.value = activeSessionId;
+}
+
+function renderSessionList() {
+  const list = $('session-list'); list.replaceChildren();
+  if (!visibleSessions.length) {
+    const empty = document.createElement('p'); empty.className = 'field-help session-empty';
+    empty.textContent = '还没有持久会话。'; list.append(empty);
+  }
+  for (const session of visibleSessions) {
+    const button = document.createElement('button'), title = document.createElement('strong');
+    const details = document.createElement('span');
+    button.type = 'button'; button.className = 'session-nav-item'; button.dataset.sessionId = session.id;
+    if (session.id === activeSessionId) button.setAttribute('aria-current', 'true');
+    button.disabled = busy || managing;
+    title.textContent = session.title;
+    const scope = session.scope?.mode === 'directory' ? '目录' : session.scope?.file || '单文件';
+    details.textContent = `${scope}${session.status === 'archived' ? ' · 已归档' : ''}`;
+    button.addEventListener('click', () => {
+      $('session-select').value = session.id;
+      selectSession(session.id);
+    });
+    button.append(title, details); list.append(button);
+  }
+  $('session-load-more').hidden = fixedSessionSelection || (!sessionCursors.active && !sessionCursors.archived);
+  $('session-load-more').disabled = sessionPageLoading || busy || managing;
+}
+
+async function loadMoreSessions() {
+  if (fixedSessionSelection || sessionPageLoading || (!sessionCursors.active && !sessionCursors.archived)) return;
+  const generation = sessionListGeneration, requestedAgent = selectedAgentId;
+  const cursors = {...sessionCursors};
+  const pending = [];
+  if (cursors.active) pending.push(api(sessionListPath('active', cursors.active)).then(data => ({kind: 'active', data})));
+  if (cursors.archived) pending.push(api(sessionListPath('archived', cursors.archived)).then(data => ({kind: 'archived', data})));
+  sessionPageLoading = true; $('session-load-more').disabled = true;
+  try {
+    const pages = await Promise.all(pending);
+    if (generation !== sessionListGeneration || requestedAgent !== selectedAgentId) return;
+    for (const page of pages) {
+      sessionCursors[page.kind] = page.data.next_cursor || null;
+      visibleSessions.push(...(page.data.sessions || []));
+    }
+    visibleSessions = [...new Map(visibleSessions.map(item => [item.id, item])).values()];
+    renderSessionOptions(); renderSessionList();
+  } catch (error) {
+    if (generation === sessionListGeneration && requestedAgent === selectedAgentId) showError(error, 'session-error');
+  } finally {
+    sessionPageLoading = false;
+    if (generation === sessionListGeneration && requestedAgent === selectedAgentId) renderSessionList();
   }
 }
 
@@ -455,7 +606,8 @@ async function selectSession(sessionId) {
   $('session-error').hidden = true;
   if (!activeSessionId) {
     $('session-actions').hidden = true; $('session-scope').hidden = true;
-    renderRunHistory([]); $('task-type').value = 'files'; clearRunView(); return;
+    runHistoryCursor = null; renderRunHistory([]); renderSessionList(); renderAgentList();
+    $('task-type').value = 'files'; clearRunView(); return;
   }
   try {
     const [sessionResponse, runsResponse] = await Promise.all([
@@ -468,13 +620,14 @@ async function selectSession(sessionId) {
     $('session-rename-title').value = activeSession.title;
     $('session-archive').hidden = activeSession.status === 'archived';
     $('session-restore').hidden = activeSession.status !== 'archived';
-    updateControls();
+    renderSessionList(); renderAgentList(); updateControls();
     const directory = activeSession.scope.mode === 'directory';
     $('discover').checked = directory; $('file').value = activeSession.scope.file || '';
     $('session-scope').hidden = false;
     $('session-scope').textContent = `固定资料范围：${directory ? '当前工作区目录发现' : activeSession.scope.file}`
       + (activeSession.agent_id ? ` · 助手 ${activeSession.agent_id} · 修订 ${(activeSession.agent_revision || '未知').slice(0, 12)}（旧会话保留此版本）` : '')
       + (workspaceAvailable ? '' : ' · 原工作区当前不可用');
+    runHistoryCursor = runsResponse.next_cursor || null;
     renderRunHistory(runsResponse.runs);
     if (runsResponse.runs.length) await openSessionRun(runsResponse.runs[0].id);
     else clearRunView();
@@ -488,22 +641,15 @@ async function loadSessions(selectedId = null, fixed = fixedSessionSelection) {
   const generation = ++sessionListGeneration, requestedAgent = selectedAgentId;
   const [active, archived] = await Promise.all([api('/api/sessions'), api('/api/sessions?archived=1')]);
   if (generation !== sessionListGeneration || requestedAgent !== selectedAgentId) return;
-  const all = [...active.sessions, ...archived.sessions];
-  sessionAgentIds.clear();
-  for (const session of all) if (session.agent_id) sessionAgentIds.set(session.id, session.agent_id);
-  const select = $('session-select'), temporary = select.firstElementChild;
-  select.replaceChildren(temporary);
-  for (const session of all) {
-    const option = document.createElement('option'); option.value = session.id;
-    option.textContent = session.title + (session.status === 'archived' ? '（已归档）' : '');
-    select.append(option);
-  }
   fixedSessionSelection = Boolean(fixed);
-  temporary.hidden = fixedSessionSelection;
+  visibleSessions = [...new Map([...(active.sessions || []), ...(archived.sessions || [])]
+    .map(item => [item.id, item])).values()];
+  sessionCursors = {active: active.next_cursor || null, archived: archived.next_cursor || null};
+  renderSessionOptions(); renderSessionList();
   $('session-create').hidden = fixedSessionSelection;
-  const wanted = selectedId || active.sessions[0]?.id || null;
-  if (wanted) { select.value = wanted; await selectSession(wanted); }
-  else { select.value = ''; await selectSession(''); }
+  const wanted = selectedId || active.sessions?.[0]?.id || null;
+  if (wanted) { $('session-select').value = wanted; await selectSession(wanted); }
+  else { $('session-select').value = ''; await selectSession(''); }
 }
 
 function prepareOutput(job) {
@@ -607,7 +753,10 @@ async function poll() {
     if (busy) timer = setTimeout(poll, 450);
     else if (activeSessionId) {
       const runs = await api(`/api/sessions/${activeSessionId}/runs`);
-      if (requestedSession === activeSessionId && generation === viewGeneration) renderRunHistory(runs.runs);
+      if (requestedSession === activeSessionId && generation === viewGeneration) {
+        runHistoryCursor = runs.next_cursor || null;
+        renderRunHistory(runs.runs);
+      }
     }
   } catch (error) {
     if (requestedId !== activeId || requestedSession !== activeSessionId || generation !== viewGeneration) return;
@@ -695,6 +844,8 @@ $('session-mode').addEventListener('change', () => {
   $('session-file').disabled = $('session-mode').value === 'directory';
 });
 $('session-select').addEventListener('change', () => selectSession($('session-select').value));
+$('session-load-more').addEventListener('click', loadMoreSessions);
+$('run-load-more').addEventListener('click', loadMoreRuns);
 $('session-create').addEventListener('click', async () => {
   $('session-error').hidden = true;
   const scope = $('session-mode').value === 'directory' ? {mode: 'directory'}
