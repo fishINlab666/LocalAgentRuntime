@@ -12,7 +12,7 @@
 
 ## §0 当前进度与停止条件
 
-2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过；Task 7 已在 commit `06e4bfe` 完成，导入会话的预声明输出只写独立 `artifacts/`，一次成功、审批、禁止改名/覆盖、真实回执、未知写入恢复和受权下载均已接通。最终 632 项 Python 回归、JavaScript 语法检查和既有浏览器离线交互脚本通过。Task 7 的限定安全检查发现并修复了“验真后再次读取可变原文件”的下载竞态；当前响应只发送已通过大小、SHA-256 和文件身份检查的冻结字节。下一步执行 Task 8，只实现一致备份与原子恢复，不提前接上传页面。
+2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过；Task 7 已在 commit `06e4bfe` 完成，导入会话的预声明输出只写独立 `artifacts/`，一次成功、审批、禁止改名/覆盖、真实回执、未知写入恢复和受权下载均已接通。Task 8 已在 commit `417a579` 完成，SQLite、受管资料与 Artifact 作为一个清单约束的目录原子备份，恢复到不存在的 State Store 时重绑目录身份并全量验真；24 项备份/CLI 定向测试、89 项共享链路测试及最终 647 项 Python 回归通过，限定安全 Gate 通过。下一步执行 Task 9，只接入受限 HTTP 导入协议，不提前开发上传页面。
 
 本批完成条件：Task 1–10 的定向测试、完整 Python 回归和既有浏览器回归通过；Task 11 的固定混合资料闭环证明“导入 → 搜索 → 读取 → ToolCall 结果进入下一轮 → 原始位置引用 → 重启追问 → 隔离与恢复”。离线证据全部通过后，最多执行一个真实 DeepSeek 会话、2 个 Run、12 次模型请求；任一核心失败立即停止并保留证据。达到条件后不增加 OCR、同步、资料删除、向量检索或新格式。
 
@@ -835,7 +835,7 @@ git commit -m "Separate and download imported artifacts"
 - Create: `local-agent/tests/test_state_backup.py`
 - Modify: `local-agent/tests/test_session_cli.py`
 
-- [ ] **Step 1: 写成对备份、竞争和恢复失败测试**
+- [x] **Step 1: 写成对备份、竞争和恢复失败测试**
 
 ```python
 def test_bundle_backup_and_restore_rebind_import_identity(self):
@@ -860,7 +860,7 @@ def test_backup_refuses_run_and_artifact_races(self):
 
 加入：目标已存在、sidecar 缺失、DB/hash/file 篡改、active import/approval、backup 持锁时新 Run 拒绝、恢复在 rename 前失败无 destination、rename 后父目录 fsync、恢复后 resolver 全量验证。
 
-- [ ] **Step 2: 运行并确认当前 backup 只有 SQLite**
+- [x] **Step 2: 运行并确认当前 backup 只有 SQLite**
 
 Run:
 
@@ -872,7 +872,7 @@ PYTHONPATH=. .venv/bin/python -W error::ResourceWarning -m unittest \
 
 Expected: sidecar、maintenance 或 restore 断言 FAIL。
 
-- [ ] **Step 3: 实现 `StateBackup` bundle**
+- [x] **Step 3: 实现 `StateBackup` bundle**
 
 `backup_bundle()` 先取得 `maintenance_gate.maintenance()`，再查询 SQLite；存在未结束 Run、`uploading/finalizing` import 或 pending/allowed 审批时返回 `STATE_BUSY`。确认静止后调用现有安全 SQLite backup，并从快照库查询 `ready` import ID，将对应 originals/workspace/artifacts/manifest/locations 复制到 `<db-name>.imports/` 临时目录。总 manifest canonical JSON 至少为：
 
@@ -884,11 +884,11 @@ Expected: sidecar、maintenance 或 restore 断言 FAIL。
 
 所有文件和目录 `fsync` 后无覆盖 rename；任一失败清理本次新建的 DB/sidecar/manifest。`SessionService.backup()` 返回三个路径与 Session/Run/import 数量。
 
-- [ ] **Step 4: 实现不存在目标目录的一次性 restore**
+- [x] **Step 4: 实现不存在目标目录的一次性 restore**
 
 `restore_bundle()` 拒绝已存在 destination；在同一父目录创建随机 staging，复制并校验整个 bundle，打开离线 DB 更新导入 Session 的派生展示路径和新设备/inode，在临时 Store 上运行 resolver 全量验证，关闭所有 fd/连接后将 staging 一次 rename 为 destination 并 `fsync` 父目录。CLI 新增 `sessions restore-backup DATABASE SIDECAR DESTINATION`，且在 `_sessions_command()` 调用 `_open_service()` 之前单独分派，避免预先创建 destination；保留现有 `sessions restore SESSION_ID` 的解除归档语义。
 
-- [ ] **Step 5: 跑备份恢复检查并提交**
+- [x] **Step 5: 跑备份恢复检查并提交**
 
 Run:
 
