@@ -72,7 +72,13 @@ class SessionCliTests(unittest.TestCase):
             str(self.root / "backups"),
         )
         backup_path = Path(backup["backup_path"])
+        database_path = Path(backup["database_path"])
+        sidecar_path = Path(backup["sidecar_path"])
+        manifest_path = Path(backup["manifest_path"])
+        self.assertEqual(backup_path, database_path)
         self.assertTrue(backup_path.is_file())
+        self.assertTrue(sidecar_path.is_dir())
+        self.assertTrue(manifest_path.is_file())
         uri = backup_path.resolve().as_uri() + "?mode=ro"
         connection = sqlite3.connect(uri, uri=True)
         try:
@@ -80,6 +86,46 @@ class SessionCliTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertEqual(backup["sessions"], 1)
+        self.assertEqual(backup["imports"], 0)
+
+    def test_restore_backup_runs_before_opening_destination_state_dir(self):
+        from local_agent.session_store import SessionStore
+        from local_agent.sessions import SessionService
+
+        published, session, _ = self.imported_session()
+        backup = self.json_run(
+            "sessions", "--state-dir", str(self.state), "backup",
+            str(self.root / "import-backups"),
+        )
+        database_path = Path(backup["database_path"])
+        sidecar_path = Path(backup["sidecar_path"])
+        manifest_path = Path(backup["manifest_path"])
+        self.assertEqual(Path(backup["backup_path"]), database_path)
+        self.assertTrue(database_path.is_file())
+        self.assertTrue(sidecar_path.is_dir())
+        self.assertTrue(manifest_path.is_file())
+        destination = self.root / "restored-state"
+        self.assertFalse(destination.exists())
+
+        self.json_run(
+            "sessions", "--state-dir", str(destination), "restore-backup",
+            str(database_path), str(sidecar_path), str(destination),
+        )
+
+        self.assertTrue(destination.is_dir())
+        store = SessionStore.open(destination)
+        try:
+            service = SessionService(store)
+            record = service.load(session.id)
+            resolved = service.resolver.resolve(record)
+            self.assertEqual(record.import_id, published.import_id)
+            self.assertEqual(
+                resolved.read_root,
+                destination.resolve() / "imports" / published.import_id / "workspace",
+            )
+            self.assertTrue(resolved.read_root.is_dir())
+        finally:
+            store.close()
 
     def test_persistent_run_uses_fixed_scope_and_finishes_submission_when_key_missing(self):
         created = self.json_run(

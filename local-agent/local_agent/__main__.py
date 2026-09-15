@@ -126,6 +126,12 @@ def _management_command(args):
 def _sessions_command(args):
     store = None
     try:
+        if args.sessions_action == "restore-backup":
+            from .state_backup import StateBackup
+            restored = StateBackup.restore_bundle(
+                args.database, args.sidecar, args.destination
+            )
+            return restored, 0
         store, service = _open_service(args.state_dir)
         action = args.sessions_action
         if action == "create":
@@ -295,6 +301,10 @@ def _build_parser():
         action.add_argument("session_id")
     backup = actions.add_parser("backup")
     backup.add_argument("destination", type=Path)
+    restore_backup = actions.add_parser("restore-backup")
+    restore_backup.add_argument("database", type=Path)
+    restore_backup.add_argument("sidecar", type=Path)
+    restore_backup.add_argument("destination", type=Path)
     continued = actions.add_parser("continue")
     continued.add_argument("session_id")
     continued.add_argument("--run", dest="continue_run", required=True)

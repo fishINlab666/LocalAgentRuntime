@@ -1517,12 +1517,16 @@ class SessionService:
 
     def backup(self, destination: Path) -> dict:
         try:
-            path = self.store.backup(destination)
-            connection = self.store.connection()
-            sessions = connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
-            runs = connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
-            return {"backup_path": str(path), "sessions": sessions, "runs": runs}
+            from .state_backup import StateBackup
+            bundle = StateBackup(self.store).backup_bundle(destination)
+            return {
+                "backup_path": str(bundle.database),
+                "database_path": str(bundle.database),
+                "sidecar_path": str(bundle.sidecar),
+                "manifest_path": str(bundle.manifest),
+                **bundle.counts,
+            }
         except StoreError:
             raise
-        except sqlite3.DatabaseError:
+        except (OSError, sqlite3.DatabaseError):
             raise SessionError("SESSION_STORE_ERROR") from None

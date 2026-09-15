@@ -973,6 +973,13 @@ class SessionStore:
             target.close()
             target = None
             os.chmod(destination, 0o600)
+            fd = os.open(
+                destination,
+                os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+            )
+            os.fsync(fd)
+            os.close(fd)
+            fd = None
         except BaseException:
             if target is not None:
                 target.close()
@@ -1037,7 +1044,9 @@ class SessionStore:
                 destination = candidate
             resolved = destination.resolve()
             connection = self.connection()
-            for row in connection.execute("SELECT workspace_path FROM sessions"):
+            for row in connection.execute(
+                "SELECT workspace_path FROM sessions WHERE import_id IS NULL"
+            ):
                 workspace = Path(row[0]).resolve()
                 if resolved == workspace or resolved.is_relative_to(workspace):
                     raise StoreError("STATE_DIR_INSIDE_WORKSPACE")
