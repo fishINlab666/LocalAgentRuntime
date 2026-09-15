@@ -12,7 +12,7 @@
 
 ## §0 当前进度与停止条件
 
-2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过。五项规格与代码质量 Gate 均为 PASS；Task 4 Gate 发现并修复了“路径短暂替换可使 original 与 chunk 内容不一致”的竞态，Task 5 Gate 修复了恢复阻断、执行闸门、执行前失败持久化及幂等重放依赖运行环境等问题。Darwin 因系统共享地址空间预映射采用“启动时 VSZ + 512 MiB”新增预算，其他平台保持绝对 512 MiB；无法安装限制时仍明确不可用。下一步执行 Task 6，加入只读 `search_documents`、导入事实账本与原始位置引用；预检已确认 resolver 必须提供 mapper，且含 JSON 转义的真实组合请求必须作为 64 KiB 验收对象。不先接上传页面或 Artifact 写入。
+2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过。六项规格与代码质量 Gate 均为 PASS；Task 6 Gate 发现并修复了运行中正文替换仍可引用、元数据父目录替换／FIFO 阻塞，以及合法大型位置索引被固定阈值拒绝的问题。Darwin 因系统共享地址空间预映射采用“启动时 VSZ + 512 MiB”新增预算，其他平台保持绝对 512 MiB；无法安装限制时仍明确不可用。下一步执行 Task 7，只实现独立 Artifact 写根、一次性目标授权、执行后验真与受权下载，不提前接上传页面。
 
 本批完成条件：Task 1–10 的定向测试、完整 Python 回归和既有浏览器回归通过；Task 11 的固定混合资料闭环证明“导入 → 搜索 → 读取 → ToolCall 结果进入下一轮 → 原始位置引用 → 重启追问 → 隔离与恢复”。离线证据全部通过后，最多执行一个真实 DeepSeek 会话、2 个 Run、12 次模型请求；任一核心失败立即停止并保留证据。达到条件后不增加 OCR、同步、资料删除、向量检索或新格式。
 
@@ -617,7 +617,7 @@ git commit -m "Resolve managed session workspaces consistently"
 - Modify: `local-agent/tests/test_agent_sessions.py`
 - Modify: `local-agent/tests/test_managed_workspace.py`
 
-- [ ] **Step 1: 写搜索、coverage、旧快照和组合助手失败测试**
+- [x] **Step 1: 写搜索、coverage、旧快照和组合助手失败测试**
 
 ```python
 def test_search_result_is_returned_to_next_model_call_but_not_fact_coverage(self):
@@ -648,7 +648,7 @@ def test_catalog_is_not_citable_and_does_not_block_complete_not_found(self):
 
 另用真实 `Runtime` 请求构造链覆盖“搜索 + 两个 12 KiB 正文块”，请求包含系统提示、工具 schema、scope、历史和需要 JSON 转义的正文。测试最终 provider payload 的 UTF-8 大小，而不是只累加正文长度；不得靠提高 64 KiB 上限、丢失正文或把 `CONTEXT_LIMIT` 当作预算通过。
 
-- [ ] **Step 2: 运行并确认工具白名单和 policy 尚不支持搜索**
+- [x] **Step 2: 运行并确认工具白名单和 policy 尚不支持搜索**
 
 Run:
 
@@ -662,7 +662,7 @@ PYTHONPATH=.:tests .venv/bin/python -W error::ResourceWarning -m unittest \
 
 Expected: `search_documents` 被白名单拒绝或 adapter 不存在，新增测试 FAIL。
 
-- [ ] **Step 3: 实现搜索 adapter 与 `ImportedDocumentPolicy`**
+- [x] **Step 3: 实现搜索 adapter 与 `ImportedDocumentPolicy`**
 
 `SEARCH_DOCUMENTS_SCHEMA` 只接受 `query`；adapter 校验 manifest 和涉及的 chunk SHA-256，按 casefold 子串搜索，返回：
 
@@ -682,13 +682,13 @@ Expected: `search_documents` 被白名单拒绝或 adapter 不存在，新增测
 
 搜索 adapter 用紧凑 `result_fields()`，最终 wire JSON 逐条接纳 hit，不能把完整 chunk 路径集合复制进每个工具结果；完整 `fact_coverage` 只保留在 Run 最终 scope。导入 policy 的模型请求投影可在模型已经据搜索结果选择正文后，将旧搜索结果压缩为带原 ToolCall ID 的 catalog 标记，并用无损、可辨行边界的正文表示减少嵌套 JSON 转义；Runtime 仍对最终请求执行 65,536-byte 硬上限。
 
-- [ ] **Step 4: 接入 Agent 与组合 policy，最后再 enrich**
+- [x] **Step 4: 接入 Agent 与组合 policy，最后再 enrich**
 
 将 `search_documents` 加入白名单；当前内置 `directory-qa/project-brief` 声明它，`file-qa` 不声明。导入面板以后只使用兼容助手；旧冻结快照保持原工具。`ManagedWorkspaceResolver` 从已校验 manifest／locations 构造只读 mapper，`SessionService.execute()` 把它传入 `assemble()`；普通 workspace 保持 `source_mapper=None`。`build_file_engine()`／`adapt_tools()` 使用向后兼容的可选 policy 与 adapter 注入点，只在 import 有效且冻结助手声明工具时注册搜索。`ExtensionPolicy.before/accept()` 和 `SessionTaskPolicy.FILE_TOOLS` 纳入搜索，但搜索只交给 base 导入 policy。
 
 `ImportedSourceMapper.enrich(validated_answer, snapshots)` 只在顶层严格引用校验成功后运行；模型提供 `source` 仍因多余字段被拒绝。mapper 把引用行映射成有序、相邻合并的 `source.locations`；缺行、hash 变化或 catalog 路径返回 `INVALID_CITATION`。组合助手先完成 MCP/Skill/历史与本地引用校验，再只对本地 chunk 引用 enrich。
 
-- [ ] **Step 5: 跑工具与引用检查并提交**
+- [x] **Step 5: 跑工具与引用检查并提交**
 
 Run:
 
