@@ -149,9 +149,11 @@ class FileAdapter:
 
 
 class FilePolicy:
-    def __init__(self, tool, output_path=None):
+    def __init__(self, tool, output_path=None, *, agent=None):
         self.tool = tool
         self.directory = isinstance(tool, DirectoryTools)
+        from .agents import builtin_agent
+        self.agent = agent or builtin_agent('directory' if self.directory else 'file')
         self.snapshots = {}
         self.read_attempted = False
         self.target = None
@@ -172,7 +174,7 @@ class FilePolicy:
             raise ValueError('INVALID_TASK')
         self.target = target
         task = {'directory': '.', 'question': question} if self.directory else {'file': target, 'question': question}
-        system = (DIRECTORY_SYSTEM if self.directory else SYSTEM) + TOOL_PROTOCOL
+        system = self.agent.system_prompt() + TOOL_PROTOCOL
         if self.output_path is not None:
             task['output_file'] = self.output_path
             system += WRITE_TASK
@@ -257,10 +259,10 @@ class FilePolicy:
         return model_request(messages, limit, schemas)
 
 
-def adapt_tools(tool, output_path=None):
+def adapt_tools(tool, output_path=None, *, agent=None):
     if isinstance(tool, ToolRuntime):
         return tool
-    policy = FilePolicy(tool, output_path)
+    policy = FilePolicy(tool, output_path, agent=agent)
     if policy.directory:
         adapters = []
         for schema in tool.schemas:

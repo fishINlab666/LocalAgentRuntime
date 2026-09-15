@@ -3,9 +3,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from local_agent.context import ContextBuilder
+from local_agent.context import ContextBuilder, _summary_span_id
 from local_agent.session_history import SessionHistoryTool
-from local_agent.session_store import SessionStore
+from local_agent.session_store import SUMMARY_MAX_BYTES, SessionStore
 from local_agent.sessions import RunSubmission, SessionScope, SessionService
 
 
@@ -321,7 +321,7 @@ class ContextBuilderTests(unittest.TestCase):
         self.assertLessEqual(
             len(json.dumps(active.payload, ensure_ascii=False, sort_keys=True,
                            separators=(",", ":")).encode("utf-8")),
-            6144,
+            SUMMARY_MAX_BYTES,
         )
         rendered = json.dumps(built.request, ensure_ascii=False)
         self.assertIn("session_summary", rendered)
@@ -486,6 +486,143 @@ class ContextBuilderTests(unittest.TestCase):
                 self.assertTrue(page["ok"], page)
                 self.assertIn(text, page["text"])
 
+    def test_summary_selects_issued_spans_and_materializes_authoritative_text(self):
+        self.seed_long_history()
+        prepared = self.prepare_current()
+
+        def summarize(request, _manifest):
+            source = json.loads(request["messages"][-1]["content"])
+            records = [
+                record
+                for run in source["source_runs"]
+                for record in run["records"]
+            ]
+            user = next(record for record in records if record["source_kind"] == "user")
+            assistant = next(
+                record for record in records if record["source_kind"] == "answer"
+            )
+            user_span = user["reference_spans"][0]
+            assistant_span = assistant["reference_spans"][0]
+            self.assertIn("span_id", user_span)
+            self.assertIn("span_id", assistant_span)
+            payload = {
+                "goals": [user_span["span_id"]],
+                "constraints": [],
+                "decisions": [],
+                "completed": [{
+                    "text": "模型改写了这段文字",
+                    "message_id": assistant["message_id"],
+                    "start": assistant_span["start"],
+                    "end": assistant_span["end"],
+                }],
+                "pending": [],
+                "anchors": [user_span["span_id"]],
+            }
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": json.dumps(payload, ensure_ascii=False),
+                },
+                "model": {"provider": "fixture", "model": "span-selection"},
+            }
+
+        built = ContextBuilder(
+            self.store, self.session.id, prepared.run_id
+        ).build(
+            {
+                "messages": [
+                    {"role": "system", "content": "system"},
+                    {"role": "user", "content": "继续"},
+                ],
+                "tools": [],
+            },
+            65536,
+            summarize=summarize,
+        )
+
+        active = self.store.load_active_summary(self.session.id)
+        self.assertIsNotNone(active)
+        self.assertEqual(active.id, built.manifest["summary_id"])
+        self.assertEqual(active.payload["pending"], [])
+        self.assertEqual(active.payload["anchors"], [])
+        self.assertNotEqual(
+            active.payload["completed"][0]["text"], "模型改写了这段文字"
+        )
+
+    def test_summary_materialization_deduplicates_and_bounds_anchors(self):
+        spans = []
+        for number in range(40):
+            message_id = f"message-{number:02d}"
+            text = f"事实-{number:02d}-" + "甲" * 30
+            spans.append({
+                "span_id": _summary_span_id(message_id, 0, len(text)),
+                "text": text,
+                "start": 0,
+                "end": len(text),
+            })
+        request = {
+            "messages": [{
+                "role": "user",
+                "content": json.dumps({
+                    "source_runs": [{
+                        "records": [{
+                            "message_id": f"message-{number:02d}",
+                            "reference_spans": [span],
+                        } for number, span in enumerate(spans)],
+                    }],
+                }, ensure_ascii=False),
+            }],
+        }
+        semantic_ids = [span["span_id"] for span in spans[:20]]
+        payload = {
+            "goals": semantic_ids[0:4],
+            "constraints": semantic_ids[4:8],
+            "decisions": semantic_ids[8:12],
+            "completed": semantic_ids[12:16],
+            "pending": semantic_ids[16:20],
+            "anchors": semantic_ids + [span["span_id"] for span in spans[20:]],
+        }
+
+        materialized = ContextBuilder._materialize_summary_payload(request, payload)
+
+        self.assertIsNotNone(materialized)
+        self.assertLessEqual(
+            len(json.dumps(
+                materialized, ensure_ascii=False, allow_nan=False,
+                sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8")),
+            SUMMARY_MAX_BYTES,
+        )
+        semantic_facts = [
+            fact
+            for field in ("goals", "constraints", "decisions", "completed", "pending")
+            for fact in materialized[field]
+        ]
+        self.assertEqual(len(semantic_facts), 20)
+        semantic_keys = {
+            (fact["message_id"], fact["start"], fact["end"])
+            for fact in semantic_facts
+        }
+        anchor_keys = {
+            (fact["message_id"], fact["start"], fact["end"])
+            for fact in materialized["anchors"]
+        }
+        self.assertTrue(anchor_keys)
+        self.assertTrue(semantic_keys.isdisjoint(anchor_keys))
+        self.assertLess(len(materialized["anchors"]), 20)
+
+        oversized_core = {
+            "goals": [span["span_id"] for span in spans],
+            "constraints": [],
+            "decisions": [],
+            "completed": [],
+            "pending": [],
+            "anchors": [],
+        }
+        self.assertIsNone(ContextBuilder._materialize_summary_payload(
+            request, oversized_core
+        ))
+
     def test_invalid_summary_variants_leave_old_summary_and_raw_messages_unchanged(self):
         run_ids = self.seed_long_history(12)
         first_message = self.store.load_run_messages(self.session.id, run_ids[0])[0]
@@ -539,6 +676,10 @@ class ContextBuilderTests(unittest.TestCase):
                     "text": "不匹配原文",
                     "end": 6,
                 }],
+            }, ensure_ascii=False),
+            "unknown-span-string": lambda request: json.dumps({
+                **self.summary_from_request(request),
+                "goals": ["span_not_issued_by_this_request"],
             }, ensure_ascii=False),
         }
         current_request = {

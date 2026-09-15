@@ -1,0 +1,4 @@
+# Optional capability loaders; builtin-only use remains standard-library only.
+mcp==1.30.0
+PyYAML==6.0.3
+jsonschema==4.26.0

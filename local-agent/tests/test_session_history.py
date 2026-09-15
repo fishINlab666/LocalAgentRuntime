@@ -72,6 +72,9 @@ class SessionHistoryTests(unittest.TestCase):
         )
         self.assertEqual(verified["call_id"], "call-1")
 
+    def test_search_description_states_literal_phrase_semantics(self):
+        self.assertIn("单个连续字面短语", self.tool.spec.description)
+
     def test_verified_tool_result_is_searchable_and_paginated_by_its_message_id(self):
         old = self.service.submit(self.session.id, RunSubmission(
             "large-result", "保存长工具结果", "conversation", self.session.scope,

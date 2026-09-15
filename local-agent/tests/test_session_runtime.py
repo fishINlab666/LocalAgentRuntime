@@ -411,13 +411,6 @@ class SessionRuntimeTests(unittest.TestCase):
         prepared = self.service.submit(session.id, RunSubmission(
             "long-current", "继续上一轮", "conversation", session.scope,
             None, None, {"max_steps": 2}))
-        first = history[0]
-        first_text = first.payload["content"][:12]
-        fact = {"text": first_text, "message_id": first.id,
-                "start": 0, "end": len(first_text)}
-        summary = {key: ([] if key not in {"goals", "pending", "anchors"} else [fact])
-                   for key in ("goals", "constraints", "decisions", "completed",
-                               "pending", "anchors")}
         recent = history[-1]
         recent_text = recent.payload["content"]
         final = {"role": "assistant", "content": json.dumps({
@@ -436,8 +429,26 @@ class SessionRuntimeTests(unittest.TestCase):
             def complete(inner_self, messages, tools, timeout):
                 inner_self.requests.append({
                     "messages": messages, "tools": tools, "timeout": timeout})
-                reply = ({"role": "assistant", "content": json.dumps(summary, ensure_ascii=False)}
-                         if len(inner_self.requests) == 1 else final)
+                if len(inner_self.requests) == 1:
+                    source = json.loads(messages[-1]["content"])
+                    fact = {
+                        "span_id": source["source_runs"][0]["records"][0]
+                        ["reference_spans"][0]["span_id"]
+                    }
+                    summary = {
+                        key: ([] if key not in {"goals", "pending", "anchors"}
+                              else [fact])
+                        for key in (
+                            "goals", "constraints", "decisions", "completed",
+                            "pending", "anchors"
+                        )
+                    }
+                    reply = {
+                        "role": "assistant",
+                        "content": json.dumps(summary, ensure_ascii=False),
+                    }
+                else:
+                    reply = final
                 return ModelReply(reply, {"total_tokens": 10})
 
         provider = PurposeProvider()

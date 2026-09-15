@@ -73,7 +73,7 @@ class SessionStoreTests(unittest.TestCase):
     def test_open_creates_private_versioned_store(self):
         store = SessionStore.open(self.state)
         self.addCleanup(store.close)
-        self.assertEqual(store.user_version(), 1)
+        self.assertEqual(store.user_version(), 2)
         self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
         self.assertEqual(
             stat.S_IMODE((self.state / "sessions.sqlite3").stat().st_mode),
@@ -456,7 +456,7 @@ class SessionStoreTests(unittest.TestCase):
             self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 0)
             self.assertEqual(backup.execute("SELECT value FROM legacy").fetchone()[0],
                              "kept")
-        self.assertEqual(store.user_version(), 1)
+        self.assertEqual(store.user_version(), 2)
 
     def test_migration_failure_preserves_old_database_and_releases_lock(self):
         self.state.mkdir(mode=0o700)

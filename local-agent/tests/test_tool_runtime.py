@@ -252,3 +252,55 @@ class RegistryTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ExtensionSourceTests(unittest.TestCase):
+    def _invoke(self, source, authorize=None, stopped=False):
+        from local_agent.tool_runtime import ToolRuntime, ToolRegistry, ToolSpec
+        from local_agent.approvals import RunControl
+        class Adapter:
+            spec = ToolSpec('extension', 'test', {'type': 'object', 'properties': {}}, source=source)
+            bound = None
+            cancelled = False
+            def cancel(self): self.cancelled = True
+            def bind_call(self, call_id):
+                self.bound = call_id
+            def execute(self, arguments):
+                return {'ok': True, 'bound': self.bound}
+            def verify_success(self, arguments, data):
+                return data
+        class Policy:
+            def before(self, *args): pass
+            def accept(self, *args): pass
+            def result_fields(self): return {}
+        tool, policy = Adapter(), Policy()
+        if authorize is not None:
+            policy.authorize_tool = lambda candidate, args: authorize
+        runtime = ToolRuntime(ToolRegistry([tool]), policy)
+        def execute_bounded(fn, timeout):
+            if stopped:
+                from local_agent.approvals import RunStopped
+                raise RunStopped('TOOL_TIMEOUT')
+            return fn()
+        outcome = runtime.invoke(request('extension', {'intent': 'use', **({'arguments': {}} if source == 'mcp' else {})})['tool_calls'][0],
+            budget_ok=True, execute_bounded=execute_bounded,
+            emit=lambda *args: None, control=RunControl(__import__('threading').Event()))
+        return outcome, tool
+
+    def test_extensions_require_explicit_true_and_bind_after_authorization(self):
+        for source in (('skill', 'mcp') if importlib.util.find_spec('jsonschema') else ()):
+            with self.subTest(source=source):
+                outcome, tool = self._invoke(source, True)
+                self.assertTrue(outcome.result['ok'], outcome.result)
+                self.assertEqual(outcome.result['data']['bound'], 'r1')
+        for source, allowed in ([('skill', None), ('mcp', 1), ('unknown', True)] if importlib.util.find_spec('jsonschema') else [('unknown', True)]):
+            with self.subTest(source=source, allowed=allowed):
+                outcome, tool = self._invoke(source, allowed)
+                self.assertEqual(outcome.result['error']['code'], 'PATH_DENIED')
+                self.assertIsNone(tool.bound)
+
+    @unittest.skipUnless(importlib.util.find_spec('jsonschema'), 'optional schema dependency')
+    def test_runtime_stop_invalidates_owned_extension(self):
+        outcome, tool = self._invoke('skill', True, stopped=True)
+        self.assertEqual(outcome.result['error']['code'], 'TOOL_TIMEOUT')
+        self.assertTrue(tool.cancelled)

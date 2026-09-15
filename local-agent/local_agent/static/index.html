@@ -20,6 +20,39 @@
       <div class="intro"><div><p class="eyebrow">WORKSPACE / 单文件问答 · 目录发现</p><h1>让答案，回到文件。</h1><p class="intro-copy">读资料，问问题。每个回答，都有原文可查。</p></div><span class="version">01<span>资料问答体验版</span></span></div>
       <div id="mode-notice" class="notice" hidden></div>
       <div id="connection-error" class="notice error" role="alert" hidden></div>
+      <section class="session-panel" aria-labelledby="agent-heading">
+        <div class="panel-title"><h2 id="agent-heading">助手与能力</h2></div>
+        <label for="agent-select">当前助手</label>
+        <select id="agent-select"><option value="">自动选择（按单文件 / 目录模式）</option></select>
+        <p id="agent-status" class="field-help">每个助手有自己的会话、工具与能力绑定。</p>
+        <details id="capability-management" class="capability-management">
+          <summary>管理助手、Skills 与 MCP</summary>
+          <p class="field-help">修改绑定后请新建会话；旧会话保留原来的助手修订与能力版本。停用会立即阻止新调用。</p>
+          <div class="extension-grid">
+            <section>
+              <h3>从模板创建助手</h3>
+              <label for="agent-template">复制模板</label><select id="agent-template" data-management></select>
+              <label for="agent-id">助手 ID</label><input id="agent-id" maxlength="64" placeholder="例如：project-brief" data-management>
+              <label for="agent-name">名称</label><input id="agent-name" maxlength="80" placeholder="项目简报助手" data-management>
+              <label for="agent-model">模型名称</label><input id="agent-model" maxlength="100" placeholder="deepseek-chat" data-management>
+              <label for="agent-instructions">助手说明</label><textarea id="agent-instructions" rows="3" maxlength="4096" data-management></textarea>
+              <details><summary>高级：工具与预算</summary><label for="agent-advanced">JSON 配置（tools / budgets）</label><textarea id="agent-advanced" rows="6" spellcheck="false" data-management></textarea></details>
+              <div class="actions"><button type="button" id="agent-create" class="secondary" data-management>创建助手</button><button type="button" id="agent-toggle" class="secondary" data-management disabled>停用当前助手</button></div>
+            </section>
+            <section>
+              <h3>导入本地能力</h3>
+              <label for="skill-path">Skill 文件夹路径</label><input id="skill-path" placeholder="/本机路径/skill-directory" data-management>
+              <button type="button" id="skill-install" class="secondary" data-management>导入 Skill</button>
+              <label for="mcp-path">MCP 配置文件路径</label><input id="mcp-path" placeholder="/本机路径/server.json" data-management>
+              <button type="button" id="mcp-install" class="secondary" data-management>导入 MCP 配置</button>
+              <p class="field-help">导入已安装 Server 的本地配置；测试连接会启动配置中的程序。密钥仍从本机环境提供。</p>
+              <div id="capability-list" class="capability-list" aria-label="已导入能力"></div>
+            </section>
+          </div>
+          <p id="extension-status" class="field-help" role="status"></p>
+          <p id="extension-error" class="form-error" role="alert" hidden></p>
+        </details>
+      </section>
       <section class="session-panel" aria-labelledby="session-title-heading">
         <div class="panel-title"><span class="section-number">00</span><h2 id="session-title-heading">长期会话</h2></div>
         <p class="field-help">对话、工具结果和已读取内容保存在本机。选择会话后，资料范围保持固定；服务重启后仍可继续。</p>
@@ -52,17 +85,20 @@
             <select id="task-type"><option value="files">核对资料</option><option value="conversation">聊这段记录</option></select>
             <p class="field-help">“核对资料”会重新读取当前文件；“聊这段记录”只查询本会话历史。</p>
             <label class="mode-toggle" for="discover"><input type="checkbox" id="discover" disabled aria-describedby="discover-help">目录发现</label>
-            <p class="field-help" id="discover-help">从当前工作区列出的 .md / .txt 资料中选择读取，最多 4 份。勾选后只需填写问题。</p>
+            <p class="field-help" id="discover-help">从当前工作区列出的 .md / .txt 资料中选择读取。勾选后只需填写问题。</p>
             <label for="file">文件路径</label>
             <input id="file" name="file" placeholder="例如：demo-note.md" required maxlength="1024" autocomplete="off" aria-describedby="file-help">
-            <p class="field-help" id="file-help">填写工作区内的相对路径 · .md / .txt · 最大 32 KiB</p>
+            <p class="field-help" id="file-help">填写工作区内的相对路径 · .md / .txt</p>
             <button type="button" class="sample" id="sample" hidden>填入演示文件与问题 <span aria-hidden="true">↗</span></button>
             <div class="label-row"><label for="question">想了解什么？</label><span id="count">0 / 4000</span></div>
             <textarea id="question" name="question" rows="6" maxlength="4000" required placeholder="例如：项目代号、评审人和演示日期分别是什么？请引用原文。"></textarea>
             <div class="suggestions"><button type="button" data-question="资料的主要内容是什么？请引用原文。">概括主要内容</button><button type="button" data-question="资料中写的预算是多少？">查找预算信息</button></div>
+            <label for="run-skill" class="extension-label">本轮指定 Skill（可选）</label><select id="run-skill"><option value="">由模型选择</option></select>
+            <label for="run-prompt" class="extension-label">本轮 MCP 模板（可选）</label><select id="run-prompt"><option value="">不指定模板</option></select>
+            <p class="field-help">只显示当前助手或会话已绑定的能力；正文仍须通过工具读取。</p>
             <div class="label-row"><label for="output-file">输出文件路径（可选）</label></div>
             <input id="output-file" name="output_file" placeholder="例如：summary.md" maxlength="1024" autocomplete="off" aria-describedby="output-file-help">
-            <p class="field-help" id="output-file-help">留空只问答；填写后可新建 .md / .txt 文件，最多 32 KiB。父目录须已存在，完整内容经你确认后才写入，不覆盖已有文件。</p>
+            <p class="field-help" id="output-file-help">留空只问答；填写后可新建 .md / .txt 文件。父目录须已存在，完整内容经你确认后才写入，不覆盖已有文件。</p>
             <p id="form-error" class="form-error" role="alert" hidden></p>
             <div class="actions"><button class="primary" type="submit" id="start" disabled>开始问答 <span aria-hidden="true">↗</span></button><button type="button" class="secondary" id="cancel" hidden>取消运行</button></div>
             <button type="button" class="secondary" id="continue-run" hidden>从中断处新建一次继续运行</button>

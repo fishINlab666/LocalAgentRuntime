@@ -6,6 +6,9 @@ let ready = false, simulated = false, activeId = null, busy = false, timer = nul
 let viewGeneration = 0, renderedRevision = -1;
 let activeSessionId = null, activeSession = null, fixedSessionSelection = false;
 let workspaceAvailable = true, historyRuns = [];
+let agents = [], capabilities = {skills: [], servers: []}, selectedAgentId = '', managing = false;
+let sessionListGeneration = 0;
+const sessionAgentIds = new Map();
 let pendingApproval = null, approvalSendingId = null, approvalBlockedId = null, approvalDeadline = 0, approvalTimer = null;
 let cancelling = false, cancelSendingId = null;
 const errors = {
@@ -15,11 +18,11 @@ const errors = {
   PATH_DENIED: '文件路径不在允许范围内。请填写工作区内的相对路径，不使用链接或隐藏文件。',
   UNSUPPORTED_FILE: '仅支持 UTF-8 编码的 .md 或 .txt 文本文件。',
   FILE_NOT_FOUND: '找不到这个文件，请核对文件名和当前工作区。',
-  FILE_TOO_LARGE: '文件超过 32 KiB，请选择更小的文本文件。',
+  FILE_TOO_LARGE: '文件超过当前助手的读取限制，请选择更小的文本文件。',
   FILE_CHANGED: '读取时文件发生变化，请等编辑完成后重新提问。',
   READ_ERROR: '无法读取文件，请检查文件权限。',
   PATH_NOT_DISCOVERED: '只能读取本次列出目录后发现的资料，请重新提问。',
-  FILE_COUNT_LIMIT: '本次最多读取 4 份资料，尚未检查全部文件。',
+  FILE_COUNT_LIMIT: '已达到当前助手的文件数量限制，尚未检查全部文件。',
   DIRECTORY_NOT_FOUND: '找不到这个目录，请检查当前工作区。',
   DIRECTORY_TOO_LARGE: '目录条目过多，请缩小工作区范围后重试。',
   DIRECTORY_CHANGED: '列出目录时内容发生变化，请等编辑完成后重试。',
@@ -67,12 +70,18 @@ const errors = {
   TRACE_ERROR: '执行日志保存失败，本次不能确认为成功。',
   REQUEST_TOO_LARGE: '输入过长，请缩短问题或路径。',
   LOCAL_SERVER_ERROR: '本地服务遇到错误，请检查日志目录权限并重新启动。',
+  AGENT_DISABLED: '该助手已停用；历史仍可查看，启用后才能开始新任务。',
+  AGENT_CONFIG_INVALID: '助手配置不完整或超出允许范围，请检查模板、工具与预算。',
+  SKILL_DISABLED: '该 Skill 已停用，请重新选择能力。',
+  SKILL_NOT_BOUND: '该 Skill 没有绑定到当前会话版本，请新建会话使用新绑定。',
+  SKILL_DEPENDENCIES_MISSING: 'Skill 所需的工具或环境不可用，请查看能力状态中的缺项。',
+  MCP_SERVER_DISABLED: 'MCP Server 已停用，请先启用。',
 };
 const eventNames = {'run.started':'任务开始', 'model.requested':'请求模型', 'model.completed':'收到模型回复',
   'tool.requested':'模型请求工具', 'tool.started':'开始执行工具', 'tool.finished':'工具执行结束',
   'tool.completed':'工具结果已回填', 'tool.described':'工具动作说明', 'approval.required':'等待确认', 'approval.resolved':'已收到确认决定',
   'approval.expired':'确认已过期', 'answer.rejected':'回答格式不合规，正在纠错', 'run.ended':'任务结束'};
-const sourceLabel = value => ({builtin: '内置', user: '用户工具', mcp: 'MCP'})[value] || value || '未提供';
+const sourceLabel = value => ({builtin: '内置', user: '用户工具', skill: 'Skill', mcp: 'MCP'})[value] || value || '未提供';
 const riskLabel = value => ({low: '低风险', medium: '中风险', high: '高风险'})[value] || value || '未提供';
 function eventLabel(event) {
   if (event?.event === 'answer.rejected' && event.detail?.code === 'IDENTIFIER_MISMATCH') {
@@ -92,8 +101,10 @@ async function api(path, body) {
   const controller = new AbortController();
   const deadline = setTimeout(() => controller.abort(), 8000);
   try {
-    const response = await fetch(path, {method: body === undefined ? 'GET' : 'POST',
-      headers: {'X-Session-Token': token, 'Content-Type': 'application/json'},
+    const agentId = selectedAgentId || activeSession?.agent_id || sessionAgentIds.get(activeSessionId);
+    const headers = {'X-Session-Token': token, 'Content-Type': 'application/json'};
+    if (agentId) headers['X-Agent-ID'] = agentId;
+    const response = await fetch(path, {method: body === undefined ? 'GET' : 'POST', headers,
       body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal});
     const data = await response.json();
     if (!response.ok) { const error = new Error(messageFor(data.error)); error.code = data.error; throw error; }
@@ -104,6 +115,182 @@ async function api(path, body) {
     }
     throw error;
   } finally { clearTimeout(deadline); }
+}
+
+function currentAgent() {
+  // An old session without a recorded snapshot must not inherit today's bindings.
+  if (activeSessionId) return activeSession?.agent_snapshot || null;
+  if (selectedAgentId) return agents.find(agent => agent.id === selectedAgentId) || null;
+  return agents.find(agent => agent.id === ($('discover').checked ? 'directory-qa' : 'file-qa')) || null;
+}
+
+function selectOptions(element, entries, emptyLabel, wanted = element.value) {
+  element.replaceChildren();
+  const options = emptyLabel === null ? entries : [{value: '', label: emptyLabel}, ...entries];
+  for (const item of options) {
+    const option = document.createElement('option');
+    option.value = item.value; option.textContent = item.label; option.disabled = Boolean(item.disabled);
+    element.append(option);
+  }
+  element.value = options.some(item => item.value === wanted && !item.disabled)
+    ? wanted : options.find(item => !item.disabled)?.value || '';
+}
+
+function renderRunChoices() {
+  const snapshot = currentAgent();
+  const skills = (snapshot?.skills || []).map(binding => {
+    const installed = capabilities.skills.find(item => item.id === binding.id && item.version === binding.version);
+    return {value: binding.id, label: `${installed?.name || binding.id} · ${binding.version.slice(0, 8)}`,
+      disabled: installed?.enabled === false};
+  });
+  const prompts = (snapshot?.mcp || []).flatMap(binding => {
+    const server = capabilities.servers.find(item => item.id === binding.id && item.version === binding.version);
+    return (binding.prompts || []).map(name => ({value: JSON.stringify({server_id: binding.id, name}),
+      label: `${binding.id} / ${name}`, disabled: server?.enabled === false}));
+  });
+  selectOptions($('run-skill'), skills, '由模型选择');
+  selectOptions($('run-prompt'), prompts, '不指定模板');
+  $('run-skill').disabled = busy || !skills.length;
+  $('run-prompt').disabled = busy || !prompts.length;
+}
+
+function updateAgentControls() {
+  const selected = agents.find(agent => agent.id === selectedAgentId);
+  const snapshot = currentAgent(), limits = snapshot?.budgets;
+  $('agent-select').disabled = busy || managing || fixedSessionSelection;
+  $('agent-status').textContent = activeSessionId
+    ? `会话助手：${activeSession?.agent_id || '正在加载'} · 修订 ${activeSession?.agent_revision || '未知'}。旧会话保持此修订。`
+    : selected ? `${selected.name} · 修订 ${(selected.revision || '').slice(0, 12)}${selected.enabled === false ? ' · 已停用' : ''}`
+      : '按单文件 / 目录模式选择内置助手；选择具体助手可管理其会话与能力。';
+  $('discover-help').textContent = '从当前工作区列出的 .md / .txt 资料中选择读取'
+    + (limits?.max_files ? `，最多 ${limits.max_files} 份。` : '。') + '勾选后只需填写问题。';
+  $('file-help').textContent = '填写工作区内的相对路径 · .md / .txt'
+    + (limits?.max_file_bytes ? ` · 最大 ${Number((limits.max_file_bytes / 1024).toFixed(2))} KiB` : '');
+  if (selected) {
+    const mode = selected.strategy === 'file' ? 'file' : 'directory';
+    $('session-mode').value = mode;
+    if (!activeSessionId) $('discover').checked = mode === 'directory';
+  }
+  $('session-mode').disabled = busy || Boolean(selected) || fixedSessionSelection;
+  $('session-file').disabled = busy || $('session-mode').value === 'directory';
+  $('session-select').disabled = busy || managing;
+  $('discover').disabled = busy || Boolean(activeSessionId) || Boolean(selected) || !ready;
+  $('file').disabled = busy || Boolean(activeSessionId) || $('discover').checked;
+  $('file').required = !activeSessionId && !$('discover').checked;
+  const current = agents.find(agent => agent.id === (activeSession?.agent_id || selectedAgentId));
+  if (current?.enabled === false) $('start').disabled = true;
+  if (selected?.enabled === false) $('session-create').disabled = true;
+  for (const element of document.querySelectorAll('[data-management]')) element.disabled = busy || managing;
+  $('agent-toggle').disabled = busy || managing || !selected;
+  $('agent-toggle').textContent = selected?.enabled === false ? '启用当前助手' : '停用当前助手';
+  for (const button of document.querySelectorAll('[data-bind-kind]')) {
+    button.disabled = busy || managing || !selected || selected.enabled === false || button.dataset.bound === 'true';
+  }
+  renderRunChoices();
+}
+
+function fillAgentTemplate() {
+  const template = agents.find(agent => agent.id === $('agent-template').value);
+  if (!template) return;
+  $('agent-model').value = template.model?.name || '';
+  $('agent-instructions').value = template.instructions || '';
+  $('agent-advanced').value = JSON.stringify({tools: template.tools, budgets: template.budgets}, null, 2);
+}
+
+function capabilityState(item) {
+  const missing = [...(item.missing || []), ...(item.dependencies?.unsupported || [])];
+  if (item.dependencies?.scripts) missing.push('script_execution_unsupported');
+  if (item.enabled === false) return '已停用';
+  const state = {ready: '已就绪', imported: '已导入', unavailable: '不可用', disabled: '已停用', error: '错误'}[item.status]
+    || (missing.length ? '依赖不满足' : '已导入');
+  return state + (missing.length ? ` · 缺项：${missing.join('、')}` : '')
+    + (item.error ? ` · ${item.error}` : '') + (item.reason ? ` · ${item.reason}` : '');
+}
+
+function managementButton(label, handler) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'secondary'; button.textContent = label;
+  button.dataset.management = '';
+  button.addEventListener('click', handler);
+  return button;
+}
+
+function renderCapabilities() {
+  $('capability-list').replaceChildren();
+  const selected = agents.find(agent => agent.id === selectedAgentId);
+  for (const [kind, items] of [['skill', capabilities.skills], ['mcp', capabilities.servers]]) {
+    for (const item of items) {
+      const article = document.createElement('article'), title = document.createElement('p');
+      const details = document.createElement('p'), actions = document.createElement('div');
+      article.className = 'capability-item'; actions.className = 'actions';
+      title.textContent = `${kind === 'skill' ? 'Skill' : 'MCP'} · ${item.name || item.id} · ${(item.version || '').slice(0, 8)}`;
+      details.textContent = capabilityState(item)
+        + (item.description ? ` · ${item.description}` : '')
+        + (typeof item.compatibility === 'string' ? ` · 兼容说明：${item.compatibility}` : '');
+      const bound = (selected?.[kind === 'skill' ? 'skills' : 'mcp'] || []).some(
+        binding => binding.id === item.id && binding.version === item.version);
+      const bind = managementButton(bound ? '已绑定当前修订' : '绑定到所选助手', () => manage(async () => {
+        if (!selectedAgentId) return;
+        await api(`/api/agents/${encodeURIComponent(selectedAgentId)}/bind`, {kind, id: item.id, version: item.version});
+        await loadExtensions();
+        $('extension-status').textContent = '绑定已保存。请新建会话使用新修订；旧会话仍使用原版本。';
+      }));
+      bind.dataset.bindKind = kind; bind.dataset.capabilityId = item.id; bind.dataset.bound = String(bound);
+      const toggle = managementButton(item.enabled === false ? '启用' : '停用', () => manage(async () => {
+        await api(`/api/${kind === 'skill' ? 'skills' : 'mcp'}/${encodeURIComponent(item.id)}/enabled`, {enabled: item.enabled === false});
+        await loadExtensions(); $('extension-status').textContent = '能力状态已更新。';
+      }));
+      actions.append(bind, toggle);
+      if (kind === 'mcp') {
+        const probe = managementButton('测试连接', () => manage(async () => {
+          const response = await api(`/api/mcp/${encodeURIComponent(item.id)}/probe`, {});
+          const catalog = response.catalog || {};
+          $('extension-status').textContent = `连接检查完成：工具 ${catalog.tools?.length || 0}、资源 ${catalog.resources?.length || 0}、模板 ${catalog.prompts?.length || 0}。`;
+        }));
+        probe.dataset.probeId = item.id; actions.append(probe);
+      }
+      article.append(title, details, actions); $('capability-list').append(article);
+    }
+  }
+}
+
+async function loadExtensions() {
+  const [agentData, capabilityData] = await Promise.all([api('/api/agents'), api('/api/capabilities')]);
+  agents = agentData.agents || [];
+  capabilities = {skills: capabilityData.skills || [], servers: capabilityData.servers || []};
+  const templateWas = $('agent-template').value;
+  selectOptions($('agent-select'), agents.map(agent => ({value: agent.id,
+    label: `${agent.name}${agent.enabled === false ? '（已停用）' : ''}`})), '自动选择（按单文件 / 目录模式）', selectedAgentId);
+  selectOptions($('agent-template'), agents.map(agent => ({value: agent.id, label: agent.name})), null);
+  if (!templateWas) fillAgentTemplate();
+  renderCapabilities(); updateControls();
+}
+
+async function manage(action) {
+  if (busy || managing) return;
+  managing = true; $('extension-error').hidden = true; $('extension-status').textContent = '正在处理…'; updateControls();
+  try { await action(); }
+  catch (error) { $('extension-status').textContent = ''; showError(error, 'extension-error'); }
+  finally { managing = false; updateControls(); }
+}
+
+async function selectAgent(agentId) {
+  if (busy) return;
+  selectedAgentId = agentId;
+  activeSessionId = null; activeSession = null; viewGeneration++;
+  $('session-select').value = ''; $('session-actions').hidden = true; $('session-scope').hidden = true;
+  $('question').value = ''; $('output-file').value = ''; countQuestion();
+  renderRunHistory([]); clearRunView(); renderCapabilities();
+  try { await loadSessions(); }
+  catch (error) { showError(error, 'session-error'); }
+  updateControls();
+}
+
+function selectedRunCapabilities() {
+  const selected = {};
+  if ($('run-skill').value) selected.skill_id = $('run-skill').value;
+  if ($('run-prompt').value) selected.mcp_prompt = JSON.parse($('run-prompt').value);
+  return selected;
 }
 
 function updateControls() {
@@ -128,6 +315,7 @@ function updateControls() {
     : $('discover').checked ? '开始后，问题、目录元数据和已读取的资料内容将发送给 DeepSeek。原文件保持只读。'
     : '开始后，所选文件内容和问题将发送给 DeepSeek。原文件保持只读。';
   if ($('output-file').value.trim()) $('privacy').textContent += ' 输出文件的完整内容经你确认后才新建。';
+  updateAgentControls();
   updateApprovalControls();
 }
 
@@ -285,6 +473,7 @@ async function selectSession(sessionId) {
     $('discover').checked = directory; $('file').value = activeSession.scope.file || '';
     $('session-scope').hidden = false;
     $('session-scope').textContent = `固定资料范围：${directory ? '当前工作区目录发现' : activeSession.scope.file}`
+      + (activeSession.agent_id ? ` · 助手 ${activeSession.agent_id} · 修订 ${(activeSession.agent_revision || '未知').slice(0, 12)}（旧会话保留此版本）` : '')
       + (workspaceAvailable ? '' : ' · 原工作区当前不可用');
     renderRunHistory(runsResponse.runs);
     if (runsResponse.runs.length) await openSessionRun(runsResponse.runs[0].id);
@@ -296,8 +485,12 @@ async function selectSession(sessionId) {
 }
 
 async function loadSessions(selectedId = null, fixed = fixedSessionSelection) {
+  const generation = ++sessionListGeneration, requestedAgent = selectedAgentId;
   const [active, archived] = await Promise.all([api('/api/sessions'), api('/api/sessions?archived=1')]);
+  if (generation !== sessionListGeneration || requestedAgent !== selectedAgentId) return;
   const all = [...active.sessions, ...archived.sessions];
+  sessionAgentIds.clear();
+  for (const session of all) if (session.agent_id) sessionAgentIds.set(session.id, session.agent_id);
   const select = $('session-select'), temporary = select.firstElementChild;
   select.replaceChildren(temporary);
   for (const session of all) {
@@ -310,6 +503,7 @@ async function loadSessions(selectedId = null, fixed = fixedSessionSelection) {
   $('session-create').hidden = fixedSessionSelection;
   const wanted = selectedId || active.sessions[0]?.id || null;
   if (wanted) { select.value = wanted; await selectSession(wanted); }
+  else { select.value = ''; await selectSession(''); }
 }
 
 function prepareOutput(job) {
@@ -374,7 +568,12 @@ function render(job) {
       for (const citation of citations) {
         const article = document.createElement('article'), heading = document.createElement('header'), quote = document.createElement('blockquote');
         article.className = 'citation';
-        heading.textContent = citation.message_id
+        const source = citation.source;
+        const sourceName = typeof source === 'string' ? source : source?.label || source?.name
+          || (source ? `${sourceLabel(source.type)} · ${source.server_id || source.id || citation.source_id || citation.path || ''}` : null);
+        heading.textContent = sourceName || citation.source_id
+          ? `${sourceName || citation.source_id}${citation.start_line ? ` · 第 ${citation.start_line}${citation.end_line === citation.start_line ? '' : '–' + citation.end_line} 行` : ''}`
+          : citation.message_id
           ? `会话消息 ${citation.message_id} · 字符 ${citation.start}–${citation.end}`
           : `${citation.path} · 第 ${citation.start_line}${citation.end_line === citation.start_line ? '' : '–' + citation.end_line} 行`;
         quote.textContent = citation.quote; article.append(heading, quote); $('citations').append(article);
@@ -436,6 +635,8 @@ async function initialize() {
       $('question').value = '项目代号、评审人和演示日期分别是什么？引用原文。';
       countQuestion(); $('question').focus();
     };
+    try { await loadExtensions(); }
+    catch (error) { showError(error, 'extension-error'); }
     await loadSessions(config.selected_session_id, Boolean(config.selected_session_id));
     if (config.latest_run_id && !activeSessionId) {
       busy = true; updateControls();
@@ -449,6 +650,41 @@ async function initialize() {
 }
 
 $('question').addEventListener('input', countQuestion);
+$('agent-select').addEventListener('change', () => selectAgent($('agent-select').value));
+$('agent-template').addEventListener('change', fillAgentTemplate);
+$('agent-create').addEventListener('click', () => manage(async () => {
+  const template = agents.find(agent => agent.id === $('agent-template').value);
+  if (!template) throw new Error('请先选择一个助手模板。');
+  let advanced;
+  try { advanced = JSON.parse($('agent-advanced').value); }
+  catch { throw new Error('工具与预算 JSON 格式有误，请检查后重试。'); }
+  if (!advanced || typeof advanced !== 'object' || Array.isArray(advanced)
+      || Object.keys(advanced).some(key => !['tools', 'budgets'].includes(key))) {
+    throw new Error('高级配置只接受 tools 与 budgets。');
+  }
+  const {revision, enabled, ...configuration} = JSON.parse(JSON.stringify(template));
+  configuration.id = $('agent-id').value.trim(); configuration.name = $('agent-name').value.trim();
+  configuration.model.name = $('agent-model').value.trim();
+  configuration.instructions = $('agent-instructions').value;
+  if (advanced.tools !== undefined) configuration.tools = advanced.tools;
+  if (advanced.budgets !== undefined) configuration.budgets = advanced.budgets;
+  const response = await api('/api/agents', configuration);
+  await loadExtensions(); await selectAgent(response.agent.id);
+  $('agent-select').value = response.agent.id;
+  $('extension-status').textContent = '助手已创建，可以新建会话。';
+}));
+$('agent-toggle').addEventListener('click', () => manage(async () => {
+  const agent = agents.find(item => item.id === selectedAgentId);
+  if (!agent) return;
+  await api(`/api/agents/${encodeURIComponent(agent.id)}/enabled`, {enabled: agent.enabled === false});
+  await loadExtensions(); $('extension-status').textContent = '助手状态已更新。';
+}));
+for (const kind of ['skill', 'mcp']) $(kind + '-install').addEventListener('click', () => manage(async () => {
+  const path = $(kind + '-path').value.trim();
+  if (!path) throw new Error('请填写要导入的本地路径。');
+  await api(`/api/${kind === 'skill' ? 'skills' : 'mcp'}/install`, {path});
+  await loadExtensions(); $('extension-status').textContent = '已导入。选择助手并绑定后，新会话可以使用。';
+}));
 $('discover').addEventListener('change', updateControls);
 $('output-file').addEventListener('input', updateControls);
 $('task-type').addEventListener('change', () => {
@@ -464,7 +700,8 @@ $('session-create').addEventListener('click', async () => {
   const scope = $('session-mode').value === 'directory' ? {mode: 'directory'}
     : {mode: 'file', file: $('session-file').value.trim()};
   try {
-    const response = await api('/api/sessions', {title: $('session-name').value.trim(), scope});
+    const response = await api('/api/sessions', {title: $('session-name').value.trim(), scope,
+      ...(selectedAgentId ? {agent_id: selectedAgentId} : {})});
     await loadSessions(response.session.id, fixedSessionSelection);
   } catch (error) { showError(error, 'session-error'); }
 });
@@ -495,13 +732,15 @@ $('question-form').addEventListener('submit', async event => {
       const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
       const response = await api(`/api/sessions/${requestedSession}/runs`, {
         client_request_id: requestId, task_type: $('task-type').value,
-        question, output_file: outputFile || null
+        question, output_file: outputFile || null, ...selectedRunCapabilities()
       });
       if (requestedSession !== activeSessionId || generation !== viewGeneration) return;
       job = normalizedSessionRun(response.run);
     } else {
       const body = $('discover').checked ? {mode: 'directory', question} : {file: $('file').value.trim(), question};
       if (outputFile) body.output_file = outputFile;
+      if (selectedAgentId) body.agent_id = selectedAgentId;
+      Object.assign(body, selectedRunCapabilities());
       job = await api('/api/runs', body);
     }
     prepareOutput(job); render(job); timer = setTimeout(poll, 100);

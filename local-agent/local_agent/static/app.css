@@ -187,6 +187,20 @@ h1{
 .session-panel .panel-title{
   margin-bottom:8px
 }
+.capability-management{margin-top:14px}
+.capability-management summary{cursor:pointer;font-size:13px;padding:10px 0;color:var(--accent)}
+.extension-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:28px;margin-top:18px}
+.extension-grid section{min-width:0}
+.extension-grid h3{font-size:15px;margin-bottom:16px}
+.extension-grid label,.extension-label{margin-top:14px}
+.extension-grid textarea{min-height:100px}
+.extension-grid input+button{margin-top:10px}
+.capability-list{display:grid;gap:10px;margin-top:20px}
+.capability-item{border:1px solid var(--line);border-radius:8px;padding:12px;overflow-wrap:anywhere}
+.capability-item p{font-size:12px;line-height:1.7}
+.capability-item .actions{flex-wrap:wrap;margin-top:10px;gap:8px}
+.capability-item button{min-height:36px;font-size:12px;padding:7px 10px}
+#extension-status,#agent-status{overflow-wrap:anywhere}
 .session-grid{
   display:grid;
   grid-template-columns:110px minmax(180px,1fr);
@@ -699,6 +713,7 @@ footer{
   }
 }
 @media(max-width:760px){
+  .extension-grid{grid-template-columns:minmax(0,1fr)}
   .shell{
     padding:0 18px
   }

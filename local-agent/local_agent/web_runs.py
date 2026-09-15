@@ -1,6 +1,7 @@
 """Loopback web orchestration for one-shot runs and durable sessions."""
 
 import copy
+import json
 import os
 from pathlib import Path
 import threading
@@ -59,6 +60,12 @@ class LiveTrace(Trace):
         self.publish({'event': event, 'detail': detail})
 
 
+from .agents import AgentCatalog, AgentDefinition, AgentError, builtin_agent
+from .agent_runtime import CapabilityStore, assemble
+from .skills import SkillError
+from .provider import DeepSeekProvider
+
+
 class WebRuns:
     def __init__(self, workspace: Path | None, directory: Path, provider_factory,
                  *, state_dir: Path | None = None, selected_session_id: str | None = None):
@@ -87,6 +94,8 @@ class WebRuns:
                     or state_path.is_relative_to(initial_workspace)):
                 raise ValueError('Logs and session state must be outside the readable workspace')
 
+        self.agent_catalog = AgentCatalog(state_path / "agents")
+        self.capabilities = CapabilityStore(state_path)
         self.store = SessionStore.open(state_path)
         try:
             self.store.recover_interrupted(uuid.uuid4().hex)
@@ -136,7 +145,9 @@ class WebRuns:
             scope["file"] = record.scope.target_path
         return {"id": record.id, "title": record.title, "scope": scope,
                 "status": record.status, "revision": record.revision,
-                "created_at": record.created_at, "updated_at": record.updated_at}
+                "created_at": record.created_at, "updated_at": record.updated_at,
+                "agent_id": record.agent_id, "agent_revision": record.agent_revision,
+                "agent_snapshot": json.loads(json.dumps(record.agent_snapshot))}
 
     @staticmethod
     def _run_data(record):
@@ -149,6 +160,97 @@ class WebRuns:
                 "state": record.state, "phase": record.phase,
                 "stop_reason": record.stop_reason,
                 "started_at": record.started_at, "finished_at": record.finished_at}
+
+    def require_agent_session(self, session_id, agent_id):
+        record = self._require_session(session_id)
+        if agent_id and record.agent_id != agent_id:
+            raise WebError(404, 'NOT_FOUND')
+        return record
+
+    def list_agents(self):
+        return {'agents': self.agent_catalog.list()}
+
+    def save_agent(self, document):
+        try:
+            agent = self.agent_catalog.save(document)
+            return {'agent': {**agent.to_dict(), 'revision': agent.revision,
+                              'enabled': self.agent_catalog.is_enabled(agent.id)}}
+        except AgentError as error:
+            raise WebError(400, error.code) from None
+
+    def set_agent_enabled(self, agent_id, enabled):
+        try:
+            self.agent_catalog.set_enabled(agent_id, enabled)
+            if not enabled:
+                with self.lock:
+                    for job in list(self.session_jobs.values()) + list(self.jobs.values()):
+                        job_agent = (self.service.load(job['session_id']).agent_id if job.get('session_id')
+                                     else job.get('agent_snapshot', {}).get('id'))
+                        if job_agent == agent_id:
+                            job['control'].cancel_run()
+            return self.list_agents()
+        except AgentError as error:
+            raise WebError(400, error.code) from None
+
+    def _agent_provider(self, session):
+        agent = AgentDefinition.from_dict(dict(session.agent_snapshot))
+        if not self.agent_catalog.is_enabled(agent.id):
+            raise AgentError('AGENT_DISABLED')
+        if self.provider_factory == DeepSeekProvider.from_env:
+            return agent.provider()
+        return self.provider_factory()
+
+    def list_capabilities(self, agent_id=None):
+        try:
+            result = self.capabilities.list()
+            if agent_id:
+                agent = self.agent_catalog.get(agent_id)
+                _, statuses = self.capabilities.skills.resolve(agent.to_dict()['skills'], agent.tools)
+                result['agent_statuses'] = statuses
+            return result
+        except (AgentError, SkillError) as error:
+            raise WebError(400, error.code) from None
+
+    def bind_capability(self, agent_id, data):
+        if not isinstance(data, dict) or set(data) != {'kind', 'id', 'version'}:
+            raise WebError(400, 'INVALID_REQUEST')
+        try:
+            agent = self.capabilities.bind(self.agent_catalog, agent_id, data['kind'], data['id'], data['version'])
+            return {'agent': {**agent.to_dict(), 'revision': agent.revision,
+                              'enabled': self.agent_catalog.is_enabled(agent.id)}}
+        except (AgentError, SkillError) as error:
+            raise WebError(400, error.code) from None
+
+    def capability_action(self, kind, capability_id, action, data):
+        try:
+            if not isinstance(data, dict):
+                raise WebError(400, 'INVALID_REQUEST')
+            if action == 'install' and set(data) == {'path'} and isinstance(data['path'], str):
+                path = Path(data['path']).expanduser()
+                if kind == 'skill':
+                    return {'skill': self.capabilities.skills.install(path)}
+                if path.stat().st_size > 16384:
+                    raise WebError(413, 'REQUEST_TOO_LARGE')
+                return {'server': self.capabilities.install_server(json.loads(path.read_text(encoding='utf-8')))}
+            if action == 'probe' and kind == 'mcp' and data == {}:
+                return self.capabilities.probe(capability_id)
+            if action == 'enabled' and set(data) == {'enabled'} and type(data['enabled']) is bool:
+                result = (self.capabilities.skills.set_enabled(capability_id, data['enabled']) if kind == 'skill'
+                          else self.capabilities.set_server_enabled(capability_id, data['enabled']))
+                if not data['enabled']:
+                    binding_key = 'skills' if kind == 'skill' else 'mcp'
+                    with self.lock:
+                        for job in list(self.session_jobs.values()) + list(self.jobs.values()):
+                            snapshot = (self.service.load(job['session_id']).agent_snapshot if job.get('session_id')
+                                        else job.get('agent_snapshot', {}))
+                            if any(item['id'] == capability_id for item in snapshot.get(binding_key, [])):
+                                job['control'].cancel_run()
+                return {('skill' if kind == 'skill' else 'server'): result}
+            raise WebError(400, 'INVALID_REQUEST')
+        except (AgentError, SkillError) as error:
+            raise WebError(400, error.code) from None
+        except (OSError, ValueError, TypeError) as error:
+            raise WebError(400, getattr(error, 'code', 'CAPABILITY_CONFIG_INVALID')) from None
 
     def config(self):
         available = self._workspace_available()
@@ -169,7 +271,7 @@ class WebRuns:
     def validate(data):
         if not isinstance(data, dict):
             raise WebError(400, 'INVALID_TASK')
-        fields = set(data) - {'output_file'}
+        fields = set(data) - {'output_file', 'agent_id', 'skill_id', 'mcp_prompt'}
         if fields == {'mode', 'question'} and data['mode'] == 'directory':
             path = None
         elif fields == {'file', 'question'}:
@@ -220,30 +322,39 @@ class WebRuns:
         output_path = data.get('output_file')
         with self.lock:
             self._check_start()
-        try:
-            reader = DirectoryTools(self.workspace) if path is None else ReadFile(self.workspace, {path})
-        except (OSError, RuntimeError, ValueError):
-            raise WebError(400, 'WORKSPACE_CHANGED') from None
-        if reader.workspace != self.workspace or reader.workspace_identity != self.workspace_identity:
+        if not self._workspace_available():
             raise WebError(400, 'WORKSPACE_CHANGED')
-        engine = adapt_tools(reader, output_path=output_path)
         try:
-            provider = self.provider_factory()
-        except ProviderError as error:
+            agent = (self.agent_catalog.get(data['agent_id']) if data.get('agent_id')
+                     else self.agent_catalog.get(builtin_agent('directory' if path is None else 'file').id))
+            provider = agent.provider() if self.provider_factory == DeepSeekProvider.from_env else self.provider_factory()
+        except (ProviderError, AgentError) as error:
             raise WebError(503, error.code) from None
         trace = LiveTrace(self.directory, self.workspace,
                           lambda event: self._publish(trace.run_id, event))
         cancel = threading.Event()
         control = RunControl(cancel)
         approvals = ApprovalBroker(trace.run_id, publish=trace.emit)
+        try:
+            assembly = assemble(agent, self.workspace, path, output_path, self.capabilities,
+                run_id=trace.run_id, control=control, agent_catalog=self.agent_catalog,
+                selected_skill=data.get('skill_id'), selected_prompt=data.get('mcp_prompt'))
+        except Exception as error:
+            raise WebError(400, getattr(error, 'code', 'CAPABILITY_UNAVAILABLE')) from None
+        engine = assembly.engine
         runtime = Runtime(provider, engine, trace, approvals=approvals, control=control)
         job = {'id': trace.run_id, 'file': path, 'mode': 'directory' if path is None else 'file',
                'question': question, 'output_file': output_path, 'state': 'running',
                'started': time.monotonic(), 'events': [], 'result': None,
                'cancel': cancel, 'control': control, 'approvals': approvals,
-               'cancelling': False, 'revision': 0, 'thread': None}
+               'cancelling': False, 'revision': 0, 'thread': None,
+               'assembly': assembly, 'agent_snapshot': agent.to_dict()}
         with self.lock:
-            self._check_start()
+            try:
+                self._check_start()
+            except WebError:
+                assembly.close()
+                raise
             self.jobs[job['id']] = job
             while len(self.jobs) > 20:
                 del self.jobs[next(iter(self.jobs))]
@@ -264,6 +375,8 @@ class WebRuns:
             result = runtime.run(job['question'], job['file'], job['cancel'])
         except Exception:
             result = {'state': 'failed', 'stop_reason': 'INTERNAL_ERROR', 'answer': None}
+        finally:
+            job['assembly'].close()
         with self.lock:
             job.update(result=result, state=result['state'], cancelling=False)
             job['revision'] += 1
@@ -274,7 +387,7 @@ class WebRuns:
                 raise WebError(404, 'RUN_NOT_FOUND')
             job = self.jobs[run_id]
             data = copy.deepcopy({key: value for key, value in job.items()
-                                  if key not in {'cancel', 'started', 'control', 'approvals', 'thread'}})
+                                  if key not in {'cancel', 'started', 'control', 'approvals', 'thread', 'assembly'}})
             approvals = job['approvals']
         pending = approvals.snapshot()
         data['pending_approval'] = pending if data['result'] is None else None
@@ -309,16 +422,16 @@ class WebRuns:
         return self.snapshot(run_id)
 
     # Durable session API.
-    def list_sessions(self, *, archived=False, cursor=None):
+    def list_sessions(self, *, archived=False, cursor=None, agent_id=None):
         try:
             if self.selected_session_id is not None:
                 record = self._require_session(self.selected_session_id)
                 status = 'archived' if archived else 'active'
-                items = [record] if record.status == status else []
+                items = [record] if record.status == status and (agent_id is None or record.agent_id == agent_id) else []
                 return {"sessions": [self._session_data(item) for item in items],
                         "next_cursor": None}
             page = self.service.list_bound(str(self.workspace), *self.workspace_identity,
-                                           archived=archived, cursor=cursor)
+                                           archived=archived, cursor=cursor, agent_id=agent_id)
             return {"sessions": [self._session_data(item) for item in page.items],
                     "next_cursor": page.next_cursor}
         except (SessionError, StoreError) as error:
@@ -336,14 +449,20 @@ class WebRuns:
         raise WebError(400, 'INVALID_REQUEST')
 
     def create_session(self, data):
-        if not isinstance(data, dict) or set(data) != {'title', 'scope'}:
+        if not isinstance(data, dict) or not {'title', 'scope'} <= set(data) <= {'title', 'scope', 'agent_id'}:
             raise WebError(400, 'INVALID_REQUEST')
         if self.selected_session_id is not None:
             raise WebError(409, 'SESSION_SELECTION_FIXED')
         if not self._workspace_available():
             raise WebError(409, 'WORKSPACE_UNAVAILABLE')
         try:
-            record = self.service.create(self.workspace, data['title'], self._scope_from_web(data['scope']))
+            agent = self.agent_catalog.get(data['agent_id']) if data.get('agent_id') else None
+            if agent and not self.agent_catalog.is_enabled(agent.id):
+                raise WebError(409, 'AGENT_DISABLED')
+            record = self.service.create(self.workspace, data['title'], self._scope_from_web(data['scope']),
+                                         agent_snapshot=agent.to_dict() if agent else None)
+        except AgentError as error:
+            raise WebError(400, error.code) from None
         except (SessionError, StoreError) as error:
             raise _session_web_error(error) from None
         return {"session": self._session_data(record)}
@@ -381,7 +500,7 @@ class WebRuns:
     def _validate_session_run(data):
         required = {'client_request_id', 'task_type', 'question'}
         if (not isinstance(data, dict)
-                or not required <= set(data) <= required | {'output_file'}):
+                or not required <= set(data) <= required | {'output_file', 'skill_id', 'mcp_prompt'}):
             raise WebError(400, 'INVALID_REQUEST')
         request_id, question, task_type = data['client_request_id'], data['question'], data['task_type']
         if (not isinstance(request_id, str) or not 1 <= len(request_id) <= 128
@@ -408,8 +527,8 @@ class WebRuns:
             view['run']['idempotent_replay'] = True
             return view, False
         try:
-            provider = self.provider_factory()
-        except ProviderError as error:
+            provider = self._agent_provider(session)
+        except (ProviderError, AgentError) as error:
             result = {'run_id': prepared.run_id, 'state': 'failed',
                       'stop_reason': error.code, 'model_calls': 0, 'answer': None,
                       'provider': None, 'trace_path': ''}
@@ -449,7 +568,8 @@ class WebRuns:
     def start_session_run(self, session_id, data):
         session = self._require_session(session_id)
         request_id, task_type, question, output = self._validate_session_run(data)
-        submission = RunSubmission(request_id, question, task_type, session.scope, output, None, {})
+        submission = RunSubmission(request_id, question, task_type, session.scope, output, None, {},
+                                   skill_id=data.get('skill_id'), mcp_prompt=data.get('mcp_prompt'))
         with self.lock:
             self._check_start()
             try:

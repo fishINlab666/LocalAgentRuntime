@@ -15,7 +15,8 @@ from typing import Iterator
 import uuid
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
+SUMMARY_MAX_BYTES = 6 * 1024
 
 _V1_SCHEMA = """
 CREATE TABLE sessions (
@@ -777,14 +778,18 @@ class SessionStore:
                 version = self._read_existing_version()
             if version > _SCHEMA_VERSION:
                 raise StoreError("STATE_VERSION_UNSUPPORTED")
-            if version == 0:
+            if version < _SCHEMA_VERSION:
                 connection = None
                 try:
                     connection = self._new_connection()
                     if existed:
                         self._backup_before_migration(connection, version)
-                    self._migrate_v1(connection)
+                    if version == 0:
+                        self._migrate_v1(connection)
+                    self._migrate_v2(connection)
                 except Exception as error:
+                    if connection is not None and connection.in_transaction:
+                        connection.rollback()
                     raise StoreError("STATE_MIGRATION_FAILED") from error
                 finally:
                     if connection is not None:
@@ -810,7 +815,55 @@ class SessionStore:
     @staticmethod
     def _migrate_v1(connection: sqlite3.Connection) -> None:
         try:
-            connection.executescript("BEGIN IMMEDIATE;\n" + _V1_SCHEMA + "\nCOMMIT;")
+            connection.executescript("BEGIN IMMEDIATE;\n" + _V1_SCHEMA)
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+
+    @staticmethod
+    def _migrate_v2(connection: sqlite3.Connection) -> None:
+        try:
+            if not connection.in_transaction:
+                connection.execute("BEGIN IMMEDIATE")
+            for table in ("sessions", "runs"):
+                connection.execute(
+                    f"ALTER TABLE {table} ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'legacy'"
+                )
+                connection.execute(
+                    f"ALTER TABLE {table} ADD COLUMN agent_revision TEXT NOT NULL DEFAULT 'legacy'"
+                )
+                connection.execute(
+                    f"ALTER TABLE {table} ADD COLUMN agent_snapshot_json TEXT NOT NULL "
+                    "DEFAULT '{\"legacy\":true,\"configuration\":\"unknown\"}'"
+                )
+            rows = connection.execute("SELECT id, scope_json FROM sessions").fetchall()
+            if rows:
+                from .agents import builtin_agent
+
+                for session_id, scope_json in rows:
+                    scope = json.loads(scope_json)
+                    if not isinstance(scope, dict) or scope.get("mode") not in {"file", "directory"}:
+                        raise ValueError("invalid legacy session scope")
+                    snapshot = builtin_agent(scope["mode"]).to_dict()
+                    payload = _json_text(snapshot)
+                    revision = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+                    connection.execute(
+                        """UPDATE sessions SET agent_id=?, agent_revision=?,
+                           agent_snapshot_json=? WHERE id=?""",
+                        (snapshot["id"], revision, payload, session_id),
+                    )
+                    legacy = _json_text({
+                        "id": snapshot["id"], "legacy": True,
+                        "configuration": "unknown", "capabilities": "unknown",
+                    })
+                    connection.execute(
+                        """UPDATE runs SET agent_id=?, agent_revision='legacy',
+                           agent_snapshot_json=? WHERE session_id=?""",
+                        (snapshot["id"], legacy, session_id),
+                    )
+            connection.execute("PRAGMA user_version=2")
+            connection.commit()
         except Exception:
             if connection.in_transaction:
                 connection.rollback()
@@ -1034,7 +1087,7 @@ class SessionStore:
         try:
             payload = _json_object(payload)
             model = _json_object(model)
-            if len(_json_text(payload).encode("utf-8")) > 6144:
+            if len(_json_text(payload).encode("utf-8")) > SUMMARY_MAX_BYTES:
                 raise StoreError("SUMMARY_INVALID")
             now = self._clock()
             summary_id = uuid.uuid4().hex

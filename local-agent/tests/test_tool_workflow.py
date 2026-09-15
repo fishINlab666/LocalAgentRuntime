@@ -178,10 +178,35 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(result['state'], 'unable')
         self.assertEqual(result['stop_reason'], 'USER_REJECTED')
         self.assertEqual(self.writer.commits, [])
-        returned = provider.requests[-1][-2:]
+        returned = [message for message in provider.requests[-1]
+                    if message.get('role') == 'tool'][-2:]
         self.assertEqual([m['tool_call_id'] for m in returned], ['write', 'after-deny'])
         self.assertEqual([json.loads(m['content'])['error']['code'] for m in returned],
                          ['USER_REJECTED', 'TOOL_SKIPPED'])
+
+    def test_deny_finalization_explicitly_requires_unable_without_facts(self):
+        result, provider = self.run_script(
+            [call_message(), write_request(), final_message('unable')], decision='deny'
+        )
+
+        self.assertEqual(result['stop_reason'], 'USER_REJECTED')
+        instruction = provider.requests[-1][-1]
+        self.assertEqual(instruction['role'], 'user')
+        self.assertIn('USER_REJECTED', instruction['content'])
+        self.assertIn('status 必须是 unable', instruction['content'])
+        self.assertIn('citations 必须是空数组', instruction['content'])
+        self.assertIn('不要复述资料事实', instruction['content'])
+
+    def test_invalid_answer_after_deny_cannot_replace_the_rejection_reason(self):
+        result, provider = self.run_script(
+            [call_message(), write_request(), final_message()], decision='deny'
+        )
+
+        self.assertEqual(result['state'], 'unable')
+        self.assertEqual(result['stop_reason'], 'USER_REJECTED')
+        self.assertIsNone(result['answer'])
+        self.assertEqual(len(provider.requests), 3)
+        self.assertEqual(self.writer.commits, [])
 
     def test_deny_cannot_start_another_tool_or_model_loop(self):
         result, provider = self.run_script([call_message(), write_request(), write_request('retry')],

@@ -98,13 +98,14 @@ class WebApprovalTests(unittest.TestCase):
         self.tools, self.providers, self.outputs = [], [], []
         self.ready, self.finished = threading.Event(), threading.Event()
 
-        def adapt(reader, output_path=None):
+        def assemble_preview(agent, workspace, target, output_path, library, **kwargs):
+            from local_agent.agent_runtime import Assembly
             tool = PreviewTool()
             self.tools.append(tool)
             self.outputs.append(output_path)
-            return ToolRuntime(ToolRegistry([tool]), PreviewPolicy())
+            return Assembly(ToolRuntime(ToolRegistry([tool]), PreviewPolicy()))
 
-        adapter = patch('local_agent.web_runs.adapt_tools', side_effect=adapt, create=True)
+        adapter = patch('local_agent.web_runs.assemble', side_effect=assemble_preview)
         adapter.start()
         self.addCleanup(adapter.stop)
 

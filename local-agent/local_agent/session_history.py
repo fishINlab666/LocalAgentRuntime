@@ -41,7 +41,11 @@ class SessionHistoryTool:
         ).digest()
         self.spec = ToolSpec(
             name="session_history",
-            description="Search or read earlier records from this session only.",
+            description=(
+                "Search or read earlier records from this session only. "
+                "Search accepts one contiguous literal phrase; spaces are matched literally. "
+                "搜索只接受单个连续字面短语，空格也按原样匹配。"
+            ),
             input_schema={
                 "type": "object",
                 "properties": {

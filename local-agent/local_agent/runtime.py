@@ -28,6 +28,11 @@ IDENTIFIER_REPAIR = '''上一条回答中的标识连接符与本次已读原文
 立即重新输出一个严格 JSON 对象；不要调用工具，不添加解释或代码围栏，不通过删掉所问事实来回避核对。保留有证据支持的事实、适用的状态和合法引用。'''
 
 
+USER_REJECTION_FINAL = '''本轮操作已经被用户拒绝（USER_REJECTED），现在只能做一次最终收尾。
+不要再调用任何工具。只输出策略要求的严格 JSON；status 必须是 unable，citations 必须是空数组。
+answer 只说明用户拒绝了操作、请求的输出没有创建；不要复述资料事实，也不要建议改名或改路径重试。'''
+
+
 @dataclass(frozen=True)
 class RunConfig:
     max_steps: int = 6
@@ -134,7 +139,8 @@ class Runtime:
     def __init__(self, provider: Provider, tool, trace: Trace, config: RunConfig | None = None,
                  *, approvals=None, control=None, journal=None, request_builder=None):
         self.provider, self.tool, self.trace = provider, tool, trace
-        self.config = config or RunConfig()
+        self.agent = getattr(getattr(tool, 'policy', None), 'agent', None)
+        self.config = config or (self.agent.run_config() if self.agent else RunConfig())
         self.approvals, self.control = approvals, control
         self.journal = journal if journal is not None else NullRunJournal()
         self.request_builder = request_builder
@@ -204,6 +210,8 @@ class Runtime:
                       'model_calls': calls, 'answer': answer,
                       'elapsed_seconds': round(time.monotonic() - started, 4),
                       'provider': self.provider.metadata, 'trace_path': str(self.trace.path)}
+            if self.agent is not None:
+                result['agent'] = {'id': self.agent.id, 'revision': self.agent.revision}
             with control.lock:
                 result.update(engine.policy.result_fields())
             if unpersisted_artifacts:
@@ -324,6 +332,8 @@ class Runtime:
                                      'answer_invalid:' + error.code)
                         emit('model.completed', {'step': calls, 'message': message,
                             'usage': reply.usage, 'elapsed_seconds': time.monotonic() - model_start})
+                        if finalize_only:
+                            return finish('unable', final_reason or 'USER_REJECTED')
                         if not finalize_only and error.repairable and answer_repairs == 0 and calls < self.config.max_steps:
                             answer_repairs += 1
                             emit('answer.rejected', {
@@ -386,6 +396,7 @@ class Runtime:
                     return finish(state, stop_code)
                 if decision == 'finalize_only':
                     finalize_only, final_reason = True, stop_code
+                    messages.append({'role': 'user', 'content': USER_REJECTION_FINAL})
             if finalize_only:
                 return finish('unable', final_reason)
             return finish('max_steps', 'MAX_STEPS')

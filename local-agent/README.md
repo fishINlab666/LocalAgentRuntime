@@ -1,14 +1,37 @@
-# Local Agent：资料问答与确认后新建报告
+# Local Agent：可配置助手、资料问答与能力扩展
 
 输入问题并选择单文件或目录模式。模型自主发起 `read_file`，或先 `list_files` 发现路径再选文件读取；程序把带原调用编号的工具结果交回下一轮模型请求，再校验回答与本次原文引用。填写输出路径后，还可由模型提出完整报告，经用户确认后新建文件，并将实际写入回执交回模型。浏览器页面与命令行共用同一 Runtime。
 
 ## 当前状态
 
+**多助手配置、Skills、MCP 已接入同一 Runtime，固定真实模型联合验收及 AI 语义复核均已通过。** 页面和 CLI 可以创建/选择助手、安装和绑定能力；会话保存固定配置版本，旧会话继续原配置。MCP 首批只接本地 stdio 的明确白名单能力；Skill 读取方法和引用，不执行脚本。当前状态和验证边界以[扩展实施计划](../docs/superpowers/plans/2026-09-14-agent-extensions.md)为准。这里的多助手指可切换的配置化助手，仍只有一个活跃 Run，不包含自动派发子 Agent。
+
+本机已准备扩展环境。启用扩展时使用 `.venv/bin/python`，首次在其他环境安装：
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-extensions.txt
+.venv/bin/python -m local_agent serve --workspace examples/workspace --open
+```
+
+页面的“助手与能力”区域可以安装、绑定 Skill/MCP 并创建新会话；详细字段、合成 MCP 示例和操作顺序见[助手与能力说明](examples/agents/README.md)。旧会话不会自动取得后来新增的能力。停用助手或能力会阻止新调用并取消受影响的运行。密钥仍只从环境变量读取。
+
+无模型的管理命令：
+
+```sh
+.venv/bin/python -m local_agent agents list
+.venv/bin/python -m local_agent capabilities install-skill examples/skills/project-brief
+```
+
+固定联合验收入口是 `scripts/evaluate_extensions.py`；默认只运行一例明确标记的离线演练，`--real` 才发起最多 6 个 Run、60 次模型请求（包括摘要和修复）。可直接运行 `bash trial/verify-extensions.command`，脚本在缺密钥时隐藏输入，然后开始固定真实组。脚本只使用新建的合成材料，并单独标记合成审批、机器检查和待内容复核；不能将离线演练当成真实模型或用户验收。
+
+以下保留已交付的文件/工具/会话基线及其历史证据。
+
 **会话管理 Task 1–12 已实现，当前离线 Gate 通过。** Runtime、CLI 和页面共用持久 Session：同一会话可跨重启继续，历史搜索可安全续页，长正文按最终 12 KiB 结果信封分页，超过 128 KiB 的固定历史在压缩后仍保留新旧约定、未完事项和原文回查能力。完整 Python 387 项通过；三组既有浏览器回归继续有效。此前受限 DeepSeek 的 6 次提交为五个目标场景留下成功证据；更正回答因引用范围错误失败，修复后只有离线证据，尚未真实复跑，不能称为真实全量验收通过。证据见[会话验收记录](trial/session-live-check.md)，目标与实施见[会话模块设计](../docs/superpowers/specs/2026-09-10-session-management-design.md)和[实施计划](../docs/superpowers/plans/2026-09-10-session-management.md)。
 
 **工具层及结果契约复核已通过，本批收口。** 默认仍是只读问答；填写输出路径才启用逐次确认的新建文件能力。Loop 会校验冻结参数、用户所见预览、工具错误及本次真实执行证明，写入成功还必须经过一次性发布并取得与批准内容一致的回执；结果始终按原调用 ID 进入下一轮。此前真实单文件、拒绝报告、确认报告三个 run 共使用 10 次 DeepSeek 请求，确认后实际创建的 957 字节报告与预览一致；本次加固没有新增真实 API 调用。证据见[真实验证记录](trial/tool-layer-live-check.md)，当前状态见[阶段验收记录](trial/directory-check.md)，具体实施见[工具层方案](../docs/superpowers/plans/2026-09-10-tool-runtime.md)。后续开发遵循根目录[项目规则](../AGENTS.md)。
-- 运行环境：macOS、Python 3.14.6；代码使用 Python 3.11+ 标准库，不需要安装依赖。Python 3.11 / Linux 尚未实测，Windows 不支持本版文件打开方式。
-- 范围：一个 DeepSeek Provider、`list_files`、`read_file` 及按任务注册的 `write_file`、一次任务的完整消息链、状态、取消/超时和本地日志。
+- 运行环境：macOS、Python 3.14.6；内置文件能力使用 Python 3.11+ 标准库，扩展依赖见 `requirements-extensions.txt`。Python 3.11 / Linux 尚未实测，Windows 不支持本版文件打开方式。
+- 原内置范围：一个 DeepSeek Provider、`list_files`、`read_file` 及按任务注册的 `write_file`、一次任务的完整消息链、状态、取消/超时和本地日志；本阶段在相同链路增加 Skill/MCP 适配。
 - 单文件模式只读用户指定的一份 UTF-8 `.md` / `.txt`；目录模式允许模型发现和选择最多 4 份文件，每份上限仍为 32 KiB。写工具只允许新建用户指定的一个 `.md` / `.txt`，最多 32 KiB，不覆盖、不自动更名或创建父目录；没有 Shell。
 - 两份会议与产品设计稿用于确定需求；会议 02 的小节选已用于真实模型验证。原始会议 01 超过大小上限，三份长文的综合试用在后续阶段。
 
@@ -212,4 +235,4 @@ PYTHONPATH=local-agent python3 -m unittest discover -s local-agent/tests -v
 | `local_agent/demo.py`、`__main__.py` | 模拟替身与运行入口 |
 | `tests/` | 文件、引用、协议、Runtime、入口与验收规则测试 |
 
-已实现的单文件、页面及目录能力见 [目录发现计划](../docs/superpowers/plans/2026-09-08-local-agent-directory-discovery.md)，当前阶段结论统一见 [阶段验收记录](trial/directory-check.md)。持久会话已接入 Runtime、CLI 和页面；流式输出、长会议分段、MCP、Skill、Cron、Memory 均未作为当前任务启动。
+已实现的单文件、页面及目录能力见 [目录发现计划](../docs/superpowers/plans/2026-09-08-local-agent-directory-discovery.md)，当前阶段结论统一见 [阶段验收记录](trial/directory-check.md)。持久会话、配置化助手、Skill 与本地 stdio MCP 已接入 Runtime、CLI 和页面；流式输出、长会议分段、Cron、Memory、自动子 Agent、远程 MCP/OAuth 和多 Provider 仍在本批范围外。

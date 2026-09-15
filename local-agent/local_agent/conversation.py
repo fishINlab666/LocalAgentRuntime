@@ -70,8 +70,14 @@ class ConversationPolicy:
         if not isinstance(question, str) or not question.strip() or target is not None:
             raise ValueError("INVALID_TASK")
         message_id = self._current_user_message(question)
+        agent = getattr(self, 'agent', None)
+        system = CONVERSATION_SYSTEM
+        if agent is not None:
+            system += '\n助手补充方法（不改变程序权限）：\n' + agent.to_dict()['instructions']
+            if 'session_history' not in agent.tools:
+                system += '\n当前助手未授权历史工具，只能根据本次可见历史回答。'
         return [
-            {"role": "system", "content": CONVERSATION_SYSTEM},
+            {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(
                 {"question": question, "message_id": message_id}, ensure_ascii=False)},
         ]

@@ -30,7 +30,7 @@ def _error(code: str) -> dict:
 
 
 class DirectoryTools:
-    def __init__(self, workspace: Path, max_files: int = 4):
+    def __init__(self, workspace: Path, max_files: int = 4, max_bytes: int = 32768):
         if type(max_files) is not int or max_files < 1:
             raise ValueError("max_files must be a positive integer")
         self._lister = ListFiles(workspace)
@@ -38,6 +38,9 @@ class DirectoryTools:
         self.workspace_identity = self._lister.workspace_identity
         self.schemas = [LIST_FILES_SCHEMA, READ_FILE_SCHEMA]
         self.max_files = max_files
+        if type(max_bytes) is not int or max_bytes <= 0:
+            raise ValueError("max_bytes must be a positive integer")
+        self.max_bytes = max_bytes
         self._directories = {"."}
         self._files: set[str] = set()
         self._listed: set[str] = set()
@@ -82,7 +85,7 @@ class DirectoryTools:
         if path not in self._ever_read and len(self._ever_read) >= self.max_files:
             return _error("FILE_COUNT_LIMIT")
         try:
-            reader = ReadFile(self.workspace, self._files)
+            reader = ReadFile(self.workspace, self._files, max_bytes=self.max_bytes)
         except OSError:
             return file_error("OS_PERMISSION_DENIED")
         except RuntimeError:

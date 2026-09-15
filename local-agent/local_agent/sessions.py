@@ -61,9 +61,13 @@ class RunSubmission:
     output_path: str | None
     parent_run_id: str | None
     execution_options: dict
+    skill_id: str | None = None
+    mcp_prompt: dict | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "execution_options", _freeze(self.execution_options))
+        if self.mcp_prompt is not None:
+            object.__setattr__(self, "mcp_prompt", _freeze(self.mcp_prompt))
 
     def fingerprint(self) -> str:
         canonical = _canonical_json(_submission_payload(self))
@@ -91,6 +95,12 @@ class SessionRecord:
     revision: int
     created_at: float
     updated_at: float
+    agent_id: str = "legacy"
+    agent_revision: str = "legacy"
+    agent_snapshot: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "agent_snapshot", _freeze(self.agent_snapshot))
 
 
 @dataclass(frozen=True)
@@ -104,6 +114,12 @@ class RunRecord:
     stop_reason: str | None
     started_at: float
     finished_at: float | None
+    agent_id: str = "legacy"
+    agent_revision: str = "legacy"
+    agent_snapshot: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "agent_snapshot", _freeze(self.agent_snapshot))
 
 
 @dataclass(frozen=True)
@@ -137,7 +153,7 @@ def _canonical_json(value) -> str:
 
 
 def _submission_payload(submission: RunSubmission) -> dict:
-    return {
+    payload = {
         "question": submission.question,
         "task_type": submission.task_type,
         "scope": asdict(submission.scope),
@@ -145,6 +161,12 @@ def _submission_payload(submission: RunSubmission) -> dict:
         "parent_run_id": submission.parent_run_id,
         "execution_options": submission.execution_options,
     }
+    # Keep fingerprints of pre-extension submissions stable.
+    if submission.skill_id is not None:
+        payload['skill_id'] = submission.skill_id
+    if submission.mcp_prompt is not None:
+        payload['mcp_prompt'] = submission.mcp_prompt
+    return payload
 
 
 def _scope_json(scope: SessionScope) -> str:
@@ -232,6 +254,17 @@ def _validate_submission(submission: object) -> RunSubmission:
     ):
         raise SessionError("PARENT_RUN_ID_INVALID")
     options = _json_object_copy(submission.execution_options)
+    if submission.skill_id is not None and (
+            not isinstance(submission.skill_id, str) or not submission.skill_id
+            or len(submission.skill_id) > 128):
+        raise SessionError('SUBMISSION_INVALID')
+    prompt = submission.mcp_prompt
+    if prompt is not None and (not isinstance(prompt, dict)
+            or set(prompt) != {'server_id', 'name'}
+            or any(not isinstance(v, str) or not v or len(v) > 256 for v in prompt.values())):
+        raise SessionError('SUBMISSION_INVALID')
+    if submission.task_type == 'conversation' and (submission.skill_id or prompt):
+        raise SessionError('SUBMISSION_INVALID')
     return RunSubmission(
         client_request_id=client_request_id,
         question=submission.question,
@@ -240,6 +273,8 @@ def _validate_submission(submission: object) -> RunSubmission:
         output_path=submission.output_path,
         parent_run_id=submission.parent_run_id,
         execution_options=options,
+        skill_id=submission.skill_id,
+        mcp_prompt=prompt,
     )
 
 
@@ -305,6 +340,9 @@ class SessionService:
                 revision=row[7],
                 created_at=row[8],
                 updated_at=row[9],
+                agent_id=row[10],
+                agent_revision=row[11],
+                agent_snapshot=_parse_json_object(row[12]),
             )
         except (KeyError, TypeError, ValueError, SessionError) as error:
             if isinstance(error, SessionError) and error.code == "SESSION_STORE_ERROR":
@@ -327,6 +365,8 @@ class SessionService:
                 output_path=request.get("output_path"),
                 parent_run_id=request.get("parent_run_id"),
                 execution_options=request["execution_options"],
+                skill_id=request.get('skill_id'),
+                mcp_prompt=request.get('mcp_prompt'),
             )
             submission = _validate_submission(submission)
             return RunRecord(
@@ -339,6 +379,9 @@ class SessionService:
                 stop_reason=row[6],
                 started_at=row[7],
                 finished_at=row[8],
+                agent_id=row[9] if len(row) > 9 else "legacy",
+                agent_revision=row[10] if len(row) > 9 else "legacy",
+                agent_snapshot=_parse_json_object(row[11]) if len(row) > 9 else {},
             )
         except (KeyError, TypeError, ValueError, SessionError) as error:
             if isinstance(error, SessionError) and error.code == "SESSION_STORE_ERROR":
@@ -362,10 +405,24 @@ class SessionService:
         )
 
     def create(
-        self, workspace: Path, title: str, scope: SessionScope
+        self, workspace: Path, title: str, scope: SessionScope,
+        *, agent_snapshot: dict | None = None,
     ) -> SessionRecord:
         title = _validate_title(title)
         scope = _validate_scope(scope)
+        from .agents import AgentDefinition, AgentError, builtin_agent
+
+        try:
+            agent = (builtin_agent(scope.mode) if agent_snapshot is None
+                     else AgentDefinition.from_dict(agent_snapshot))
+            snapshot = agent.to_dict()
+            expected_mode = "file" if snapshot["strategy"] == "file" else "directory"
+            if expected_mode != scope.mode:
+                raise SessionError("AGENT_CONFIG_INVALID")
+            snapshot_json = _canonical_json(snapshot)
+            agent_revision = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()
+        except (AgentError, TypeError, ValueError, KeyError, RecursionError):
+            raise SessionError("AGENT_CONFIG_INVALID") from None
         resolved, device, inode = self._workspace_identity(workspace)
         session_id = self._new_id()
         now = self._clock()
@@ -375,8 +432,9 @@ class SessionService:
                     """INSERT INTO sessions (
                            id, title, workspace_path, workspace_device,
                            workspace_inode, scope_json, status, revision,
-                           created_at, updated_at
-                       ) VALUES (?, ?, ?, ?, ?, ?, 'active', 1, ?, ?)""",
+                           created_at, updated_at, agent_id, agent_revision,
+                           agent_snapshot_json
+                       ) VALUES (?, ?, ?, ?, ?, ?, 'active', 1, ?, ?, ?, ?, ?)""",
                     (
                         session_id,
                         title,
@@ -386,24 +444,28 @@ class SessionService:
                         _scope_json(scope),
                         now,
                         now,
+                        snapshot["id"],
+                        agent_revision,
+                        snapshot_json,
                     ),
                 )
         except (sqlite3.DatabaseError, StoreError, OSError):
             raise SessionError("SESSION_STORE_ERROR") from None
         return self.load(session_id)
 
-    def load(self, session_id: str) -> SessionRecord:
+    def load(self, session_id: str, *, agent_id: str | None = None) -> SessionRecord:
         try:
             row = self.store.connection().execute(
                 """SELECT id, title, workspace_path, workspace_device,
                           workspace_inode, scope_json, status, revision,
-                          created_at, updated_at
+                          created_at, updated_at, agent_id, agent_revision,
+                          agent_snapshot_json
                    FROM sessions WHERE id=?""",
                 (session_id,),
             ).fetchone()
         except (sqlite3.DatabaseError, StoreError):
             raise SessionError("SESSION_STORE_ERROR") from None
-        if row is None:
+        if row is None or (agent_id is not None and row[10] != agent_id):
             raise SessionError("NOT_FOUND")
         return self._session_from_row(row)
 
@@ -441,10 +503,12 @@ class SessionService:
         *,
         archived: bool = False,
         cursor: str | None = None,
+        agent_id: str | None = None,
     ) -> Page:
         resolved, device, inode = self._workspace_identity(workspace)
         return self.list_bound(
-            str(resolved), device, inode, archived=archived, cursor=cursor
+            str(resolved), device, inode, archived=archived, cursor=cursor,
+            agent_id=agent_id,
         )
 
     def list_bound(
@@ -455,6 +519,7 @@ class SessionService:
         *,
         archived: bool = False,
         cursor: str | None = None,
+        agent_id: str | None = None,
     ) -> Page:
         """List sessions already bound to a startup identity without re-opening it."""
         if (
@@ -469,6 +534,9 @@ class SessionService:
         where = "workspace_path=? AND workspace_device=? AND workspace_inode=?"
         where += " AND status=?"
         parameters.append(status)
+        if agent_id is not None:
+            where += " AND agent_id=?"
+            parameters.append(agent_id)
         if cursor is not None:
             updated_at, session_id = self._decode_cursor(cursor)
             where += " AND (updated_at < ? OR (updated_at = ? AND id < ?))"
@@ -478,7 +546,8 @@ class SessionService:
             rows = self.store.connection().execute(
                 f"""SELECT id, title, workspace_path, workspace_device,
                            workspace_inode, scope_json, status, revision,
-                           created_at, updated_at
+                           created_at, updated_at, agent_id, agent_revision,
+                           agent_snapshot_json
                     FROM sessions WHERE {where}
                     ORDER BY updated_at DESC, id DESC LIMIT ?""",
                 parameters,
@@ -532,7 +601,8 @@ class SessionService:
         try:
             row = self.store.connection().execute(
                 """SELECT id, session_id, client_request_id, request_json,
-                          state, phase, stop_reason, started_at, finished_at
+                          state, phase, stop_reason, started_at, finished_at,
+                          agent_id, agent_revision, agent_snapshot_json
                    FROM runs WHERE session_id=? AND id=?""",
                 (session_id, run_id),
             ).fetchone()
@@ -581,7 +651,8 @@ class SessionService:
         try:
             rows = self.store.connection().execute(
                 f"""SELECT id, session_id, client_request_id, request_json,
-                           state, phase, stop_reason, started_at, finished_at
+                           state, phase, stop_reason, started_at, finished_at,
+                           agent_id, agent_revision, agent_snapshot_json
                     FROM runs WHERE {where}
                     ORDER BY started_at DESC, id DESC LIMIT ?""",
                 parameters,
@@ -652,6 +723,9 @@ class SessionService:
         return {
             "id": run.id,
             "session_id": run.session_id,
+            "agent_id": run.agent_id,
+            "agent_revision": run.agent_revision,
+            "agent_snapshot": run.agent_snapshot,
             "client_request_id": run.client_request_id,
             "task_type": run.submission.task_type,
             "question": run.submission.question,
@@ -730,7 +804,7 @@ class SessionService:
     def _session_for_submit(self, connection, session_id: str):
         row = connection.execute(
             """SELECT status, scope_json, workspace_path, workspace_device,
-                      workspace_inode
+                      workspace_inode, agent_id, agent_revision, agent_snapshot_json
                FROM sessions WHERE id=?""",
             (session_id,),
         ).fetchone()
@@ -745,7 +819,7 @@ class SessionService:
             )
         except (KeyError, SessionError) as error:
             raise SessionError("SESSION_STORE_ERROR") from error
-        return scope, row[2], row[3], row[4]
+        return scope, row[2], row[3], row[4], row[5], row[6], row[7]
 
     @staticmethod
     def _check_workspace_identity(
@@ -767,14 +841,15 @@ class SessionService:
     def _submit_in_transaction(
         self, connection, session_id: str, submission: RunSubmission
     ) -> PreparedRun:
-        session_scope, workspace_path, workspace_device, workspace_inode = (
+        (session_scope, workspace_path, workspace_device, workspace_inode,
+         agent_id, agent_revision, agent_snapshot_json) = (
             self._session_for_submit(connection, session_id)
         )
         fingerprint = submission.fingerprint()
         existing = connection.execute(
             """SELECT id, request_fingerprint, request_json, state, phase,
                       stop_reason, started_at, finished_at, client_request_id,
-                      session_id
+                      session_id, agent_id, agent_revision, agent_snapshot_json
                FROM runs WHERE session_id=? AND client_request_id=?""",
             (session_id, submission.client_request_id),
         ).fetchone()
@@ -791,6 +866,9 @@ class SessionService:
                 existing[5],
                 existing[6],
                 existing[7],
+                existing[10],
+                existing[11],
+                existing[12],
             )
             stored = self._run_from_row(run_row)
             return PreparedRun(
@@ -830,9 +908,10 @@ class SessionService:
                    id, session_id, client_request_id, request_json,
                    request_fingerprint, task_type, question, scope_json,
                    output_path, parent_run_id, state, phase, config_json,
-                   system_version, tool_version, protocol_version, started_at
+                   system_version, tool_version, protocol_version, started_at,
+                   agent_id, agent_revision, agent_snapshot_json
                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 'submitted',
-                         ?, 'system-v1', 'tool-v1', 'protocol-v1', ?)""",
+                         ?, 'system-v1', 'tool-v1', 'protocol-v1', ?, ?, ?, ?)""",
             (
                 run_id,
                 session_id,
@@ -846,6 +925,9 @@ class SessionService:
                 submission.parent_run_id,
                 options_json,
                 now,
+                agent_id,
+                agent_revision,
+                agent_snapshot_json,
             ),
         )
         session_seq = connection.execute(
@@ -905,7 +987,8 @@ class SessionService:
             with self.store.transaction() as connection:
                 row = connection.execute(
                     """SELECT id, session_id, client_request_id, request_json,
-                              state, phase, stop_reason, started_at, finished_at
+                              state, phase, stop_reason, started_at, finished_at,
+                              agent_id, agent_revision, agent_snapshot_json
                        FROM runs WHERE session_id=? AND id=?""",
                     (session_id, run_id),
                 ).fetchone()
@@ -923,6 +1006,8 @@ class SessionService:
                         output_path=None,
                         parent_run_id=parent.id,
                         execution_options={},
+                        skill_id=parent.submission.skill_id,
+                        mcp_prompt=parent.submission.mcp_prompt,
                     )
                 )
                 return self._submit_in_transaction(connection, session_id, submission)
@@ -977,6 +1062,10 @@ class SessionService:
         if not prepared.created:
             return self._stored_result(prepared)
 
+        from .agents import AgentCatalog, AgentDefinition, AgentError
+        from .agent_runtime import AuthorityPolicy, CapabilityStore, ExtensionPolicy, assemble
+        from .approvals import RunControl
+        import threading
         from .context import ContextBuilder
         from .conversation import ConversationPolicy, SessionTaskPolicy
         from .discovery import DirectoryTools
@@ -989,8 +1078,14 @@ class SessionService:
         session = self.load(prepared.session_id)
         before_seq = self._current_user_seq(prepared.session_id, prepared.run_id)
         target = None
+        agent = AgentDefinition.from_dict(dict(session.agent_snapshot))
+        catalog = AgentCatalog(self.store.state_dir / 'agents')
+        control = control or RunControl(threading.Event())
+        assembly = None
 
         def fail_before_provider(code):
+            if assembly is not None:
+                assembly.close()
             result = {
                 "run_id": prepared.run_id,
                 "state": "failed",
@@ -1007,6 +1102,20 @@ class SessionService:
             return result
 
         try:
+            limits = {key: value for key, value in agent.to_dict()['budgets'].items()
+                      if key not in {'max_files', 'max_file_bytes'}}
+            if config is None:
+                effective = {**limits, **dict(prepared.submission.execution_options)}
+                config = RunConfig(**effective)
+            if any(value > limits[key] for key, value in asdict(config).items()):
+                raise ValueError('Budget may only be narrowed')
+            control.run_timeout = min(control.run_timeout, config.run_timeout)
+        except (TypeError, ValueError, KeyError):
+            return fail_before_provider('INVALID_CONFIG')
+
+        try:
+            if not catalog.is_enabled(agent.id):
+                return fail_before_provider('AGENT_DISABLED')
             if prepared.submission.task_type == "files":
                 self._check_workspace_identity(
                     session.workspace_path,
@@ -1014,48 +1123,57 @@ class SessionService:
                     session.workspace_inode,
                 )
                 workspace = Path(session.workspace_path)
-                if session.scope.mode == "file":
-                    target = session.scope.target_path
-                    engine = adapt_tools(
-                        ReadFile(workspace, {target}), prepared.submission.output_path
-                    )
-                else:
-                    engine = adapt_tools(
-                        DirectoryTools(workspace), prepared.submission.output_path
-                    )
+                target = session.scope.target_path
+                assembly = assemble(agent, workspace, target, prepared.submission.output_path,
+                    CapabilityStore(self.store.state_dir), run_id=prepared.run_id, control=control,
+                    agent_catalog=catalog, selected_skill=prepared.submission.skill_id,
+                    selected_prompt=prepared.submission.mcp_prompt)
+                engine = assembly.engine
                 if (prepared.submission.output_path is not None
                         and self.store.inspect_unknown_publication(
                             prepared.session_id, prepared.submission.output_path
                         ) is not None):
                     return fail_before_provider("WRITE_OUTCOME_UNKNOWN")
-                engine.policy = SessionTaskPolicy(engine.policy)
+                if isinstance(engine.policy, ExtensionPolicy):
+                    engine.policy.base = SessionTaskPolicy(engine.policy.base)
+                else:
+                    engine.policy = SessionTaskPolicy(engine.policy)
                 policy = engine.policy
-                history = SessionHistoryTool(
-                    self.store, prepared.session_id, before_seq=before_seq,
-                    result_fields=policy.result_fields,
-                )
-                engine.registry.register(history)
+                if 'session_history' in agent.tools:
+                    history = SessionHistoryTool(
+                        self.store, prepared.session_id, before_seq=before_seq,
+                        result_fields=policy.result_fields,
+                    )
+                    engine.registry.register(history)
             else:
                 policy = ConversationPolicy(
                     self.store, prepared.session_id, before_seq=before_seq
                 )
-                history = SessionHistoryTool(
-                    self.store, prepared.session_id, before_seq=before_seq,
-                    result_fields=policy.result_fields,
-                )
-                engine = ToolRuntime(ToolRegistry([history]), policy)
+                policy.agent = agent
+                tools = []
+                if 'session_history' in agent.tools:
+                    tools.append(SessionHistoryTool(
+                        self.store, prepared.session_id, before_seq=before_seq,
+                        result_fields=policy.result_fields))
+                policy = AuthorityPolicy(policy, agent, catalog)
+                engine = ToolRuntime(ToolRegistry(tools), policy)
+        except AgentError as error:
+            return fail_before_provider(error.code)
         except SessionError as error:
             if error.code in {"WORKSPACE_CHANGED", "WORKSPACE_NOT_FOUND"}:
                 return fail_before_provider("WORKSPACE_UNAVAILABLE")
             raise
-        except Exception:
-            return fail_before_provider("WORKSPACE_UNAVAILABLE")
+        except Exception as error:
+            return fail_before_provider(getattr(error, 'code', 'WORKSPACE_UNAVAILABLE'))
 
         context = ContextBuilder(self.store, prepared.session_id, prepared.run_id)
 
         class RequestBuilder:
             def build(inner_self, request, limit, *, summarize=None):
                 built = context.build(request, limit, summarize=summarize)
+                built.manifest['agent'] = {'id': agent.id, 'revision': agent.revision}
+                if assembly is not None:
+                    built.manifest['capabilities'] = assembly.manifest
                 setter = getattr(policy, "set_visible_messages", None)
                 if callable(setter):
                     setter(built.manifest["selected_message_ids"])
@@ -1067,31 +1185,14 @@ class SessionService:
             if getattr(approvals, "journal", None) is None:
                 approvals.journal = prepared.journal
 
-        if config is None:
-            try:
-                config = RunConfig(**dict(prepared.submission.execution_options))
-            except (TypeError, ValueError):
-                result = {
-                    "run_id": prepared.run_id,
-                    "state": "failed",
-                    "stop_reason": "INVALID_CONFIG",
-                    "model_calls": 0,
-                    "answer": None,
-                    "provider": getattr(provider, "metadata", {}),
-                    "trace_path": str(getattr(trace, "path", "")),
-                }
-                prepared.journal.finish_run(result)
-                return result
-        return Runtime(
-            provider,
-            engine,
-            trace,
-            config,
-            approvals=approvals,
-            control=control,
-            journal=prepared.journal,
-            request_builder=RequestBuilder(),
-        ).run(prepared.submission.question, target)
+        try:
+            return Runtime(
+                provider, engine, trace, config, approvals=approvals, control=control,
+                journal=prepared.journal, request_builder=RequestBuilder(),
+            ).run(prepared.submission.question, target)
+        finally:
+            if assembly is not None:
+                assembly.close()
 
     def backup(self, destination: Path) -> dict:
         try:

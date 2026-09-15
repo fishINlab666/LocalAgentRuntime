@@ -128,24 +128,30 @@ class ConsoleCliTests(unittest.TestCase):
             workspace = Path(tmp) / 'workspace'
             workspace.mkdir()
             argv = ['local_agent', 'run', '--workspace', str(workspace), '--file', 'note.md',
-                    '--question', '生成报告', '--output-file', 'report.md', '--log-dir', str(Path(tmp) / 'logs')]
+                    '--question', '生成报告', '--output-file', 'report.md', '--log-dir', str(Path(tmp) / 'logs'),
+                    '--state-dir', str(Path(tmp) / 'state')]
             stdout = io.StringIO()
             with patch('sys.argv', argv), contextlib.redirect_stdout(stdout), \
-                    patch.object(cli.DeepSeekProvider, 'from_env'), \
-                    patch.object(cli, 'adapt_tools') as adapt, \
+                    patch.object(cli.AgentDefinition, 'provider'), \
+                    patch('local_agent.agent_runtime.assemble') as assemble, \
                     patch.object(cli, 'ConsoleApprovalBroker') as broker, \
                     patch.object(cli, 'Runtime') as runtime, \
                     patch.object(cli.signal, 'signal') as signal_handler:
+                assemble.return_value.manifest = {}
                 runtime.return_value.run.return_value = {'state': 'completed'}
                 self.assertEqual(cli.main(), 0)
                 self.assertEqual(json.loads(stdout.getvalue()), {'state': 'completed'})
-                self.assertEqual(adapt.call_args.kwargs, {'output_path': 'report.md'})
+                self.assertEqual(assemble.call_args.args[1:4],
+                                 (workspace, 'note.md', 'report.md'))
+                self.assertIs(runtime.call_args.args[1], assemble.return_value.engine)
                 control = runtime.call_args.kwargs['control']
                 self.assertIsInstance(control, RunControl)
+                self.assertIs(assemble.call_args.kwargs['control'], control)
                 self.assertIs(runtime.call_args.kwargs['approvals'], broker.return_value)
                 signal_handler.call_args_list[0].args[1](None, None)
                 self.assertTrue(control.cancel.is_set())
                 broker.return_value.close.assert_called_once()
+                assemble.return_value.close.assert_called_once()
 
     def test_demo_rejects_output_option(self):
         from local_agent import __main__ as cli

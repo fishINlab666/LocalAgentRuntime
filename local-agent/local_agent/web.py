@@ -79,6 +79,10 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         api = path.startswith('/api/')
         self.authorize(api)
+        parts = path.split('/')
+        agent_id = self.headers.get('X-Agent-ID') or None
+        if len(parts) >= 4 and parts[1:3] == ['api', 'sessions']:
+            self.server.runs.require_agent_session(parts[3], agent_id)
         if self.command == 'GET':
             if parsed.query and path not in {'/api/sessions'} and not (
                     path.startswith('/api/sessions/') and path.endswith('/runs')):
@@ -91,6 +95,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, content, kind)
             if path == '/api/config':
                 return self.respond(200, self.server.runs.config())
+            if path == '/api/agents':
+                return self.respond(200, self.server.runs.list_agents())
+            if path == '/api/capabilities':
+                return self.respond(200, self.server.runs.list_capabilities(agent_id))
             if path.startswith('/api/runs/'):
                 return self.respond(200, self.server.runs.snapshot(path.removeprefix('/api/runs/')))
             query = parse_qs(parsed.query, keep_blank_values=True)
@@ -102,7 +110,7 @@ class Handler(BaseHTTPRequestHandler):
                 if archived_value not in {'0', '1'}:
                     raise WebError(400, 'INVALID_REQUEST')
                 return self.respond(200, self.server.runs.list_sessions(
-                    archived=archived_value == '1', cursor=query.get('cursor', [None])[0]))
+                    archived=archived_value == '1', cursor=query.get('cursor', [None])[0], agent_id=agent_id))
             if len(parts) == 4 and parts[1:3] == ['api', 'sessions']:
                 return self.respond(200, self.server.runs.session_view(parts[3]))
             if len(parts) == 5 and parts[1:3] == ['api', 'sessions'] and parts[4] == 'runs':
@@ -128,6 +136,17 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(length))
         except (ValueError, UnicodeError, RecursionError):
             raise WebError(400, 'INVALID_REQUEST') from None
+        if path == '/api/agents':
+            return self.respond(200, self.server.runs.save_agent(data))
+        if len(parts) == 5 and parts[1:3] == ['api', 'agents']:
+            if parts[4] == 'bind':
+                return self.respond(200, self.server.runs.bind_capability(parts[3], data))
+            if parts[4] == 'enabled' and isinstance(data, dict) and set(data) == {'enabled'}:
+                return self.respond(200, self.server.runs.set_agent_enabled(parts[3], data['enabled']))
+        if len(parts) in {4, 5} and parts[1] == 'api' and parts[2] in {'skills', 'mcp'}:
+            return self.respond(200, self.server.runs.capability_action(
+                'skill' if parts[2] == 'skills' else 'mcp',
+                parts[3] if len(parts) == 5 else None, parts[-1], data))
         if path == '/api/runs':
             return self.respond(202, self.server.runs.start(data))
         if path == '/api/sessions':

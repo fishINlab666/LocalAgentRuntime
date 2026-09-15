@@ -9,6 +9,8 @@ import threading
 import uuid
 
 from .approvals import RunControl
+from .agents import AgentCatalog, AgentDefinition, AgentError, builtin_agent
+from .skills import SkillError
 from .console_approval import ConsoleApprovalBroker
 from .demo import DemoProvider
 from .directory_evaluation import evaluate_directory
@@ -43,6 +45,78 @@ def _open_service(state_dir):
     return store, SessionService(store)
 
 
+def _catalog(state_dir):
+    return AgentCatalog(Path(state_dir).expanduser() / 'agents')
+
+
+def _resolve_agent(args, mode):
+    catalog = _catalog(args.state_dir)
+    agent = catalog.get(args.agent or builtin_agent(mode).id)
+    if not catalog.is_enabled(agent.id):
+        raise AgentError('AGENT_DISABLED')
+    return agent, catalog
+
+
+def _read_config(path, code):
+    from .tool_runtime import parse_arguments
+    try:
+        if path.stat().st_size > 32768:
+            raise ValueError('configuration too large')
+        return parse_arguments(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        raise AgentError(code) from None
+
+
+def _mcp_prompt(value):
+    if value is None:
+        return None
+    server_id, separator, name = value.partition(':')
+    if (not separator or not server_id.strip() or not name.strip()
+            or server_id != server_id.strip() or name != name.strip()
+            or len(server_id) > 64 or len(name) > 128):
+        raise SessionError('SUBMISSION_INVALID')
+    return {'server_id': server_id, 'name': name}
+
+
+def _management_command(args):
+    try:
+        catalog = _catalog(args.state_dir)
+        if args.command == 'agents':
+            action = args.agents_action
+            if action == 'list':
+                return {'agents': catalog.list()}, 0
+            if action == 'import':
+                agent = catalog.save(_read_config(args.path, 'AGENT_CONFIG_INVALID'))
+            elif action in {'enable', 'disable'}:
+                agent = catalog.set_enabled(args.agent_id, action == 'enable')
+            else:
+                from .agent_runtime import CapabilityStore
+                agent = CapabilityStore(Path(args.state_dir).expanduser()).bind(
+                    catalog, args.agent_id, args.kind, args.capability_id, args.version)
+            return {'agent': {**agent.to_dict(), 'revision': agent.revision,
+                              'enabled': catalog.is_enabled(agent.id)}}, 0
+        from .agent_runtime import CapabilityStore
+        library = CapabilityStore(Path(args.state_dir).expanduser())
+        action = args.capabilities_action
+        if action == 'list':
+            return library.list(), 0
+        if action == 'install-skill':
+            return {'skill': library.skills.install(args.path)}, 0
+        if action == 'install-mcp':
+            return {'server': library.install_server(_read_config(args.path, 'MCP_CONFIG_INVALID'))}, 0
+        if action == 'probe':
+            return library.probe(args.server_id), 0
+        if args.kind == 'skill':
+            return {'skill': library.skills.set_enabled(args.capability_id, action == 'enable')}, 0
+        return {'server': library.set_server_enabled(args.capability_id, action == 'enable')}, 0
+    except (AgentError, SkillError) as error:
+        return {'error': error.code}, 2
+    except ValueError as error:
+        return {'error': getattr(error, 'code', 'LOCAL_CONFIG_ERROR')}, 2
+    except OSError:
+        return {'error': 'LOCAL_CONFIG_ERROR'}, 2
+
+
 def _sessions_command(args):
     store = None
     try:
@@ -51,14 +125,15 @@ def _sessions_command(args):
         if action == "create":
             scope = (SessionScope("directory", None) if args.discover
                      else SessionScope("file", args.file))
-            record = service.create(args.workspace, args.title, scope)
+            agent, _ = _resolve_agent(args, scope.mode)
+            record = service.create(args.workspace, args.title, scope, agent_snapshot=agent.to_dict())
             return {"session_id": record.id, "session": _session_data(record)}, 0
         if action == "list":
-            page = service.list(args.workspace, archived=args.archived, cursor=args.cursor)
+            page = service.list(args.workspace, archived=args.archived, cursor=args.cursor, agent_id=args.agent)
             return {"sessions": [_session_data(item) for item in page.items],
                     "next_cursor": page.next_cursor}, 0
         if action == "show":
-            return {"session": _session_data(service.load(args.session_id))}, 0
+            return {"session": _session_data(service.load(args.session_id, agent_id=args.agent))}, 0
         if action == "rename":
             record = service.rename(args.session_id, args.title)
             return {"session_id": record.id, "session": _session_data(record)}, 0
@@ -71,7 +146,7 @@ def _sessions_command(args):
         if action == "backup":
             return service.backup(args.destination), 0
         raise SessionError("SUBMISSION_INVALID")
-    except (SessionError, StoreError) as error:
+    except (SessionError, StoreError, AgentError, SkillError) as error:
         return {"error": error.code}, 2
     finally:
         if store is not None:
@@ -83,7 +158,10 @@ def _persistent_run(args, control):
     approvals = None
     try:
         store, service = _open_service(args.state_dir)
-        session = service.load(args.session)
+        session = service.load(args.session, agent_id=args.agent)
+        agent = AgentDefinition.from_dict(dict(session.agent_snapshot))
+        if not _catalog(args.state_dir).is_enabled(agent.id):
+            raise AgentError('AGENT_DISABLED')
         if args.continue_run is not None:
             prepared = service.continue_interrupted(
                 session.id, args.continue_run,
@@ -98,8 +176,11 @@ def _persistent_run(args, control):
                 output_path=args.output_file,
                 parent_run_id=None,
                 execution_options={},
+                skill_id=args.skill,
+                mcp_prompt=_mcp_prompt(args.mcp_prompt),
             ))
-        provider = DeepSeekProvider.from_env()
+        control.run_timeout = agent.run_config().run_timeout
+        provider = agent.provider()
         trace = Trace(args.log_dir, Path(session.workspace_path),
                       debug_content=args.debug_content, run_id=prepared.run_id)
         if prepared.submission.output_path is not None:
@@ -113,10 +194,10 @@ def _persistent_run(args, control):
     except ProviderError as error:
         return {"error": error.code,
                 "message": "请在环境变量中配置模型密钥；不要将密钥写入代码或聊天。"}, 2
-    except (SessionError, StoreError) as error:
+    except (SessionError, StoreError, AgentError, SkillError) as error:
         return {"error": error.code}, 2
-    except (OSError, ValueError):
-        return {"error": "LOCAL_CONFIG_ERROR",
+    except (OSError, ValueError) as error:
+        return {"error": getattr(error, "code", "LOCAL_CONFIG_ERROR"),
                 "message": "请检查状态目录、日志目录和会话配置。"}, 2
     finally:
         if approvals is not None:
@@ -147,6 +228,9 @@ def _build_parser():
     run.add_argument("--log-dir", type=Path, default=ROOT / "runs")
     run.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     run.add_argument("--session")
+    run.add_argument("--agent", help="使用已配置助手；会话运行时校验归属")
+    run.add_argument("--skill", help="本轮明确指定已绑定的 Skill ID")
+    run.add_argument("--mcp-prompt", help="本轮明确选择模板，格式 SERVER:NAME")
     run.add_argument("--client-request-id")
     run.add_argument("--workspace", type=Path)
     mode = run.add_mutually_exclusive_group()
@@ -170,6 +254,7 @@ def _build_parser():
     create = actions.add_parser("create")
     create.add_argument("--workspace", type=Path, required=True)
     create.add_argument("--title", required=True)
+    create.add_argument("--agent")
     create_mode = create.add_mutually_exclusive_group(required=True)
     create_mode.add_argument("--file")
     create_mode.add_argument("--discover", action="store_true")
@@ -177,8 +262,10 @@ def _build_parser():
     listing.add_argument("--workspace", type=Path, required=True)
     listing.add_argument("--archived", action="store_true")
     listing.add_argument("--cursor")
+    listing.add_argument("--agent")
     show = actions.add_parser("show")
     show.add_argument("session_id")
+    show.add_argument("--agent")
     rename = actions.add_parser("rename")
     rename.add_argument("session_id")
     rename.add_argument("--title", required=True)
@@ -193,6 +280,34 @@ def _build_parser():
     continued.add_argument("--client-request-id")
     continued.add_argument("--log-dir", type=Path, default=ROOT / "runs")
     continued.add_argument("--debug-content", action="store_true")
+    continued.add_argument("--agent")
+    agents = commands.add_parser('agents', help='管理助手配置；不调用模型')
+    agents.add_argument('--state-dir', type=Path, default=DEFAULT_STATE_DIR)
+    agent_actions = agents.add_subparsers(dest='agents_action', required=True)
+    agent_actions.add_parser('list')
+    imported = agent_actions.add_parser('import')
+    imported.add_argument('path', type=Path, help='本地助手 JSON 配置文件')
+    for name in ('enable', 'disable'):
+        action = agent_actions.add_parser(name)
+        action.add_argument('agent_id')
+    binding = agent_actions.add_parser('bind')
+    binding.add_argument('agent_id')
+    binding.add_argument('kind', choices=('skill', 'mcp'))
+    binding.add_argument('capability_id')
+    binding.add_argument('version')
+    capabilities = commands.add_parser('capabilities', help='管理本地 Skill 与已安装 MCP Server')
+    capabilities.add_argument('--state-dir', type=Path, default=DEFAULT_STATE_DIR)
+    capability_actions = capabilities.add_subparsers(dest='capabilities_action', required=True)
+    capability_actions.add_parser('list')
+    for name in ('install-skill', 'install-mcp'):
+        action = capability_actions.add_parser(name)
+        action.add_argument('path', type=Path)
+    probe = capability_actions.add_parser('probe', help='启动已配置本地 Server 并发现能力，不调用模型')
+    probe.add_argument('server_id')
+    for name in ('enable', 'disable'):
+        action = capability_actions.add_parser(name)
+        action.add_argument('kind', choices=('skill', 'mcp'))
+        action.add_argument('capability_id')
     return parser
 
 
@@ -208,6 +323,10 @@ def main() -> int:
         elif (args.workspace is None or bool(args.file) == bool(args.discover)
               or args.conversation or args.client_request_id):
             parser.error("一次性 run 需要 --workspace 以及 --file/--discover 二选一")
+    if args.command in {'agents', 'capabilities'}:
+        output, code = _management_command(args)
+        _json(output)
+        return code
     if args.command == "serve":
         if not 0 <= args.port <= 65535:
             parser.error("--port 必须在 0–65535 之间")
@@ -234,6 +353,7 @@ def main() -> int:
             args.question = ""
             args.conversation = False
             args.output_file = None
+            args.skill = args.mcp_prompt = None
             output, code = _persistent_run(args, control)
         elif args.command == "run" and args.session:
             args.continue_run = None
@@ -244,7 +364,6 @@ def main() -> int:
             code = 2 if output["gate"] == "NOT_RUN" else 1 if output["gate"] == "FAILED" else 3
         else:
             simulated = args.command == "demo"
-            provider = DemoProvider() if simulated else DeepSeekProvider.from_env()
             workspace = (ROOT / ("examples/discovery-workspace" if args.discover else "examples/workspace")
                          if simulated else args.workspace)
             target = None if args.discover else "demo-note.md" if simulated else args.file
@@ -252,16 +371,37 @@ def main() -> int:
                          if args.discover else "读取并概括演示资料，引用原文。")
                         if simulated else args.question)
             trace = Trace(args.log_dir, workspace, debug_content=simulated or args.debug_content)
-            reader = DirectoryTools(workspace) if args.discover else ReadFile(workspace, {target})
             output_path = None if simulated else args.output_file
-            tool = adapt_tools(reader, output_path=output_path)
-            approvals = ConsoleApprovalBroker(trace.run_id, publish=trace.emit) if output_path else None
+            assembly = None
+            if simulated:
+                provider = DemoProvider()
+                reader = DirectoryTools(workspace) if args.discover else ReadFile(workspace, {target})
+                tool, run_config = adapt_tools(reader, output_path=output_path), RunConfig()
+            else:
+                from .agent_runtime import CapabilityStore, assemble
+                selected_prompt = _mcp_prompt(args.mcp_prompt)
+                agent, catalog = _resolve_agent(args, 'directory' if args.discover else 'file')
+                run_config = agent.run_config()
+                control.run_timeout = run_config.run_timeout
+                assembly = assemble(agent, workspace, target, output_path,
+                    CapabilityStore(Path(args.state_dir).expanduser()), run_id=trace.run_id,
+                    control=control, agent_catalog=catalog,
+                    selected_skill=args.skill, selected_prompt=selected_prompt)
+                tool = assembly.engine
+            approvals = None
             try:
-                output = Runtime(provider, tool, trace, RunConfig(), approvals=approvals,
+                if output_path:
+                    approvals = ConsoleApprovalBroker(trace.run_id, publish=trace.emit)
+                if not simulated:
+                    provider = agent.provider()
+                    trace.emit("capabilities.visible", assembly.manifest)
+                output = Runtime(provider, tool, trace, run_config, approvals=approvals,
                                  control=control).run(question, target, cancel)
             finally:
                 if approvals is not None:
                     approvals.close()
+                if assembly is not None:
+                    assembly.close()
             if simulated:
                 output["notice"] = "这是测试替身演示，文件读取真实执行；未调用真实模型，不能作为产品验收。"
             code = 0 if output["state"] == "completed" else 1
@@ -269,10 +409,10 @@ def main() -> int:
         output = {"error": error.code,
                   "message": "请在环境变量中配置模型密钥；不要将密钥写入代码或聊天。"}
         code = 2
-    except (SessionError, StoreError) as error:
+    except (SessionError, StoreError, AgentError, SkillError) as error:
         output, code = {"error": error.code}, 2
-    except (OSError, ValueError):
-        output = {"error": "LOCAL_CONFIG_ERROR",
+    except (OSError, ValueError) as error:
+        output = {"error": getattr(error, "code", "LOCAL_CONFIG_ERROR"),
                   "message": "请检查工作区、文件路径和日志目录。"}
         code = 2
     finally:

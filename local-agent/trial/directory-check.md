@@ -1,6 +1,10 @@
 # 受限目录发现验收记录
 
-## 当前任务入口（2026-09-11）
+## 当前任务入口（2026-09-14）
+
+当前为**多助手配置、MCP、Skills、会话与工具层的本批联合闭环已完成**。方案见[扩展设计 §0](../../docs/superpowers/specs/2026-09-14-agent-extensions-design.md)，实施与历史失败证据见[实施计划 §0](../../docs/superpowers/plans/2026-09-14-agent-extensions.md)。[第八次最终真实报告](results/extensions-acceptance-20260915T030927702169Z/report.json)的 R1–R6 机器检查全部 PASS；后置[联合验收记录](extensions-live-check.md)逐项核对事实、引用、摘要、工具结果回填、审批、落盘与错误收口后，AI 语义 Gate PASS。完整回归 464 项通过；固定组累计使用 50/60 次真实 DeepSeek 请求，剩余 10 次，已按停止条件停止追加调用。原机器报告的用户验收仍为 pending；合成审批 `human_approval=false`，不冒充用户签字。当前结论只覆盖本批配置化助手与联合能力，不包含 Memory、Cron、自动子 Agent、远程 MCP/OAuth、多 Provider 或全路线发布质量。
+
+### 会话模块基线（2026-09-11）
 
 当前为**会话管理 Task 1–12 已实现，离线 Gate 通过，真实证据边界已修正**。Runtime、工具结果、上下文、历史查询、CLI、页面、长历史摘要和进程恢复已接入持久 Session；搜索续页、完整信封分页及压缩后保留更正/未完事项也已补齐。完整 Python 387 项通过，三组既有浏览器回归继续有效。受限 DeepSeek 的 6 次提交证明了五个目标场景；更正回答原运行以 `INVALID_REFERENCE` 失败，修复后没有真实复跑，因此不再写成“真实全量通过”。设计见[会话管理模块设计 §0](../../docs/superpowers/specs/2026-09-10-session-management-design.md)，实施见[会话管理实施计划 §0](../../docs/superpowers/plans/2026-09-10-session-management.md)，S1–S13 与分层证据见[会话验收记录](session-live-check.md)。本轮在此停止扩展；流式输出、Memory、MCP 和跨设备同步仍属于后续范围。
 

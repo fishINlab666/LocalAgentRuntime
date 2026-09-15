@@ -55,9 +55,13 @@ class ToolRegistry:
 
 def input_schema(spec):
     schema = copy.deepcopy(spec.input_schema)
-    schema.setdefault('properties', {})['intent'] = {
+    intent = {
         'type': 'string', 'minLength': 1, 'maxLength': 200,
         'description': '用一句话说明此次调用的目的，不是权限或执行结果。'}
+    if spec.source == 'mcp':
+        from .schema_validation import wrap_arguments
+        return wrap_arguments(schema, intent)
+    schema.setdefault('properties', {})['intent'] = intent
     schema['required'] = list(dict.fromkeys([*schema.get('required', []), 'intent']))
     schema['additionalProperties'] = False
     return schema
@@ -111,12 +115,20 @@ def parse_arguments(text):
 
 
 def valid_arguments(spec, arguments):
-    schema = input_schema(spec)
+    try:
+        schema = input_schema(spec)
+    except ValueError:
+        return False
+    if spec.source in {'skill', 'mcp'}:
+        from .schema_validation import valid_instance
+        return (valid_instance(schema, arguments)
+                and isinstance(arguments.get('intent'), str)
+                and bool(arguments['intent'].strip()))
     if (not isinstance(arguments, dict)
             or set(arguments) - schema['properties'].keys()
             or set(schema['required']) - arguments.keys()):
         return False
-    # This batch deliberately supports only flat string-parameter tools.
+    # Builtin adapters retain their dependency-free flat string contract.
     for name, value in arguments.items():
         rule = schema['properties'][name]
         if rule.get('type') != 'string' or not isinstance(value, str):
@@ -144,6 +156,27 @@ class Invocation:
 class ToolRuntime:
     def __init__(self, registry, policy):
         self.registry, self.policy = registry, policy
+
+    def _authorized(self, tool, arguments):
+        if tool.spec.risk not in {'low', 'medium'}:
+            return False
+        if tool.spec.source == 'builtin':
+            return True
+        if tool.spec.source not in {'skill', 'mcp'}:
+            return False
+        authorize = getattr(self.policy, 'authorize_tool', None)
+        try:
+            return callable(authorize) and authorize(tool, copy.deepcopy(arguments)) is True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _cancel_adapter(tool):
+        if tool.spec.source in {'skill', 'mcp'} and callable(getattr(tool, 'cancel', None)):
+            try:
+                tool.cancel()
+            except Exception:
+                pass
 
     def skipped(self, code='TOOL_SKIPPED'):
         return wire_result(tool_error(code), self.policy.result_fields())
@@ -231,13 +264,15 @@ class ToolRuntime:
             result = tool_error('TOOL_NOT_FOUND')
         elif not valid_arguments(tool.spec, arguments):
             result = tool_error('INVALID_ARGUMENT')
-        elif tool.spec.risk not in {'low', 'medium'} or tool.spec.source != 'builtin':
+        elif not self._authorized(tool, values):
             result = tool_error('PATH_DENIED')
         else:
             values = copy.deepcopy(values)
             self.policy.before(name, copy.deepcopy(values))
             # Every stage sees its own copy of the same validated arguments.
             try:
+                if tool.spec.source in {'skill', 'mcp'} and callable(getattr(tool, 'bind_call', None)):
+                    tool.bind_call(call['id'])
                 result = execute_bounded(lambda: tool.validate(copy.deepcopy(values)), tool.spec.timeout_seconds) \
                     if hasattr(tool, 'validate') else None
                 verify_result, allow_success = result is not None, False
@@ -248,6 +283,7 @@ class ToolRuntime:
                     else:
                         preview = {**preview, 'risk': tool.spec.risk, 'source': tool.spec.source}
             except RunStopped as error:
+                self._cancel_adapter(tool)
                 result, decision = tool_error(error.code), 'stop'
             except Exception:
                 result = tool_error('IO_ERROR')
@@ -345,6 +381,7 @@ class ToolRuntime:
                             verify_result = True
                         allow_success = True
                     except RunStopped as error:
+                        self._cancel_adapter(tool)
                         # A publication already in progress wins its lock; preserve the actual receipt.
                         with control.lock:
                             result = published[0] if published else tool_error(error.code)
