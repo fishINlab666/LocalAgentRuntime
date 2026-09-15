@@ -258,13 +258,13 @@ adapt_tools(tool, policy, approvals, output_path=None, write_root=None, write_id
 | 单个 DOCX 声明解压总量 | 100 MiB |
 | 单个 DOCX 条目压缩比 | 100:1 |
 | 解析子进程 CPU 时间 | 15 秒 |
-| 解析子进程地址空间 | 512 MiB |
+| 解析子进程地址空间 | 非 Darwin：绝对 512 MiB；Darwin：启动时 VSZ + 512 MiB 新增预算 |
 | 解析子进程 IPC 输出 | 8 MiB |
 | 单文件解析墙钟时间 | 20 秒 |
 
 服务端拒绝绝对路径、`..`、空路径段、反斜杠混淆、控制字符、重复逻辑路径和大小不符。目录选择超过 500 个总项目时在读取正文前拒绝，防止大量不支持文件占用页面与元数据预算。原文件用随机 source ID 保存，不按用户路径在磁盘重建，因此目录穿越和同名覆盖不会到达文件系统。
 
-PDF/Word 在独立子进程中解析。子进程代码不发起网络请求、不解析外部关系、不执行附件／宏／JavaScript，也不启动其他进程；第一版不把这描述成 OS 级断网沙箱。父进程在启动解析前检查 DOCX ZIP 条目数、声明解压总量和单条压缩比，并在 PDF 提取期间累计页数与解码内容流；子进程使用系统可用的 `RLIMIT_CPU`/`RLIMIT_AS`，父进程始终执行墙钟和 IPC 输出上限。任何限制无法在当前平台安装时，对应 PDF/DOCX parser 标记为不可用，而不是降级为无上限运行。
+PDF/Word 在独立子进程中解析。子进程代码不发起网络请求、不解析外部关系、不执行附件／宏／JavaScript，也不启动其他进程；第一版不把这描述成 OS 级断网沙箱。父进程在启动解析前检查 DOCX ZIP 条目数、声明解压总量和单条压缩比，并在 PDF 提取期间累计页内容及递归可达、按对象去重的 Form XObject 解码流；子进程使用系统可用的 `RLIMIT_CPU`/`RLIMIT_AS`，父进程始终执行墙钟和 IPC 输出上限。Darwin 会预映射数百 GiB 系统共享地址空间，因此使用“启动时 VSZ + 512 MiB”限制新增虚拟地址空间；其他平台使用绝对 512 MiB。任何限制或 Darwin VSZ 探测无法安装时，对应 PDF/DOCX parser 标记为不可用，而不是降级为无上限运行。
 
 超过任一阈值时父进程终止整个解析子进程组、限时等待并回收，删除该批解析临时输出，统一返回 `DOCUMENT_LIMIT_EXCEEDED`；异常退出返回 `DOCUMENT_CORRUPT`，解析器缺失或资源限制无法安装返回 `DOCUMENT_PARSER_UNAVAILABLE`。子进程崩溃或超限只使本批失败，不影响 HTTP 服务和已有 Session。
 

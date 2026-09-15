@@ -12,7 +12,7 @@
 
 ## §0 当前进度与停止条件
 
-2026-09-15：设计稿已由用户确认，设计 Review Gate 为 PASS，P0/P1 阻断项为 0。实施尚未开始；本计划以 commit `0e4a0c7` 为基线。下一步从 Task 1 的解析器契约和失败测试开始，不先接上传页面。
+2026-09-15：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成：四种格式解析、稳定位置、资源限制及受限子进程的 34 项定向测试通过，规格与代码质量 Gate 均为 PASS。Darwin 因系统共享地址空间预映射采用“启动时 VSZ + 512 MiB”新增预算，其他平台保持绝对 512 MiB；无法安装限制时仍明确不可用。下一步执行 Task 2 的 Schema v3 与维护闸门，不先接上传页面。
 
 本批完成条件：Task 1–10 的定向测试、完整 Python 回归和既有浏览器回归通过；Task 11 的固定混合资料闭环证明“导入 → 搜索 → 读取 → ToolCall 结果进入下一轮 → 原始位置引用 → 重启追问 → 隔离与恢复”。离线证据全部通过后，最多执行一个真实 DeepSeek 会话、2 个 Run、12 次模型请求；任一核心失败立即停止并保留证据。达到条件后不增加 OCR、同步、资料删除、向量检索或新格式。
 
@@ -59,7 +59,7 @@
 - Create: `local-agent/tests/import_fixtures.py`
 - Create: `local-agent/tests/test_import_parsers.py`
 
-- [ ] **Step 1: 固定解析依赖并写四种格式和位置顺序的失败测试**
+- [x] **Step 1: 固定解析依赖并写四种格式和位置顺序的失败测试**
 
 先向依赖文件追加：
 
@@ -96,7 +96,7 @@ class ImportParserTests(unittest.TestCase):
 
 再加入严格 UTF-8/NUL/控制字符、纯图片 PDF、加密 PDF、损坏 PDF/DOCX、部分空 PDF 页警告和不支持扩展名的表驱动断言。所有错误只比较稳定 code，不比较第三方库异常文本。
 
-- [ ] **Step 2: 安装固定依赖并确认测试因模块不存在而失败**
+- [x] **Step 2: 安装固定依赖并确认测试因模块不存在而失败**
 
 Run:
 
@@ -108,7 +108,7 @@ PYTHONPATH=. .venv/bin/python -W error::ResourceWarning -m unittest tests.test_i
 
 Expected: 安装成功；测试以 `ModuleNotFoundError: local_agent.import_parsers` 失败，而不是缺少第三方 parser。
 
-- [ ] **Step 3: 实现 parser 数据契约和四个 adapter**
+- [x] **Step 3: 实现 parser 数据契约和四个 adapter**
 
 在 `import_parsers.py` 定义并实际使用：
 
@@ -154,9 +154,9 @@ def parse_document(source: Path, logical_path: str,
 
 文本 adapter 只把 CRLF/CR 转为 LF；PDF adapter 逐页调用 `extract_text()` 并保留页码；DOCX adapter 使用 `Document.iter_inner_content()` 区分 `Paragraph` 与 `Table`，表格逐行输出带制表符的确定性文本。任何 parser 在构造返回值前检查提取后的 UTF-8 总字节数。
 
-- [ ] **Step 4: 增加受限子进程并验证资源错误**
+- [x] **Step 4: 增加受限子进程并验证资源错误**
 
-`import_worker.py` 从 stdin 读取不超过 128 KiB 的 JSON 请求，只接受 `source_path/logical_path/limits`，安装 `RLIMIT_CPU=15` 与 `RLIMIT_AS=512 MiB`，调用 `parse_document()`，向 stdout 输出不超过 8 MiB 的严格 JSON。父进程 helper 使用：
+`import_worker.py` 从 stdin 读取不超过 128 KiB 的 JSON 请求，只接受 `source_path/logical_path/limits`，安装 `RLIMIT_CPU=15`；非 Darwin 安装绝对 512 MiB `RLIMIT_AS`，Darwin 安装“当前 VSZ + 512 MiB”新增预算，调用 `parse_document()`，向 stdout 输出不超过 8 MiB 的严格 JSON。父进程 helper 使用：
 
 ```python
 process = subprocess.Popen(
@@ -172,9 +172,9 @@ except subprocess.TimeoutExpired:
     raise DocumentParseError('DOCUMENT_LIMIT_EXCEEDED')
 ```
 
-父进程验证退出码、8 MiB 输出上限和完整 schema；取消同样 `killpg` 并回收。无法安装 RLIMIT 返回 `DOCUMENT_PARSER_UNAVAILABLE`。DOCX 在加载前检查 ZIP 条目、声明解压量与单条压缩比；PDF 在提取期间累计页数和解码内容流。为每个阈值加入“等于上限通过、超过一单位失败”的小夹具；测试注入较小的 `ImportLimits`，不在单元测试中真实分配 64 MiB/512 MiB。
+父进程用临时文件承接输出并在轮询期间检查 8 MiB 上限，验证退出码和完整 schema；取消同样 `killpg` 并有界回收，极端情况下交给 daemon reaper。无法安装 RLIMIT 或 Darwin VSZ 探测失败返回 `DOCUMENT_PARSER_UNAVAILABLE`。DOCX 在加载前检查 ZIP 条目、声明解压量与单条压缩比；PDF 在提取期间累计页数、页内容流和递归可达且按对象去重的 Form XObject 解码流。为每个阈值加入“等于上限通过、超过一单位失败”的小夹具；测试注入较小的 `ImportLimits`，不在单元测试中真实分配 64 MiB/512 MiB。
 
-- [ ] **Step 5: 跑解析定向检查并提交**
+- [x] **Step 5: 跑解析定向检查并提交**
 
 Run:
 
