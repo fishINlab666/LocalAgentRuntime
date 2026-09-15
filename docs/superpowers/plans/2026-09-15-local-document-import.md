@@ -12,7 +12,7 @@
 
 ## §0 当前进度与停止条件
 
-2026-09-15：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过。两项规格与代码质量 Gate 均为 PASS。Darwin 因系统共享地址空间预映射采用“启动时 VSZ + 512 MiB”新增预算，其他平台保持绝对 512 MiB；无法安装限制时仍明确不可用。下一步执行 Task 3 的安全上传与受管副本，不先接上传页面。
+2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过。三项规格与代码质量 Gate 均为 PASS。Darwin 因系统共享地址空间预映射采用“启动时 VSZ + 512 MiB”新增预算，其他平台保持绝对 512 MiB；无法安装限制时仍明确不可用。下一步执行 Task 4 的解析、切块、原子发布与发布前恢复，不先接上传页面或 Session 执行入口。
 
 本批完成条件：Task 1–10 的定向测试、完整 Python 回归和既有浏览器回归通过；Task 11 的固定混合资料闭环证明“导入 → 搜索 → 读取 → ToolCall 结果进入下一轮 → 原始位置引用 → 重启追问 → 隔离与恢复”。离线证据全部通过后，最多执行一个真实 DeepSeek 会话、2 个 Run、12 次模型请求；任一核心失败立即停止并保留证据。达到条件后不增加 OCR、同步、资料删除、向量检索或新格式。
 
@@ -358,7 +358,7 @@ git commit -m "Add import state schema and maintenance gate"
 - Create: `local-agent/local_agent/imports.py`
 - Create: `local-agent/tests/test_import_store.py`
 
-- [ ] **Step 1: 写 begin/add_file 的失败测试**
+- [x] **Step 1: 写 begin/add_file 的失败测试**
 
 ```python
 def test_begin_allocates_random_slots_and_add_file_saves_exact_private_copy(self):
@@ -377,7 +377,7 @@ def test_begin_allocates_random_slots_and_add_file_saves_exact_private_copy(self
 
 加入以下失败矩阵：绝对路径、`..`、空段、反斜杠、控制字符、重复路径、扩展名大小写、501 个目录项、51 个支持文件、单文件 20 MiB+1、批量 100 MiB+1、错误 `Content-Length`、短 body、长 body、重复 slot、未知 import/slot。失败不得留下 `stored` 行或可见正式目录。
 
-- [ ] **Step 2: 运行并确认 ImportStore 尚不存在**
+- [x] **Step 2: 运行并确认 ImportStore 尚不存在**
 
 Run:
 
@@ -388,7 +388,7 @@ PYTHONPATH=. .venv/bin/python -W error::ResourceWarning -m unittest tests.test_i
 
 Expected: `ImportError` 或缺少 `ImportStore` 导致 FAIL。
 
-- [ ] **Step 3: 实现请求类型、路径校验和上传 slot**
+- [x] **Step 3: 实现请求类型、路径校验和上传 slot**
 
 `imports.py` 对外固定：
 
@@ -411,7 +411,7 @@ class FileReceipt:
 
 请求 JSON canonical 化后计算 SHA-256；import/source/slot/job ID 均取 `uuid.uuid4().hex`。路径只接受非空相对 POSIX 段；扩展名用 `casefold()`。上传只按声明长度从 stream 分块读取，边写边 SHA-256；额外读取 1 byte 防止长 body，成功后 `fsync` 并以 `O_EXCL|O_NOFOLLOW` 发布该 source 临时文件，再事务更新 `stored`。`begin/add_file/cancel` 各自在数据库操作期间取得 gate activity；SQLite 中的 `uploading/finalizing` 状态让 backup 在请求间隙仍能识别未完成导入。
 
-- [ ] **Step 4: 通过上传检查并提交**
+- [x] **Step 4: 通过上传检查并提交**
 
 Run:
 
@@ -451,7 +451,7 @@ self.assertLessEqual(len(published.chunk_paths), 256)
 self.assertEqual(self.hash_manifest_files(published.root), published.manifest_hashes)
 ```
 
-故障注入点固定为 `after_parse_fsync`、`after_publish_rename`、`after_parent_fsync`、`before_link_transaction`、`after_link_commit`。每个点重开 State Store 后断言：同一 complete 返回同一 job/Session；已有 DB 关联不被删除；孤儿正式目录才清理；摘要错误变为 `unavailable`；不会出现两个 Session。
+Task 4 的故障注入点固定为 `after_parse_fsync`、`after_publish_rename`、`after_parent_fsync`。每个点重开 State Store 后断言：同一 complete 返回同一 job；完整正式目录可重建同一个 `PublishedImport`；不创建 Session；孤儿正式目录才清理。`before_link_transaction`、`after_link_commit`、同一 import 不会出现两个 Session，以及 `ready` 摘要错误转为 `unavailable` 依赖 Task 5 的关联事务与 resolver，在 Task 5 验证。
 
 - [ ] **Step 2: 运行并确认 finalize/恢复断言失败**
 
@@ -482,7 +482,7 @@ Expected: 新 finalize、manifest 或恢复断言 FAIL。
 
 - [ ] **Step 4: 接入状态恢复与批次锁**
 
-`start_finalize()` 用数据库 CAS 从 `uploading` 进入 `finalizing`，重复调用返回同一 job。finalize worker 持有 gate activity 到 Session 关联成功、失败或取消；批次锁仲裁 cancel/finalize；取消终止 parser 子进程并删除 staging。恢复逻辑按 SQLite 状态和目录事实处理，`ready` 目录缺失或摘要不符只标 `unavailable`，保留历史。worker 的 `finally` 释放 activity 并调用 `store.close_thread_connection()`。
+`start_finalize()` 用数据库 CAS 从 `uploading` 进入 `finalizing`，重复调用返回同一 job。`ImportJob.run()` 返回冻结的 `PublishedImport`；Task 4 完成后 SQLite 仍为 `finalizing`，而“正式目录完整、staging 已消失、尚无 Session”推导为文件系统阶段 `published_unlinked`，不增加新的 SQLite 状态。finalize worker 持有 gate activity 到发布成功、失败或取消；批次锁仲裁 cancel/finalize；取消终止 parser 子进程并删除 staging。恢复逻辑按 SQLite 状态和目录事实重建同一个 `PublishedImport`，绝不创建 Session。worker 的 `finally` 释放 activity 并调用 `store.close_thread_connection()`。
 
 - [ ] **Step 5: 跑发布恢复检查并提交**
 
@@ -536,7 +536,7 @@ def test_tampered_import_stops_direct_execute_before_provider(self):
         self.service.execute(prepared, FailIfCalledProvider(), self.trace())
 ```
 
-再覆盖其他 import ID、目录 inode 替换、symlink、Web 列表过滤、CLI continue、selected Session 重启和无效导入会话“历史可读、新 Run 拒绝”。普通 workspace 丢失时既有历史会话行为保持。
+再覆盖 `before_link_transaction`、`after_link_commit` 两个关联故障点及重复恢复，断言同一 import 最多产生一个 Session；同时覆盖其他 import ID、目录 inode 替换、symlink、`ready` 摘要错误转为 `unavailable`、Web 列表过滤、CLI continue、selected Session 重启和无效导入会话“历史可读、新 Run 拒绝”。普通 workspace 丢失时既有历史会话行为保持。
 
 - [ ] **Step 2: 运行并确认现有代码仍信任 `workspace_path`**
 
@@ -568,7 +568,7 @@ class ManagedWorkspaceResolver:
         return self._imported(session.import_id)
 ```
 
-导入分支只从固定 `ImportStore.root` fd 与 32 位十六进制 ID 派生子目录，逐级 `O_DIRECTORY|O_NOFOLLOW` 打开，校验 DB identity、manifest 摘要与相关文件摘要。`SessionService.attach_import(published, request)` 在一个 SQLite 事务中写 parser file 记录、插入带冻结助手快照的 Session、设置唯一 `import_id`、记录两个根 identity 并把 import 置 `ready`。
+导入分支只从固定 `ImportStore.root` fd 与 32 位十六进制 ID 派生子目录，逐级 `O_DIRECTORY|O_NOFOLLOW` 打开，校验 DB identity、manifest 摘要与相关文件摘要。`SessionService.attach_import(published, request)` 只接收 Task 4 生成或恢复的 `PublishedImport`，在一个 SQLite 事务中写 parser file 记录、插入带冻结助手快照的 Session、设置唯一 `import_id`、记录两个根 identity 并把 import 置 `ready`。事务前后故障恢复重放同一关联操作，依靠 `sessions.import_id` 唯一约束返回同一个 Session，不能重新解析或产生第二个 Session。
 
 - [ ] **Step 4: 替换所有执行入口的路径来源**
 
