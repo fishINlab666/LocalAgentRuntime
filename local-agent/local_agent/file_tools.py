@@ -158,9 +158,6 @@ class FilePolicy:
         self.read_attempted = False
         self.target = None
         self.output_path = output_path
-        self.write_enabled = ('write_file' in self.agent.tools
-                              and self.agent.to_dict()['approval'] == 'ask_writes')
-        self.write_attempted = False
         self.artifacts = []
         self.write_failure = None
 
@@ -180,25 +177,18 @@ class FilePolicy:
         system = self.agent.system_prompt() + TOOL_PROTOCOL
         if self.output_path is not None:
             task['output_file'] = self.output_path
-        if self.write_enabled:
             system += WRITE_TASK
         return [{'role': 'system', 'content': system},
                 {'role': 'user', 'content': json.dumps(task, ensure_ascii=False)}]
 
     def before(self, name, arguments):
-        if name == 'read_file' and arguments.get('path') == self.target:
+        if arguments.get('path') == self.target:
             self.read_attempted = True
-        if name == 'write_file':
-            self.write_attempted = True
 
     def accept(self, name, arguments, result):
         if name == 'write_file':
-            if (result.get('ok') and result.get('operation') == 'created'
-                    and result.get('path') == arguments.get('path')):
-                receipt = {key: result[key] for key in ('path', 'bytes', 'sha256', 'operation')}
-                if not any(item['path'] == receipt['path'] for item in self.artifacts):
-                    self.artifacts.append(receipt)
-                self.snapshots.pop(receipt['path'], None)
+            if result.get('ok') and result.get('operation') == 'created' and result.get('path') == self.output_path:
+                self.artifacts = [{key: result[key] for key in ('path', 'bytes', 'sha256', 'operation')}]
                 self.write_failure = None
             elif not result.get('ok'):
                 self.write_failure = result.get('error', {}).get('code')
@@ -220,25 +210,15 @@ class FilePolicy:
 
     def result_fields(self):
         result = {'scope': self.tool.coverage()} if self.directory else {}
-        if self.output_path is not None or self.write_attempted or self.artifacts:
+        if self.output_path is not None:
             result['artifacts'] = copy.deepcopy(self.artifacts)
         return result
-
-    def required_output_created(self):
-        return (self.output_path is None
-                or any(item['path'] == self.output_path for item in self.artifacts))
-
-    def output_paths(self):
-        paths = {item['path'] for item in self.artifacts}
-        if self.output_path is not None:
-            paths.add(self.output_path)
-        return paths
 
     def validate(self, content):
         answer = validate_answer(content, self.snapshots, self.target, self.read_attempted,
                                  coverage=self.tool.coverage() if self.directory else None,
-                                 task_failure=bool(self.write_failure))
-        if answer['status'] != 'unable' and not self.required_output_created():
+                                 task_failure=bool(self.output_path and self.write_failure and not self.artifacts))
+        if self.output_path is not None and answer['status'] != 'unable' and not self.artifacts:
             raise AnswerError('OUTPUT_NOT_CREATED', 'The requested output has no actual creation receipt.')
         return answer
 
@@ -247,16 +227,16 @@ class FilePolicy:
         return IDENTIFIER_REPAIR if code == 'IDENTIFIER_MISMATCH' else JSON_REPAIR
 
     def execute_read(self, name, arguments):
-        if arguments.get('path') in self.output_paths():
+        if self.output_path is not None and arguments.get('path') == self.output_path:
             return tool_error('PATH_DENIED')
         result = self.tool.execute(name, arguments) if self.directory else self.tool.execute(arguments)
-        if (name == 'list_files'
+        if (self.output_path is not None and name == 'list_files'
                 and isinstance(result, dict) and result.get('ok') is True
                 and isinstance(result.get('entries'), list)
                 and all(isinstance(item, dict) and isinstance(item.get('path'), str)
                         for item in result['entries'])):
             result = {**result, 'entries': [item for item in result['entries']
-                                          if item['path'] not in self.output_paths()]}
+                                          if item['path'] != self.output_path]}
         return result
 
     def clear_read_proof(self, name):
@@ -269,10 +249,10 @@ class FilePolicy:
         proof = (self.tool.take_result_proof(name, arguments) if self.directory else
                  self.tool.take_result_proof(arguments)
                  if hasattr(self.tool, 'take_result_proof') else None)
-        if (proof is not None and name == 'list_files'
+        if (proof is not None and self.output_path is not None and name == 'list_files'
                 and proof.get('ok') is True and isinstance(proof.get('entries'), list)):
             proof = {**proof, 'entries': [item for item in proof['entries']
-                                         if item.get('path') not in self.output_paths()]}
+                                         if item.get('path') != self.output_path]}
         return proof
 
     def model_request(self, messages, limit, schemas):
@@ -300,16 +280,15 @@ def adapt_tools(tool, output_path=None, *, agent=None):
                                 READ_ERROR_CODES,
                                 lambda: policy.clear_read_proof('read_file'),
                                 lambda args: policy.take_read_proof('read_file', args))]
-    if policy.write_enabled:
+    if output_path is not None:
         from .write_file import WriteFile
         adapters.append(WriteFile(tool.workspace, output_path, tool.workspace_identity))
     return ToolRuntime(ToolRegistry(adapters, summary=policy.result_fields), policy)
 
 
-WRITE_TASK = '''\n用户要求保存文件时，先读取资料，再依据实际来源调用 write_file；仅问答时不必写入。
-每次由你提出工作区内的相对 path、完整 content 和 intent，程序等待用户查看该路径及完整正文后确认。不要自行宣称已获批准。
-用户可选填 output_file；填写时必须实际创建该精确目标才能宣称任务完成，也可另行提出其他产物。未填写时由你决定文件名。
-同一任务可逐次新建多个文件，每次独立审批并占用工具调用预算。只支持 UTF-8 .md/.txt，每个文件最多 32768 字节；不覆盖、不自动建目录，同一路径本轮只发布一次。
+WRITE_TASK = '''\n用户还要求生成 output_file 指定的新文件。先读取资料，依据原文生成报告，再调用 write_file。
+write_file 只允许这个精确路径，不会覆盖或自动更名。只支持 UTF-8 .md/.txt，正文最多 32768 字节，一次任务最多创建一个文件。
+调用时提供完整 content 和 intent；程序会等待用户查看实际路径及完整正文后确认。不要自行宣称已获批准。
 只有工具返回 ok=true 且 data.operation=created 才实际生成了文件；最终回答仍须引用已读取的原文，产物不能作为来源。
-写入失败或被拒绝时可返回 unable（即使资料读取成功），说明本次未创建的输出；先前已有创建回执的文件仍保留，不得说成全部未创建。拒绝后不得再调用任何工具。
+写入失败或被拒绝时可返回 unable（即使资料读取成功），仅解释失败原因，不声称已生成文件。拒绝后不得再调用任何工具。
 '''

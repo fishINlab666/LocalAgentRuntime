@@ -309,12 +309,11 @@ class RuntimeTests(unittest.TestCase):
                 self.assertFalse(any(e['event'] == 'tool.started' for e in events))
 
     def test_tool_timeout_records_error_and_stops_next_actions(self):
-        class SlowTool(self.f.ReadFile):
+        class SlowTool:
             def execute(self, _):
                 time.sleep(.08)
                 return {'ok': False, 'error': {'code': 'READ_ERROR', 'message': 'late'}}
-        result, p, events = self.run_script([call_message(), final_message('unable')],
-                                       tool=SlowTool(self.workspace, {'a.md'}),
+        result, p, events = self.run_script([call_message(), final_message('unable')], tool=SlowTool(),
                                        config=self.r.RunConfig(tool_timeout=.01))
         self.assertEqual(result['state'], 'timed_out')
         self.assertEqual(result['stop_reason'], 'TOOL_TIMEOUT')

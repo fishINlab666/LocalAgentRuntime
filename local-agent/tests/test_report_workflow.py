@@ -8,14 +8,12 @@ import unittest
 from unittest.mock import patch
 
 from local_agent.approvals import ApprovalBroker, RunControl
-from local_agent.agents import build_file_engine, builtin_agent
 from local_agent.directory_evaluation import context_checks
 from local_agent.discovery import DirectoryTools
 from local_agent.file_tools import adapt_tools
 from local_agent.runtime import Runtime, RunConfig
 from local_agent.trace import Trace
 from report_provider import ReportProvider
-from test_runtime import ScriptedProvider, call_message
 
 
 class ReportWorkflowTests(unittest.TestCase):
@@ -47,121 +45,10 @@ class ReportWorkflowTests(unittest.TestCase):
         return Runtime(self.provider, self.engine, self.trace, config, approvals=broker,
                        control=self.control).run(question, None)
 
-    def test_registers_writer_from_agent_permission_without_explicit_output(self):
+    def test_registers_writer_only_for_explicit_output(self):
         self.assertIsNotNone(self.engine.registry.get('write_file'))
-        implicit = adapt_tools(DirectoryTools(self.workspace))
-        self.assertIsNotNone(implicit.registry.get('write_file'))
-        configured = build_file_engine(builtin_agent('file'), self.workspace, 'plan.md')
-        self.assertIsNone(configured.policy.output_path)
-        self.assertIsNotNone(configured.registry.get('write_file'))
-
-    def run_dynamic_report(self, *, output_path=None, paths=('summary.md', 'next-steps.txt'),
-                           decisions=('allow', 'allow'), retry_after_denial=False):
-        self.engine = build_file_engine(builtin_agent('file'), self.workspace, 'plan.md', output_path)
-
-        def choose_outputs(messages):
-            source = messages[-1]
-            self.assertEqual(source['tool_call_id'], 'read-plan')
-            content = json.loads(source['content'])['data']['content']['1']
-            calls = [call_message('write-' + str(index), name='write_file', arguments=json.dumps({
-                'path': path, 'content': content + '\n', 'intent': '保存依据原文生成的结果'},
-                ensure_ascii=False))['tool_calls'][0] for index, path in enumerate(paths)]
-            return {'role': 'assistant', 'content': None, 'tool_calls': calls}
-
-        denied = 'deny' in decisions
-        if retry_after_denial:
-            final = call_message('write-retry', name='write_file', arguments=json.dumps({
-                'path': 'retry.md', 'content': '不得执行', 'intent': '重新写入'}))
-        else:
-            final = {'role': 'assistant', 'content': json.dumps({
-                'status': 'unable' if denied else 'answered',
-                'answer': '第一份已创建，第二份因用户拒绝而未创建。' if denied else '已依据原文生成结果。',
-                'citations': [] if denied else [{'path': 'plan.md', 'start_line': 1, 'end_line': 1}]},
-                ensure_ascii=False)}
-        provider = ScriptedProvider([call_message('read-plan', path='plan.md'), choose_outputs, final])
-        choices = iter(decisions)
-
-        def publish(event, data):
-            if event == 'approval.required':
-                preview = broker.snapshot()
-                self.assertFalse((self.workspace / preview['path']).exists())
-                self.previews.append(preview)
-                broker.decide(data['id'], next(choices))
-
-        broker = ApprovalBroker(self.trace.run_id, publish)
-        result = Runtime(provider, self.engine, self.trace, approvals=broker,
-                         control=self.control).run('读取项目资料并生成两份不同用途的文件', 'plan.md')
-        return result, provider
-
-    def test_model_chooses_two_outputs_with_independent_approvals_and_actual_receipts(self):
-        result, provider = self.run_dynamic_report()
-
-        self.assertEqual(result['state'], 'completed')
-        self.assertEqual(len(self.previews), 2)
-        self.assertEqual(len({preview['id'] for preview in self.previews}), 2)
-        self.assertEqual([artifact['path'] for artifact in result['artifacts']],
-                         ['summary.md', 'next-steps.txt'])
-        initial = json.dumps(provider.requests[0], ensure_ascii=False)
-        self.assertNotIn('杉木-19', initial)
-        self.assertNotIn('summary.md', initial)
-        self.assertNotIn('next-steps.txt', initial)
-        returned = [message for message in provider.requests[-1]
-                    if message.get('role') == 'tool' and message['tool_call_id'].startswith('write-')]
-        self.assertEqual([message['tool_call_id'] for message in returned], ['write-0', 'write-1'])
-        for preview, artifact, message in zip(self.previews, result['artifacts'], returned):
-            raw = (self.workspace / artifact['path']).read_bytes()
-            self.assertEqual(raw, preview['content'].encode('utf-8'))
-            self.assertEqual(artifact, {'path': preview['path'], 'bytes': len(raw),
-                                       'sha256': hashlib.sha256(raw).hexdigest(), 'operation': 'created'})
-            receipt = json.loads(message['content'])
-            self.assertTrue(receipt['ok'])
-            self.assertEqual(receipt['data'], artifact)
-            self.assertNotIn('content', receipt['data'])
-
-    def test_second_output_denial_preserves_first_artifact_and_truthful_final_context(self):
-        result, provider = self.run_dynamic_report(decisions=('allow', 'deny'))
-
-        self.assertEqual(result['state'], 'unable')
-        self.assertEqual(result['stop_reason'], 'USER_REJECTED')
-        self.assertTrue((self.workspace / 'summary.md').is_file())
-        self.assertFalse((self.workspace / 'next-steps.txt').exists())
-        self.assertEqual([artifact['path'] for artifact in result['artifacts']], ['summary.md'])
-        self.assertEqual(len(self.previews), 2)
-        self.assertEqual(len(provider.requests), 3)
-        returned = [message for message in provider.requests[-1]
-                    if message.get('role') == 'tool' and message['tool_call_id'].startswith('write-')]
-        self.assertEqual([message['tool_call_id'] for message in returned], ['write-0', 'write-1'])
-        self.assertEqual(json.loads(returned[0]['content'])['data'], result['artifacts'][0])
-        self.assertEqual(json.loads(returned[1]['content'])['error']['code'], 'USER_REJECTED')
-        self.assertNotIn('请求的输出没有创建', provider.requests[-1][-1]['content'])
-        self.assertIn('第一份已创建', result['answer']['answer'])
-
-    def test_second_output_denial_cannot_retry_or_remove_the_created_artifact(self):
-        result, provider = self.run_dynamic_report(decisions=('allow', 'deny'), retry_after_denial=True)
-
-        self.assertEqual(result['stop_reason'], 'USER_REJECTED')
-        self.assertEqual(len(provider.requests), 3)
-        self.assertEqual(len(self.previews), 2)
-        self.assertEqual([artifact['path'] for artifact in result['artifacts']], ['summary.md'])
-        self.assertTrue((self.workspace / 'summary.md').is_file())
-        self.assertFalse((self.workspace / 'next-steps.txt').exists())
-        self.assertFalse((self.workspace / 'retry.md').exists())
-
-    def test_extra_output_does_not_satisfy_the_explicit_required_output(self):
-        result, _ = self.run_dynamic_report(output_path='report.md', paths=('summary.md',),
-                                            decisions=('allow',))
-
-        self.assertEqual(result['stop_reason'], 'OUTPUT_NOT_CREATED')
-        self.assertTrue((self.workspace / 'summary.md').is_file())
-        self.assertFalse(self.output.exists())
-        self.assertEqual([artifact['path'] for artifact in result['artifacts']], ['summary.md'])
-
-    def test_explicit_output_can_complete_alongside_an_extra_file(self):
-        result, _ = self.run_dynamic_report(output_path='report.md', paths=('summary.md', 'report.md'))
-
-        self.assertEqual(result['state'], 'completed')
-        self.assertEqual([artifact['path'] for artifact in result['artifacts']], ['summary.md', 'report.md'])
-        self.assertTrue(self.output.is_file())
+        readonly = adapt_tools(DirectoryTools(self.workspace))
+        self.assertIsNone(readonly.registry.get('write_file'))
 
     def test_two_reads_approval_real_bytes_and_context_receipt_match(self):
         result = self.run_report()

@@ -141,7 +141,7 @@
               <div class="field-group span-two"><label for="file">文件路径</label><input id="file" name="file" placeholder="例如：demo-note.md" required maxlength="1024" autocomplete="off" aria-describedby="file-help"><p class="field-help" id="file-help">工作区内的相对路径 · .md / .txt</p></div>
               <div class="field-group"><label for="run-skill">指定 Skill（可选）</label><select id="run-skill"><option value="">由模型选择</option></select></div>
               <div class="field-group"><label for="run-prompt">MCP 模板（可选）</label><select id="run-prompt"><option value="">不指定模板</option></select></div>
-              <div class="field-group span-two"><label for="output-file">输出文件路径（可选）</label><input id="output-file" name="output_file" placeholder="留空由模型决定，例如：summary.md" maxlength="1024" autocomplete="off" aria-describedby="output-file-help"><p class="field-help" id="output-file-help">模型也可决定文件名；每份 .md / .txt 都会先展示完整内容，经你单独确认后才新建，且不覆盖已有文件。</p></div>
+              <div class="field-group span-two"><label for="output-file">输出文件路径（可选）</label><input id="output-file" name="output_file" placeholder="例如：summary.md" maxlength="1024" autocomplete="off" aria-describedby="output-file-help"><p class="field-help" id="output-file-help">留空只问答；需要写入时须在提交前指定唯一的 .md / .txt 路径。每个任务最多新建一次，完整内容经你确认后才写入。父目录须已存在，不覆盖已有文件。</p></div>
             </div>
           </details>
 

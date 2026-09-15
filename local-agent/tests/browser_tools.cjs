@@ -4,13 +4,17 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 class Element {
-  constructor() { this.children = []; this.listeners = {}; this.value = ''; this.hidden = false; }
+  constructor() { this.children = []; this.listeners = {}; this.attributes = {}; this.dataset = {};
+    this.value = ''; this.hidden = false; this.inert = false; }
   get firstElementChild() { return this.children[0] || null; }
   set textContent(value) { this.text = String(value); this.children = []; }
   get textContent() { return (this.text || '') + this.children.map(child => child.textContent).join(''); }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.text = ''; this.children = children; }
   addEventListener(name, handler) { this.listeners[name] = handler; }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  removeAttribute(name) { delete this.attributes[name]; }
+  querySelectorAll() { return []; }
   focus() {}
 }
 
@@ -18,19 +22,26 @@ const html = fs.readFileSync('local_agent/static/index.html', 'utf8');
 const source = fs.readFileSync('local_agent/static/app.js', 'utf8');
 const elements = Object.fromEntries([...html.matchAll(/\bid="([^"]+)"/g)].map(match => [match[1], new Element()]));
 elements['session-select'].append(new Element());
+const body = new Element(), composerSettings = new Element();
+composerSettings.open = true;
 const requests = [], timers = new Map();
 let nextTimer = 0, respond;
 const config = {workspace: '/synthetic', ready: true, provider: {simulated: true}};
 const context = vm.createContext({
   document: {
+    body,
     getElementById: id => elements[id],
-    querySelector: () => ({content: 'synthetic-session'}),
+    querySelector: selector => selector === 'meta[name="session-token"]'
+      ? {content: 'synthetic-session'} : selector === '.composer-settings' ? composerSettings : null,
     querySelectorAll: () => [],
     createElement: () => new Element(),
+    addEventListener() {},
   },
   AbortController,
   setTimeout: (fn, delay) => { timers.set(++nextTimer, {fn, delay}); return nextTimer; },
   clearTimeout: id => timers.delete(id),
+  requestAnimationFrame: callback => callback(),
+  matchMedia: () => ({matches: false, addEventListener() {}, addListener() {}}),
   fetch: async (path, options) => {
     requests.push({path, ...options});
     if (path === '/api/config') return {ok: true, json: async () => config};
@@ -91,16 +102,6 @@ const result = {answer: null, artifacts: [receipt], stop_reason: 'CANCELLED'};
     result: {...result, stop_reason: 'INVALID_ANSWER'}}));
   assert.equal(elements.artifacts.hidden, false, 'Created file remains visible after answer validation fails');
   assert.match(elements['artifact-note'].textContent, /后续步骤未完成/);
-
-  context.render(snapshot('run-1', {revision: 5, output_file: null, pending_approval: null,
-    state: 'unable', result: {...result, stop_reason: 'USER_REJECTED'}}));
-  assert.equal(elements['run-status'].textContent, '本次未完成', 'A declined dynamic write is not a read failure');
-  assert.equal(elements.artifacts.hidden, false, 'Earlier files remain visible after a later write is declined');
-  context.render(snapshot('run-1', {revision: 6, output_file: null, pending_approval: null,
-    state: 'completed', result: {...result, artifacts: [receipt, {...receipt, path: 'notes.txt'}]}}));
-  assert.equal(elements['artifact-list'].children.length, 2);
-  assert.match(elements['artifact-list'].textContent, /report\.md.*notes\.txt/);
-  assert.doesNotMatch(html, /留空只问答/);
 
   const denyJob = snapshot('deny-run', {pending_approval: {...approval, id: 'deny-approval', run_id: 'deny-run'}});
   context.prepareOutput(denyJob); context.render(denyJob);

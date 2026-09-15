@@ -1,12 +1,6 @@
 # 受限目录发现验收记录
 
-## 当前任务入口（2026-09-15）
-
-**模型自主命名、多文件新建已实现并通过离线验证，本次收口**：输出路径改为可选，同一任务各文件独立确认、累加实际回执、逐调用回填。完整回归 479 项、页面状态检查及一次独立实现 Gate 通过，命令和证据见[工具方案 §0](../../docs/superpowers/plans/2026-09-10-tool-runtime.md)。本次使用确定性 Provider、本机实际文件与 SQLite，新增多产物的真实模型表现尚未验证；没有要求用户重启或追加真实 API 调用。
-
-上一轮 review gate 已发现 A2 缺口：CLI 停用已加载的 Skill 后，在途 Run 仍可能继续读取并完成。该问题尚未修复，当前不能宣称扩展模块全部交付标准已满足；它不包含在本次写入改动中。下文保留原固定样例通过的事实。
-
-### 扩展固定组基线（2026-09-14—15，历史验证范围）
+## 当前任务入口（2026-09-14）
 
 当前为**多助手配置、MCP、Skills、会话与工具层的本批联合闭环已完成**。方案见[扩展设计 §0](../../docs/superpowers/specs/2026-09-14-agent-extensions-design.md)，实施与历史失败证据见[实施计划 §0](../../docs/superpowers/plans/2026-09-14-agent-extensions.md)。[第八次最终真实报告](results/extensions-acceptance-20260915T030927702169Z/report.json)的 R1–R6 机器检查全部 PASS；后置[联合验收记录](extensions-live-check.md)逐项核对事实、引用、摘要、工具结果回填、审批、落盘与错误收口后，AI 语义 Gate PASS。完整回归 464 项通过；固定组累计使用 50/60 次真实 DeepSeek 请求，剩余 10 次，已按停止条件停止追加调用。原机器报告的用户验收仍为 pending；合成审批 `human_approval=false`，不冒充用户签字。当前结论只覆盖本批配置化助手与联合能力，不包含 Memory、Cron、自动子 Agent、远程 MCP/OAuth、多 Provider 或全路线发布质量。
 

@@ -43,6 +43,24 @@ class ExtensionTests(unittest.TestCase):
         self.assertIn('产物不能作为来源', system)
         self.assertIn('不要在citations中引用output_file', system)
 
+    def test_write_tool_requires_the_users_single_declared_output(self):
+        readonly = self.ext.assemble(
+            builtin_agent('combined'), self.workspace, None, None, self.library,
+            run_id='no-output',
+        )
+        self.addCleanup(readonly.close)
+        self.assertIsNone(readonly.engine.registry.get('write_file'))
+
+        writable = self.ext.assemble(
+            builtin_agent('combined'), self.workspace, None, 'brief.md', self.library,
+            run_id='declared-output',
+        )
+        self.addCleanup(writable.close)
+        writer = writable.engine.registry.get('write_file')
+        self.assertEqual(writer.output_path, 'brief.md')
+        self.assertEqual(writer.validate({'path': 'other.md', 'content': 'x'})['error']['code'],
+                         'PATH_DENIED')
+
     def test_extension_prompt_excludes_method_content_from_fact_citations(self):
         assembly = self.ext.assemble(
             builtin_agent('combined'), self.workspace, None, None, self.library,

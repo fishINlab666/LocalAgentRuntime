@@ -1,4 +1,4 @@
-"""Individually approved UTF-8 file creations in a pinned workspace."""
+"""One approved, bounded UTF-8 file creation in a pinned workspace."""
 
 from dataclasses import dataclass
 import errno
@@ -21,7 +21,7 @@ _ERROR_CODES = frozenset({
 })
 _MESSAGES = {
     'INVALID_ARGUMENT': 'Expected exactly the string fields path and content.',
-    'PATH_DENIED': 'The output must be a permitted relative path inside the workspace.',
+    'PATH_DENIED': 'Only the output path specified for this task may be created.',
     'UNSUPPORTED_FILE': 'Only UTF-8 text in .md and .txt files is supported.',
     'FILE_TOO_LARGE': 'The output exceeds the 32 KiB limit.',
     'FILE_EXISTS': 'The output target already exists and will not be overwritten.',
@@ -31,7 +31,7 @@ _MESSAGES = {
     'DISK_FULL': 'There is not enough storage space to create the output.',
     'WRITE_ERROR': 'The output could not be created.',
     'WRITE_OUTCOME_UNKNOWN': 'Publication could not be confirmed; inspect the target before retrying.',
-    'OUTPUT_LIMIT': 'This output path has already been created in this run.',
+    'OUTPUT_LIMIT': 'This task has already created its one permitted output.',
 }
 
 
@@ -69,18 +69,16 @@ class WriteCandidate:
 
 
 class WriteFile:
-    def __init__(self, workspace: Path, output_path: str | None = None,
+    def __init__(self, workspace: Path, output_path: str,
                  workspace_identity: tuple[int, int] | None = None):
         self.workspace = Path(workspace).resolve()
         self.workspace_identity = (workspace_identity if workspace_identity is not None
                                    else _workspace_identity(self.workspace))
-        # Kept for older callers; a requested output is a task requirement, not a tool allowlist.
         self.output_path = output_path
-        self._receipts = {}
-        self.publication_guard = None
+        self._receipt = None
         self.spec = ToolSpec(
             name='write_file',
-            description='Choose a workspace-relative filename and create it after approval. Each call creates one new file; never overwrite.',
+            description='Create the user-specified report after approval; never overwrite a file.',
             input_schema={
                 'type': 'object',
                 'properties': {'path': {'type': 'string'}, 'content': {'type': 'string'}},
@@ -96,6 +94,7 @@ class WriteFile:
         if (not isinstance(arguments, dict) or set(arguments) != {'path', 'content'}
                 or not required <= set(data) <= required | {'cleanup_warning'}
                 or data.get('path') != arguments.get('path')
+                or data.get('path') != self.output_path
                 or data.get('operation') != 'created'
                 or type(data.get('bytes')) is not int):
             raise ValueError('invalid write receipt')
@@ -105,10 +104,9 @@ class WriteFile:
                 or ('cleanup_warning' in data and data['cleanup_warning'] != _CLEANUP_WARNING)):
             raise ValueError('write receipt does not match approved content')
         core = {key: data[key] for key in required}
-        receipt = self._receipts.get(arguments['path'])
-        stored = ({key: value for key, value in receipt.items() if key != 'ok'}
-                  if receipt is not None else None)
-        if core != stored:
+        stored = ({key: value for key, value in self._receipt.items() if key != 'ok'}
+                  if self._receipt is not None else None)
+        if stored is not None and core != stored:
             raise ValueError('write receipt does not match published receipt')
         return dict(data)
 
@@ -131,7 +129,7 @@ class WriteFile:
                 or not isinstance(arguments['content'], str)):
             return _error('INVALID_ARGUMENT')
         path, content = arguments['path'], arguments['content']
-        if _path_parts(path) is None:
+        if path != self.output_path or _path_parts(path) is None:
             return _error('PATH_DENIED')
         if Path(path).suffix not in {'.md', '.txt'}:
             return _error('UNSUPPORTED_FILE')
@@ -143,7 +141,7 @@ class WriteFile:
             return _error('FILE_TOO_LARGE')
         if any((ord(char) < 32 and char not in '\t\r\n') or ord(char) == 127 for char in content):
             return _error('UNSUPPORTED_FILE')
-        if path in self._receipts:
+        if self._receipt is not None:
             return _error('OUTPUT_LIMIT')
         return WriteCandidate(path, raw)
 
@@ -169,8 +167,6 @@ class WriteFile:
         candidate = self._prepare(arguments)
         if isinstance(candidate, dict):
             return candidate
-        if self.publication_guard is not None and self.publication_guard(candidate.path):
-            return _error('WRITE_OUTCOME_UNKNOWN')
         parts = _path_parts(candidate.path)
         try:
             directory_fd = self._open_parent(parts)
@@ -200,8 +196,6 @@ class WriteFile:
             return prepared
         if not isinstance(candidate, WriteCandidate) or candidate != prepared:
             return _error('INVALID_ARGUMENT')
-        if self.publication_guard is not None and self.publication_guard(candidate.path):
-            return _error('WRITE_OUTCOME_UNKNOWN')
         parts = _path_parts(candidate.path)
         directory_fd = temporary_fd = None
         temporary_name = None
@@ -269,7 +263,7 @@ class WriteFile:
                 os.link(temporary_name, parts[-1], src_dir_fd=directory_fd,
                         dst_dir_fd=directory_fd, follow_symlinks=False)
                 # Publication is final: cancellation and cleanup must not erase this receipt.
-                self._receipts[candidate.path] = receipt
+                self._receipt = receipt
                 result = dict(receipt)
                 return result
 

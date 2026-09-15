@@ -30,7 +30,7 @@ IDENTIFIER_REPAIR = '''上一条回答中的标识连接符与本次已读原文
 
 USER_REJECTION_FINAL = '''本轮操作已经被用户拒绝（USER_REJECTED），现在只能做一次最终收尾。
 不要再调用任何工具。只输出策略要求的严格 JSON；status 必须是 unable，citations 必须是空数组。
-answer 说明本次被拒绝的输出未创建；若先前已有创建回执，明确那些文件已经保留，不能说全部文件都未创建。不要复述资料事实，也不要建议改名或改路径重试。'''
+answer 只说明用户拒绝了操作、请求的输出没有创建；不要复述资料事实，也不要建议改名或改路径重试。'''
 
 
 @dataclass(frozen=True)
@@ -396,9 +396,7 @@ class Runtime:
                     return finish(state, stop_code)
                 if decision == 'finalize_only':
                     finalize_only, final_reason = True, stop_code
-                    artifacts = engine.policy.result_fields().get('artifacts', [])
-                    messages.append({'role': 'user', 'content': USER_REJECTION_FINAL
-                        + '\n本轮已实际创建的文件回执：' + json.dumps(artifacts, ensure_ascii=False)})
+                    messages.append({'role': 'user', 'content': USER_REJECTION_FINAL})
             if finalize_only:
                 return finish('unable', final_reason)
             return finish('max_steps', 'MAX_STEPS')

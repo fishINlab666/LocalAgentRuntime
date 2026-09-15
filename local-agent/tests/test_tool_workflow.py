@@ -13,7 +13,7 @@ from local_agent.file_tools import adapt_tools
 from local_agent.files import ReadFile
 from local_agent.provider import ProviderError
 from local_agent.runtime import Runtime, RunConfig
-from local_agent.tool_runtime import ToolRegistry, ToolSpec
+from local_agent.tool_runtime import ToolSpec
 from local_agent.trace import Trace
 from test_runtime import ScriptedProvider, call_message, final_message
 
@@ -21,13 +21,6 @@ from test_runtime import ScriptedProvider, call_message, final_message
 def write_request(call_id='write'):
     return call_message(call_id, name='write_file', arguments=json.dumps({
         'path': 'report.md', 'content': '代号：orange-731\n', 'intent': '生成核对报告'}))
-
-
-def install_test_writer(engine, writer):
-    engine.registry = ToolRegistry(
-        [engine.registry.get(schema['function']['name']) for schema in engine.registry.schemas()
-         if schema['function']['name'] != 'write_file'], summary=engine.policy.result_fields)
-    engine.registry.register(writer)
 
 
 class MemoryWriter:
@@ -152,7 +145,7 @@ class WorkflowTests(unittest.TestCase):
         self.engine = adapt_tools(ReadFile(self.workspace, {'a.md'}))
         self.engine.policy.output_path = 'report.md'
         self.writer = MemoryWriter()
-        install_test_writer(self.engine, self.writer)
+        self.engine.registry.register(self.writer)
         self.trace = Trace(self.root / 'runs', self.workspace)
         self.cancel = threading.Event()
 
@@ -247,7 +240,7 @@ class WorkflowTests(unittest.TestCase):
                 engine = adapt_tools(ReadFile(self.workspace, {'a.md'}))
                 engine.policy.output_path = 'report.md'
                 writer = MemoryWriter()
-                install_test_writer(engine, writer)
+                engine.registry.register(writer)
                 self.engine, self.writer = engine, writer
                 self.cancel = threading.Event()
                 self.trace = Trace(self.root / 'runs', self.workspace)
@@ -279,7 +272,7 @@ class WorkflowTests(unittest.TestCase):
         self.engine = adapt_tools(ReadFile(self.workspace, {'a.md'}))
         self.engine.policy.output_path = 'report.md'
         self.writer = ValidateSuccessWriter()
-        install_test_writer(self.engine, self.writer)
+        self.engine.registry.register(self.writer)
         result, _ = self.run_script([write_request()])
         self.assertEqual(result['stop_reason'], 'TOOL_RESULT_INVALID')
         self.assertEqual(result['artifacts'], [])
@@ -294,7 +287,7 @@ class WorkflowTests(unittest.TestCase):
         self.engine = adapt_tools(ReadFile(self.workspace, {'a.md'}))
         self.engine.policy.output_path = 'report.md'
         self.writer = MutatingValidateWriter()
-        install_test_writer(self.engine, self.writer)
+        self.engine.registry.register(self.writer)
         result, _ = self.run_script([call_message(), write_request(), final_message()])
         self.assertEqual(result['state'], 'completed')
         self.assertEqual(self.writer.commits, [{
@@ -304,7 +297,7 @@ class WorkflowTests(unittest.TestCase):
         self.engine = adapt_tools(ReadFile(self.workspace, {'a.md'}))
         self.engine.policy.output_path = 'report.md'
         self.writer = WrongReceiptWriter()
-        install_test_writer(self.engine, self.writer)
+        self.engine.registry.register(self.writer)
         result, _ = self.run_script([call_message(), write_request()])
         self.assertEqual(result['stop_reason'], 'WRITE_OUTCOME_UNKNOWN')
         self.assertEqual(result['artifacts'], [])
@@ -313,7 +306,7 @@ class WorkflowTests(unittest.TestCase):
         self.engine = adapt_tools(ReadFile(self.workspace, {'a.md'}))
         self.engine.policy.output_path = 'report.md'
         self.writer = BypassPublishWriter()
-        install_test_writer(self.engine, self.writer)
+        self.engine.registry.register(self.writer)
         result, _ = self.run_script([write_request()])
         self.assertEqual(result['stop_reason'], 'TOOL_RESULT_INVALID')
         self.assertEqual(result['artifacts'], [])
@@ -322,7 +315,7 @@ class WorkflowTests(unittest.TestCase):
         self.engine = adapt_tools(ReadFile(self.workspace, {'a.md'}))
         self.engine.policy.output_path = 'report.md'
         self.writer = RaisesAfterPublishWriter()
-        install_test_writer(self.engine, self.writer)
+        self.engine.registry.register(self.writer)
         result, provider = self.run_script([call_message(), write_request(), final_message()])
         self.assertEqual(result['state'], 'completed')
         self.assertEqual(len(result['artifacts']), 1)
@@ -340,7 +333,7 @@ class WorkflowTests(unittest.TestCase):
             return original_accept(name, arguments, result)
         self.engine.policy.accept = accept
         self.writer = DoublePublishWriter()
-        install_test_writer(self.engine, self.writer)
+        self.engine.registry.register(self.writer)
         result, _ = self.run_script([call_message(), write_request(), final_message()])
         self.assertEqual(result['state'], 'completed')
         self.assertEqual(len(self.writer.commits), 1)
@@ -351,7 +344,7 @@ class WorkflowTests(unittest.TestCase):
         self.engine = adapt_tools(ReadFile(self.workspace, {'a.md'}))
         self.engine.policy.output_path = 'report.md'
         self.writer = MisleadingPreviewWriter()
-        install_test_writer(self.engine, self.writer)
+        self.engine.registry.register(self.writer)
         result, _ = self.run_script([write_request()])
         self.assertEqual(result['stop_reason'], 'TOOL_RESULT_INVALID')
         self.assertEqual(self.writer.commits, [])

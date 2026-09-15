@@ -62,16 +62,6 @@ class WriteFileTests(unittest.TestCase):
         self.assertIs(result['ok'], True)
         self.assertEqual(self.output.read_bytes(), original['content'].encode('utf-8'))
 
-    def test_unknown_publication_guard_is_checked_again_before_commit(self):
-        self.writer.publication_guard = lambda path: False
-        self.assertIsNone(self.writer.validate(self.arguments))
-        candidate = self.writer.execute(self.arguments)
-        checked = []
-        self.writer.publication_guard = lambda path: checked.append(path) or True
-        self.assert_error(self.writer.commit(self.arguments, candidate), 'WRITE_OUTCOME_UNKNOWN')
-        self.assertEqual(checked, ['report.md'])
-        self.assertEqual(list(self.root.iterdir()), [])
-
     def test_created_receipt_matches_actual_file_and_no_temp_remains(self):
         result = self.publish()
         raw = self.output.read_bytes()
@@ -82,13 +72,13 @@ class WriteFileTests(unittest.TestCase):
         self.assertEqual(list(self.root.iterdir()), [self.output])
         self.assertEqual(self.output.stat().st_nlink, 1)
 
-    def test_exact_argument_schema_and_workspace_relative_path_are_required(self):
+    def test_exact_argument_schema_and_output_path_are_required(self):
         for arguments in [None, [], {}, {'path': 'report.md'},
                           {'path': 1, 'content': 'text'}, {'path': 'report.md', 'content': b'x'},
                           {**self.arguments, 'overwrite': True}, {**self.arguments, 'intent': 'x'}]:
             with self.subTest(arguments=arguments):
                 self.assert_error(self.writer.validate(arguments), 'INVALID_ARGUMENT')
-        self.assertIsNone(self.writer.validate({'path': 'another.md', 'content': 'x'}))
+        self.assert_error(self.writer.validate({'path': 'another.md', 'content': 'x'}), 'PATH_DENIED')
         paths = ['', '../outside.md', str(self.output), './report.md', '.hidden.md',
                  'docs//report.md', 'docs/.hidden/report.md', 'docs\\report.md']
         for path in paths:
@@ -166,19 +156,7 @@ class WriteFileTests(unittest.TestCase):
         self.assert_error(self.writer.commit(self.arguments, candidate), 'FILE_EXISTS')
         self.assertEqual(self.output.read_bytes(), b'created while waiting for approval')
 
-    def test_model_selects_multiple_paths_and_receipts_remain_bound_to_each_file(self):
-        (self.root / 'notes').mkdir()
-        first = {'path': 'summary.md', 'content': '# 概要\n'}
-        second = {'path': 'notes/actions.txt', 'content': '待办：核对验收\n'}
-        receipts = [self.publish(arguments=first), self.publish(arguments=second)]
-        for arguments, receipt in zip((first, second), receipts):
-            self.assertTrue(receipt['ok'], receipt)
-            self.assertEqual((self.root / arguments['path']).read_bytes(), arguments['content'].encode())
-            self.writer.verify_success(arguments, {k: v for k, v in receipt.items() if k != 'ok'})
-        with self.assertRaises(ValueError):
-            self.writer.verify_success(first, {k: v for k, v in receipts[1].items() if k != 'ok'})
-
-    def test_same_path_cannot_be_published_twice_even_if_first_file_is_removed(self):
+    def test_second_success_is_forbidden_even_if_first_file_is_removed(self):
         self.assertIs(self.publish()['ok'], True)
         self.output.unlink()
         self.assert_error(self.writer.validate(self.arguments), 'OUTPUT_LIMIT')
