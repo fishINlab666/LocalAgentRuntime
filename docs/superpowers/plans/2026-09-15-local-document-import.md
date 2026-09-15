@@ -12,7 +12,7 @@
 
 ## §0 当前进度与停止条件
 
-2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过；Task 7 已在 commit `06e4bfe` 完成，导入会话的预声明输出只写独立 `artifacts/`，一次成功、审批、禁止改名/覆盖、真实回执、未知写入恢复和受权下载均已接通。Task 8 已在 commit `417a579` 完成，SQLite、受管资料与 Artifact 作为一个清单约束的目录原子备份，恢复到不存在的 State Store 时重绑目录身份并全量验真；24 项备份/CLI 定向测试、89 项共享链路测试及最终 647 项 Python 回归通过，限定安全 Gate 通过。下一步执行 Task 9，只接入受限 HTTP 导入协议，不提前开发上传页面。
+2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过；Task 7 已在 commit `06e4bfe` 完成，导入会话的预声明输出只写独立 `artifacts/`，一次成功、审批、禁止改名/覆盖、真实回执、未知写入恢复和受权下载均已接通。Task 8 已在 commit `417a579` 完成，SQLite、受管资料与 Artifact 作为一个清单约束的目录原子备份，恢复到不存在的 State Store 时重绑目录身份并全量验真；24 项备份/CLI 定向测试、89 项共享链路测试及最终 647 项 Python 回归通过，限定安全 Gate 通过。Task 9 已在 commit `d153368` 完成，受限 HTTP 导入、Agent 隔离、单 worker、幂等重放、失败重试及受限 Session 摘要已接通；11 项导入 HTTP 测试和 55 项 Web 回归通过，限定安全 Gate 通过。下一步执行 Task 10，只完成已确认的页面导入交互。
 
 本批完成条件：Task 1–10 的定向测试、完整 Python 回归和既有浏览器回归通过；Task 11 的固定混合资料闭环证明“导入 → 搜索 → 读取 → ToolCall 结果进入下一轮 → 原始位置引用 → 重启追问 → 隔离与恢复”。离线证据全部通过后，最多执行一个真实 DeepSeek 会话、2 个 Run、12 次模型请求；任一核心失败立即停止并保留证据。达到条件后不增加 OCR、同步、资料删除、向量检索或新格式。
 
@@ -917,7 +917,7 @@ git commit -m "Back up and restore managed imports"
 - Modify: `local-agent/local_agent/web_runs.py:678-697`
 - Create: `local-agent/tests/test_import_web.py`
 
-- [ ] **Step 1: 写真实 loopback 上传、轮询、取消与认证失败测试**
+- [x] **Step 1: 写真实 loopback 上传、轮询、取消与认证失败测试**
 
 使用 `http.client` 直接发送 JSON 和 bytes：
 
@@ -936,7 +936,7 @@ self.assertTrue(ready['session_id'])
 
 覆盖：元数据 128 KiB/128 KiB+1，其他 JSON 仍 16 KiB，缺/错 `Content-Length`，chunked、错误 Content-Type、Host/Origin/token/Agent、重复 slot/complete、另一 Agent 访问、解析失败模型调用 0、并行第二个 finalize 409、取消后 staging 删除、server close 回收 worker。
 
-- [ ] **Step 2: 运行并确认路由不存在**
+- [x] **Step 2: 运行并确认路由不存在**
 
 Run:
 
@@ -947,19 +947,19 @@ PYTHONPATH=. .venv/bin/python -W error::ResourceWarning -m unittest tests.test_i
 
 Expected: `/api/imports` 返回 404 或路由断言 FAIL。
 
-- [ ] **Step 3: 在 JSON 通用分支之前实现导入路由解析**
+- [x] **Step 3: 在 JSON 通用分支之前实现导入路由解析**
 
 `Handler.dispatch()` 先识别导入路径：begin 只读最大 128 KiB JSON；slot 只接受 `application/octet-stream`、单一十进制 `Content-Length` 且拒绝 `Transfer-Encoding`；complete/cancel 使用既有小 JSON；snapshot 用 GET。所有路径先经过现有 `authorize(api=True)`，再固定核对 batch 的 Agent ID。异常只返回设计稿稳定 code，不返回路径或堆栈。
 
 `WebRuns.config()` 增加稳定的 `imports` 能力对象，列出四种格式的 parser availability 和设计中的数量/大小上限；begin 在读取正文前再次拒绝当前不可用的 PDF/DOCX parser。Session 详情在 `import_id` 有效时附加受限 import 摘要，包括逻辑路径、格式、bytes/hash、页/段/表格统计、警告和块数，不返回 originals 路径、State Store 绝对路径或位置表全文。
 
-- [ ] **Step 4: 在 `WebRuns` 编排单个 finalize worker**
+- [x] **Step 4: 在 `WebRuns` 编排单个 finalize worker**
 
 新增 `import_jobs`，以及 `begin_import(data)`、`upload_import_file(import_id, slot_id, stream, content_length)`、`complete_import(import_id)`、`import_snapshot(import_id)`、`cancel_import(import_id)` 五个明确方法；分别只调用同名 ImportStore 操作并转换 Web 错误，不复制校验逻辑。
 
 complete worker 依次运行 publish、`SessionService.attach_import()`，再发布 ready snapshot；用一把锁保证同服务最多一个活跃解析。`close()` 取消并 join worker、关闭线程连接。HTTP 状态固定为 201/200/202/409/413/415/422/503，并由测试逐项锁定。
 
-- [ ] **Step 5: 跑 HTTP 与既有 Web 回归并提交**
+- [x] **Step 5: 跑 HTTP 与既有 Web 回归并提交**
 
 Run:
 
@@ -978,6 +978,8 @@ git add local-agent/local_agent/web.py local-agent/local_agent/web_runs.py \
   local-agent/tests/test_import_web.py
 git commit -m "Expose managed document import endpoints"
 ```
+
+Actual: commit `d153368`。11 项 `test_import_web` 与包含审批入口的 55 项 Web 回归通过；解析失败不创建 Session、模型调用为 0，关联失败和 worker 启动失败均有可停止且可重试的 HTTP 状态。限定安全 Gate PASS。
 
 ### Task 10: 完成页面导入交互
 
