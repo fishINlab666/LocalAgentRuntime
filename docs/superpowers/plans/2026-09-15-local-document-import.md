@@ -12,7 +12,7 @@
 
 ## §0 当前进度与停止条件
 
-2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过；Task 7 已在 commit `06e4bfe` 完成，导入会话的预声明输出只写独立 `artifacts/`，一次成功、审批、禁止改名/覆盖、真实回执、未知写入恢复和受权下载均已接通。Task 8 已在 commit `417a579` 完成，SQLite、受管资料与 Artifact 作为一个清单约束的目录原子备份，恢复到不存在的 State Store 时重绑目录身份并全量验真；24 项备份/CLI 定向测试、89 项共享链路测试及最终 647 项 Python 回归通过，限定安全 Gate 通过。Task 9 已在 commit `d153368` 完成，受限 HTTP 导入、Agent 隔离、单 worker、幂等重放、失败重试及受限 Session 摘要已接通；11 项导入 HTTP 测试和 55 项 Web 回归通过，限定安全 Gate 通过。下一步执行 Task 10，只完成已确认的页面导入交互。
+2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过；Task 7 已在 commit `06e4bfe` 完成，导入会话的预声明输出只写独立 `artifacts/`，一次成功、审批、禁止改名/覆盖、真实回执、未知写入恢复和受权下载均已接通。Task 8 已在 commit `417a579` 完成，SQLite、受管资料与 Artifact 作为一个清单约束的目录原子备份，恢复到不存在的 State Store 时重绑目录身份并全量验真；24 项备份/CLI 定向测试、89 项共享链路测试及最终 647 项 Python 回归通过，限定安全 Gate 通过。Task 9 已在 commit `d153368` 完成，受限 HTTP 导入、Agent 隔离、单 worker、幂等重放、失败重试及受限 Session 摘要已接通；11 项导入 HTTP 测试和 55 项 Web 回归通过，限定安全 Gate 通过。Task 10 已在 commit `6d7ddc7` 完成，文件／文件夹预检、顺序原始字节上传、取消与刷新恢复、兼容 Agent、成功后的 Session 身份核验、来源事实和响应式交互已接通；六组浏览器回归通过，三路限定终审通过。下一步执行 Task 11 的固定离线闭环和最终 Gate；只有离线证据通过后才进入一次受限真实 DeepSeek 验收。
 
 本批完成条件：Task 1–10 的定向测试、完整 Python 回归和既有浏览器回归通过；Task 11 的固定混合资料闭环证明“导入 → 搜索 → 读取 → ToolCall 结果进入下一轮 → 原始位置引用 → 重启追问 → 隔离与恢复”。离线证据全部通过后，最多执行一个真实 DeepSeek 会话、2 个 Run、12 次模型请求；任一核心失败立即停止并保留证据。达到条件后不增加 OCR、同步、资料删除、向量检索或新格式。
 
@@ -991,7 +991,7 @@ Actual: commit `d153368`。11 项 `test_import_web` 与包含审批入口的 55 
 - Create: `local-agent/tests/browser_imports.cjs`
 - Modify: `local-agent/tests/browser_workbench.cjs`
 
-- [ ] **Step 1: 写浏览器预检、上传、取消、焦点和迟到响应失败断言**
+- [x] **Step 1: 写浏览器预检、上传、取消、焦点和迟到响应失败断言**
 
 `browser_imports.cjs` 加载真实静态文件并拦截 HTTP；使用 `setInputFiles()` 选择 MD/TXT/PDF/DOCX 和 PNG，断言：
 
@@ -1009,7 +1009,7 @@ assert.equal(await page.locator('#question').evaluate(node => node === document.
 
 再覆盖文件夹的 `webkitRelativePath`、关闭后焦点归还、取消 AbortController + 服务端 cancel、刷新不重复 complete、上一导入迟到轮询丢弃、恶意文件名用 textContent、兼容助手过滤、parser unavailable、导入引用位置展示，以及下载按钮确实用认证 fetch 获取 Blob；检查 320/375/768/1024/1440px 无横向滚动和隐藏面板不可 Tab。
 
-- [ ] **Step 2: 运行并确认页面节点不存在**
+- [x] **Step 2: 运行并确认页面节点不存在**
 
 Run:
 
@@ -1022,11 +1022,11 @@ env NODE_PATH=/Users/wujingyu/.cache/codex-runtimes/codex-primary-runtime/depend
 
 Expected: `#import-trigger` 或导入面板断言 FAIL。
 
-- [ ] **Step 3: 增加导入面板语义结构**
+- [x] **Step 3: 增加导入面板语义结构**
 
 左栏会话区加入“导入资料”按钮；dialog 内包含独立 `#import-files[multiple][accept]` 与 `#import-directory[webkitdirectory][multiple]`、会话名称、兼容助手、预检表、忽略列表、隐私说明、开始/取消按钮和 `aria-live` 进度。不要把文件名或 parser 错误写入 `innerHTML`。
 
-- [ ] **Step 4: 实现浏览器状态机和二进制上传**
+- [x] **Step 4: 实现浏览器状态机和二进制上传**
 
 ```javascript
 let importGeneration = 0;
@@ -1049,7 +1049,7 @@ async function pollImport(importId, generation) {
 
 页面先本地重算格式、逻辑路径、数量和大小，再提交 metadata；逐 slot 上传并显示数量；complete 只发送一次。成功后刷新 Session 列表、选择返回的 Session ID、关闭面板、聚焦 Composer，并在右栏展示来源路径、hash、页/段统计、警告和块数。取消同时 abort 当前 fetch 并调用服务端 cancel。
 
-- [ ] **Step 5: 跑新旧浏览器回归并提交**
+- [x] **Step 5: 跑新旧浏览器回归并提交**
 
 Run:
 
