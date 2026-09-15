@@ -1,9 +1,11 @@
 """Loopback web orchestration for one-shot runs and durable sessions."""
 
 import copy
+import importlib.util
 import json
 import os
 from pathlib import Path
+import sqlite3
 import threading
 import time
 import uuid
@@ -12,11 +14,13 @@ from .files import ReadFile
 from .discovery import DirectoryTools
 from .approvals import ApprovalBroker, ApprovalError, RunControl
 from .file_tools import adapt_tools
+from .imports import ImportStoreError
 from .provider import ProviderError
 from .runtime import Runtime
 from .session_store import SessionStore, StoreError
 from .sessions import RunSubmission, SessionError, SessionScope, SessionService
 from .trace import Trace
+from .state_maintenance import StateBusy
 
 
 class WebError(Exception):
@@ -44,6 +48,37 @@ def _session_web_error(error: SessionError | StoreError) -> WebError:
         "WORKSPACE_CHANGED", "WORKSPACE_NOT_FOUND"
     } else code
     return WebError(status, public_code)
+
+
+def _import_web_error(error) -> WebError:
+    code = getattr(error, "code", "IMPORT_STORAGE_FAILED")
+    status = {
+        "IMPORT_NOT_FOUND": 404,
+        "IMPORT_SLOT_NOT_FOUND": 404,
+        "IMPORT_STATE_CONFLICT": 409,
+        "IMPORT_SLOT_ALREADY_STORED": 409,
+        "IMPORT_UPLOAD_INCOMPLETE": 409,
+        "IMPORT_NOT_READY": 409,
+        "IMPORT_CANCELLED": 409,
+        "IMPORT_INTEGRITY_ERROR": 409,
+        "IMPORT_UNAVAILABLE": 409,
+        "STATE_BUSY": 409,
+        "IMPORT_LIMIT_EXCEEDED": 413,
+        "IMPORT_FORMAT_UNSUPPORTED": 415,
+        "IMPORT_REQUEST_INVALID": 422,
+        "IMPORT_PATH_INVALID": 422,
+        "IMPORT_LENGTH_MISMATCH": 422,
+        "TEXT_INVALID_UTF8": 422,
+        "TEXT_INVALID_CHARACTER": 422,
+        "PDF_TEXT_NOT_FOUND": 422,
+        "PDF_ENCRYPTED": 422,
+        "DOCUMENT_CORRUPT": 422,
+        "DOCUMENT_LIMIT_EXCEEDED": 422,
+        "DOCUMENT_PARSER_UNAVAILABLE": 503,
+        "IMPORT_STORAGE_FAILED": 503,
+        "SESSION_STORE_ERROR": 503,
+    }.get(code, 503)
+    return WebError(status, code)
 
 
 class LiveTrace(Trace):
@@ -77,6 +112,8 @@ class WebRuns:
         self.lock = threading.RLock()
         self.jobs = {}  # Compatibility-only one-shot history.
         self.session_jobs = {}  # Durable sessions keep only in-flight controls here.
+        self.import_jobs = {}  # At most one managed-document parser is active.
+        self.import_failures = {}  # HTTP terminal view for retryable link failures.
         self.closed = False
         self._store_closed = False
 
@@ -117,6 +154,7 @@ class WebRuns:
         except Exception:
             self.store.close()
             raise
+        self.store.close_thread_connection()
 
     def _workspace_available(self) -> bool:
         try:
@@ -179,6 +217,214 @@ class WebRuns:
                 "state": record.state, "phase": record.phase,
                 "stop_reason": record.stop_reason,
                 "started_at": record.started_at, "finished_at": record.finished_at}
+
+    @staticmethod
+    def _import_file_data(record):
+        return {
+            "slot_id": record.slot_id,
+            "logical_path": record.logical_path,
+            "extension": record.extension,
+            "declared_bytes": record.declared_bytes,
+            "upload_state": record.upload_state,
+        }
+
+    @classmethod
+    def _import_data(cls, record):
+        files = tuple(record.files)
+        return {
+            "id": record.id,
+            "status": record.status,
+            "files": [cls._import_file_data(item) for item in files],
+            "job_id": getattr(record, "job_id", None),
+            "session_id": getattr(record, "session_id", None),
+            "error_code": getattr(record, "error_code", None),
+            "total_files": getattr(record, "total_files", len(files)),
+            "stored_files": getattr(
+                record, "stored_files",
+                sum(item.upload_state == "stored" for item in files),
+            ),
+        }
+
+    @staticmethod
+    def _receipt_data(record):
+        return {
+            "import_id": record.import_id,
+            "source_id": record.source_id,
+            "bytes": record.bytes,
+            "sha256": record.sha256,
+        }
+
+    @staticmethod
+    def _parser_available(extension):
+        module = {".pdf": "pypdf", ".docx": "docx"}.get(extension)
+        if module is None:
+            return True
+        try:
+            return importlib.util.find_spec(module) is not None
+        except (ImportError, AttributeError, ValueError):
+            return False
+
+    def _require_import_agent(self, import_id, agent_id):
+        if not isinstance(agent_id, str) or not agent_id:
+            raise WebError(404, "NOT_FOUND")
+        try:
+            row = self.store.connection().execute(
+                "SELECT agent_id,request_json FROM imports WHERE id=?", (import_id,)
+            ).fetchone()
+        except (sqlite3.Error, StoreError):
+            raise WebError(503, "IMPORT_STORAGE_FAILED") from None
+        if row is None or row[0] != agent_id:
+            raise WebError(404, "NOT_FOUND")
+        try:
+            request = json.loads(row[1])
+        except (TypeError, ValueError, UnicodeError):
+            raise WebError(409, "IMPORT_INTEGRITY_ERROR") from None
+        return request
+
+    def _require_import_agent_definition(self, agent_id):
+        try:
+            agent = self.agent_catalog.get(agent_id)
+            if not self.agent_catalog.is_enabled(agent.id):
+                raise WebError(409, "AGENT_DISABLED")
+            if agent.strategy not in {"directory", "combined"} or not {
+                "list_files", "read_file", "search_documents"
+            }.issubset(agent.tools):
+                raise WebError(422, "AGENT_CONFIG_INVALID")
+            return agent
+        except WebError:
+            raise
+        except AgentError:
+            raise WebError(404, "NOT_FOUND") from None
+
+    def begin_import(self, data, agent_id):
+        if (not isinstance(data, dict)
+                or not isinstance(data.get("agent_id"), str)):
+            raise WebError(422, "IMPORT_REQUEST_INVALID")
+        if not isinstance(agent_id, str) or data["agent_id"] != agent_id:
+            raise WebError(404, "NOT_FOUND")
+        self._require_import_agent_definition(agent_id)
+        files = data.get("files")
+        if isinstance(files, list):
+            for item in files:
+                path = item.get("logical_path") if isinstance(item, dict) else None
+                extension = Path(path).suffix.casefold() if isinstance(path, str) else None
+                if extension in {".pdf", ".docx"} and not self._parser_available(extension):
+                    raise WebError(503, "DOCUMENT_PARSER_UNAVAILABLE")
+        try:
+            return self._import_data(self.service.imports.begin(data))
+        except (ImportStoreError, StateBusy, StoreError) as error:
+            raise _import_web_error(error) from None
+
+    def upload_import_file(self, import_id, slot_id, stream, content_length, agent_id):
+        self._require_import_agent(import_id, agent_id)
+        try:
+            receipt = self.service.imports.add_file(
+                import_id, slot_id, stream, content_length
+            )
+            return self._receipt_data(receipt)
+        except (ImportStoreError, StateBusy, StoreError) as error:
+            raise _import_web_error(error) from None
+
+    def import_snapshot(self, import_id, agent_id):
+        self._require_import_agent(import_id, agent_id)
+        try:
+            snapshot = self.service.imports.snapshot(import_id)
+        except (ImportStoreError, StateBusy, StoreError) as error:
+            raise _import_web_error(error) from None
+        data = self._import_data(snapshot)
+        with self.lock:
+            active = import_id in self.import_jobs
+            failure = self.import_failures.get(import_id)
+        if snapshot.status == "finalizing" and not active:
+            failure = failure or snapshot.error_code
+            if failure:
+                data["status"] = "failed"
+                data["error_code"] = failure
+        return data
+
+    def _record_import_failure(self, import_id, code):
+        with self.lock:
+            self.import_failures[import_id] = code
+        try:
+            with self.store.transaction() as connection:
+                connection.execute(
+                    "UPDATE imports SET error_code=?,updated_at=? "
+                    "WHERE id=? AND status='finalizing'",
+                    (code, time.time(), import_id),
+                )
+        except (sqlite3.Error, StoreError):
+            pass
+
+    @staticmethod
+    def _start_import_worker(thread):
+        thread.start()
+
+    def _execute_import(self, import_id, job, request, record):
+        try:
+            published = job.run()
+            self.service.attach_import(published, request)
+        except (ImportStoreError, SessionError, StoreError, StateBusy) as error:
+            code = getattr(error, "code", "IMPORT_STORAGE_FAILED")
+            self._record_import_failure(import_id, code)
+        except Exception:
+            self._record_import_failure(import_id, "IMPORT_STORAGE_FAILED")
+        finally:
+            self.store.close_thread_connection()
+            with self.lock:
+                if self.import_jobs.get(import_id) is record:
+                    self.import_jobs.pop(import_id, None)
+
+    def complete_import(self, import_id, agent_id):
+        request = self._require_import_agent(import_id, agent_id)
+        with self.lock:
+            if self.closed:
+                raise WebError(503, "SERVER_STOPPING")
+            active = self.import_jobs.get(import_id)
+            if active is not None:
+                return self.import_snapshot(import_id, agent_id), True
+            if self.import_jobs:
+                raise WebError(409, "IMPORT_STATE_CONFLICT")
+            try:
+                current = self.service.imports.snapshot(import_id)
+                if current.status == "ready":
+                    return self._import_data(current), False
+                self._require_import_agent_definition(agent_id)
+                if current.status == "finalizing" and (
+                        current.error_code is not None
+                        or import_id in self.import_failures):
+                    with self.store.transaction() as connection:
+                        connection.execute(
+                            "UPDATE imports SET error_code=NULL,updated_at=? "
+                            "WHERE id=? AND status='finalizing'",
+                            (time.time(), import_id),
+                        )
+                    self.import_failures.pop(import_id, None)
+                job = self.service.imports.start_finalize(import_id)
+            except (ImportStoreError, StateBusy, StoreError) as error:
+                raise _import_web_error(error) from None
+            record = {"job": job, "thread": None}
+            thread = threading.Thread(
+                target=self._execute_import,
+                args=(import_id, job, request, record),
+                daemon=False,
+            )
+            record["thread"] = thread
+            self.import_jobs[import_id] = record
+            try:
+                self._start_import_worker(thread)
+            except (OSError, RuntimeError):
+                if self.import_jobs.get(import_id) is record:
+                    self.import_jobs.pop(import_id, None)
+                self._record_import_failure(import_id, "IMPORT_STORAGE_FAILED")
+                raise WebError(503, "IMPORT_STORAGE_FAILED") from None
+            return self._import_data(self.service.imports.snapshot(import_id)), True
+
+    def cancel_import(self, import_id, agent_id):
+        self._require_import_agent(import_id, agent_id)
+        try:
+            return self._import_data(self.service.imports.cancel(import_id))
+        except (ImportStoreError, StateBusy, StoreError) as error:
+            raise _import_web_error(error) from None
 
     def require_agent_session(self, session_id, agent_id):
         record = self._require_session(session_id)
@@ -273,11 +519,26 @@ class WebRuns:
 
     def config(self):
         available = self._workspace_available()
+        imports = self.service.imports
+        import_limits = {
+            key: imports.limits[key] for key in (
+                "max_items", "max_files", "max_file_bytes", "max_total_bytes",
+                "max_chunks", "max_index_bytes", "max_extracted_total_bytes",
+            )
+        }
         with self.lock:
             result = {'workspace': str(self.workspace), 'latest_run_id': next(reversed(self.jobs), None),
                       'ready': False, 'provider': None, 'error': None,
                       'workspace_available': available,
                       'selected_session_id': self.selected_session_id,
+                      'imports': {
+                          'formats': [
+                              {'extension': extension,
+                               'available': self._parser_available(extension)}
+                              for extension in ('.md', '.txt', '.pdf', '.docx')
+                          ],
+                          'limits': import_limits,
+                      },
                       'example_file': ('demo-note.md' if available
                                        and (self.workspace / 'demo-note.md').is_file() else None)}
         try:
@@ -493,7 +754,32 @@ class WebRuns:
         return {"session": self._session_data(record)}
 
     def session_view(self, session_id):
-        return {"session": self._session_data(self._require_session(session_id))}
+        record = self._require_session(session_id)
+        data = self._session_data(record)
+        if record.import_id is not None:
+            try:
+                workspace = self.service.imports.open(record.import_id)
+                files = []
+                for source in workspace.source_records:
+                    parsed = json.loads(source["parser_json"])
+                    files.append({
+                        "logical_path": source["logical_path"],
+                        "format": source["extension"].removeprefix("."),
+                        "bytes": source["declared_bytes"],
+                        "sha256": source["sha256"],
+                        "stats": parsed["stats"],
+                        "warnings": parsed["warnings"],
+                        "chunks": len(parsed["chunks"]),
+                    })
+                data["import"] = {"id": record.import_id, "files": files}
+            except (ImportStoreError, KeyError, TypeError, ValueError) as error:
+                if (isinstance(error, ImportStoreError)
+                        and error.code == "IMPORT_UNAVAILABLE"):
+                    return {"session": data}
+                if isinstance(error, ImportStoreError):
+                    raise _import_web_error(error) from None
+                raise WebError(409, "IMPORT_INTEGRITY_ERROR") from None
+        return {"session": data}
 
     def open_artifact(self, session_id, run_id, artifact_id, agent_id):
         if not isinstance(agent_id, str) or not agent_id:
@@ -720,9 +1006,19 @@ class WebRuns:
                 return
             self.closed = True
             jobs = tuple(self.jobs.values()) + tuple(self.session_jobs.values())
+            import_jobs = tuple(self.import_jobs.items())
         for job in jobs:
             job['control'].cancel_run()
             job['approvals'].close()
+        for import_id, _record in import_jobs:
+            try:
+                self.service.imports.cancel(import_id)
+            except (ImportStoreError, StateBusy, StoreError):
+                pass
+        for _import_id, record in import_jobs:
+            thread = record.get('thread')
+            if thread is not None and thread is not threading.current_thread():
+                thread.join()
         for job in jobs:
             thread = job.get('thread')
             if thread is not None and thread is not threading.current_thread():
