@@ -98,6 +98,7 @@ class SessionRecord:
     agent_id: str = "legacy"
     agent_revision: str = "legacy"
     agent_snapshot: dict = field(default_factory=dict)
+    import_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "agent_snapshot", _freeze(self.agent_snapshot))
@@ -343,6 +344,7 @@ class SessionService:
                 agent_id=row[10],
                 agent_revision=row[11],
                 agent_snapshot=_parse_json_object(row[12]),
+                import_id=row[13],
             )
         except (KeyError, TypeError, ValueError, SessionError) as error:
             if isinstance(error, SessionError) and error.code == "SESSION_STORE_ERROR":
@@ -459,7 +461,7 @@ class SessionService:
                 """SELECT id, title, workspace_path, workspace_device,
                           workspace_inode, scope_json, status, revision,
                           created_at, updated_at, agent_id, agent_revision,
-                          agent_snapshot_json
+                          agent_snapshot_json, import_id
                    FROM sessions WHERE id=?""",
                 (session_id,),
             ).fetchone()
@@ -547,7 +549,7 @@ class SessionService:
                 f"""SELECT id, title, workspace_path, workspace_device,
                            workspace_inode, scope_json, status, revision,
                            created_at, updated_at, agent_id, agent_revision,
-                           agent_snapshot_json
+                           agent_snapshot_json, import_id
                     FROM sessions WHERE {where}
                     ORDER BY updated_at DESC, id DESC LIMIT ?""",
                 parameters,

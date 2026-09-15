@@ -14,8 +14,9 @@ import time
 from typing import Iterator
 import uuid
 
+from .state_maintenance import StateMaintenanceGate
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 SUMMARY_MAX_BYTES = 6 * 1024
 
 _V1_SCHEMA = """
@@ -729,6 +730,7 @@ class SessionStore:
         self._recovery_lock = threading.Lock()
         self._recovered = False
         self._closed = False
+        self.maintenance_gate = StateMaintenanceGate()
 
     @classmethod
     def open(cls, state_dir: Path, *, clock=time.time) -> "SessionStore":
@@ -784,9 +786,12 @@ class SessionStore:
                     connection = self._new_connection()
                     if existed:
                         self._backup_before_migration(connection, version)
-                    if version == 0:
+                    if version < 1:
                         self._migrate_v1(connection)
-                    self._migrate_v2(connection)
+                    if version < 2:
+                        self._migrate_v2(connection)
+                    if version < 3:
+                        self._migrate_v3(connection)
                 except Exception as error:
                     if connection is not None and connection.in_transaction:
                         connection.rollback()
@@ -845,7 +850,7 @@ class SessionStore:
                     scope = json.loads(scope_json)
                     if not isinstance(scope, dict) or scope.get("mode") not in {"file", "directory"}:
                         raise ValueError("invalid legacy session scope")
-                    snapshot = builtin_agent(scope["mode"]).to_dict()
+                    snapshot = builtin_agent(scope["mode"], legacy=True).to_dict()
                     payload = _json_text(snapshot)
                     revision = hashlib.sha256(payload.encode("utf-8")).hexdigest()
                     connection.execute(
@@ -863,6 +868,61 @@ class SessionStore:
                         (snapshot["id"], legacy, session_id),
                     )
             connection.execute("PRAGMA user_version=2")
+        except Exception:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+
+    @staticmethod
+    def _migrate_v3(connection: sqlite3.Connection) -> None:
+        try:
+            if not connection.in_transaction:
+                connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """CREATE TABLE imports (
+                       id TEXT PRIMARY KEY,
+                       request_json TEXT NOT NULL,
+                       request_fingerprint TEXT NOT NULL,
+                       agent_id TEXT NOT NULL,
+                       status TEXT NOT NULL CHECK(status IN (
+                           'uploading','finalizing','ready','failed','cancelled','unavailable'
+                       )),
+                       job_id TEXT,
+                       manifest_sha256 TEXT,
+                       workspace_device INTEGER,
+                       workspace_inode INTEGER,
+                       artifact_device INTEGER,
+                       artifact_inode INTEGER,
+                       error_code TEXT,
+                       created_at REAL NOT NULL,
+                       updated_at REAL NOT NULL
+                   )"""
+            )
+            connection.execute(
+                """CREATE TABLE import_files (
+                       import_id TEXT NOT NULL,
+                       source_id TEXT NOT NULL,
+                       slot_id TEXT NOT NULL,
+                       logical_path TEXT NOT NULL,
+                       extension TEXT NOT NULL,
+                       declared_bytes INTEGER NOT NULL CHECK(declared_bytes >= 0),
+                       sha256 TEXT,
+                       upload_state TEXT NOT NULL CHECK(upload_state IN ('pending','stored')),
+                       parser_json TEXT,
+                       PRIMARY KEY(import_id, source_id),
+                       UNIQUE(import_id, slot_id),
+                       UNIQUE(import_id, logical_path),
+                       FOREIGN KEY(import_id) REFERENCES imports(id) ON DELETE CASCADE
+                   )"""
+            )
+            connection.execute(
+                "ALTER TABLE sessions ADD COLUMN import_id TEXT REFERENCES imports(id)"
+            )
+            connection.execute(
+                """CREATE UNIQUE INDEX sessions_import_id_unique
+                   ON sessions(import_id) WHERE import_id IS NOT NULL"""
+            )
+            connection.execute("PRAGMA user_version=3")
             connection.commit()
         except Exception:
             if connection.in_transaction:

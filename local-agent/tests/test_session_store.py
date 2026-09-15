@@ -10,7 +10,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from local_agent.session_store import SessionStore, StoreError
+from local_agent.session_store import SessionStore, StoreError, _V1_SCHEMA
 
 
 def insert_session(connection, session_id, workspace):
@@ -51,6 +51,25 @@ def insert_run(connection, run_id, session_id):
     )
 
 
+def create_v2_database(path, workspace):
+    with closing(sqlite3.connect(path)) as connection:
+        connection.executescript(_V1_SCHEMA)
+        for table in ("sessions", "runs"):
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'legacy'"
+            )
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN agent_revision TEXT NOT NULL DEFAULT 'legacy'"
+            )
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN agent_snapshot_json TEXT NOT NULL "
+                "DEFAULT '{\"legacy\":true,\"configuration\":\"unknown\"}'"
+            )
+        insert_session(connection, "legacy-session", workspace)
+        connection.execute("PRAGMA user_version=2")
+        connection.commit()
+
+
 class TrackingConnection:
     def __init__(self, connection):
         self.connection = connection
@@ -73,7 +92,7 @@ class SessionStoreTests(unittest.TestCase):
     def test_open_creates_private_versioned_store(self):
         store = SessionStore.open(self.state)
         self.addCleanup(store.close)
-        self.assertEqual(store.user_version(), 2)
+        self.assertEqual(store.user_version(), 3)
         self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
         self.assertEqual(
             stat.S_IMODE((self.state / "sessions.sqlite3").stat().st_mode),
@@ -99,8 +118,134 @@ class SessionStoreTests(unittest.TestCase):
                 "artifacts",
                 "summaries",
                 "context_manifests",
+                "imports",
+                "import_files",
             },
         )
+        self.assertIn(
+            "import_id",
+            {row[1] for row in store.connection().execute("PRAGMA table_info(sessions)")},
+        )
+        other_store = SessionStore.open(self.state.parent / "other-state")
+        self.addCleanup(other_store.close)
+        self.assertIsNot(store.maintenance_gate, other_store.maintenance_gate)
+
+    def test_import_schema_enforces_identity_state_and_session_constraints(self):
+        store = SessionStore.open(self.state)
+        self.addCleanup(store.close)
+        connection = store.connection()
+        tables = {
+            row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        self.assertIn("imports", tables)
+        self.assertIn("import_files", tables)
+        connection.execute(
+            """INSERT INTO imports (
+                   id, request_json, request_fingerprint, agent_id, status,
+                   created_at, updated_at
+               ) VALUES ('import-1', '{}', 'fingerprint', 'file-qa', 'ready', 1, 1)"""
+        )
+        connection.execute(
+            """INSERT INTO import_files (
+                   import_id, source_id, slot_id, logical_path, extension,
+                   declared_bytes, upload_state
+               ) VALUES ('import-1', 'source-1', 'slot-1', 'note.md', '.md', 0, 'stored')"""
+        )
+        for statement in (
+            """INSERT INTO import_files (
+                   import_id, source_id, slot_id, logical_path, extension,
+                   declared_bytes, upload_state
+               ) VALUES ('import-1', 'source-2', 'slot-1', 'other.md', '.md', 1, 'pending')""",
+            """INSERT INTO import_files (
+                   import_id, source_id, slot_id, logical_path, extension,
+                   declared_bytes, upload_state
+               ) VALUES ('import-1', 'source-2', 'slot-2', 'note.md', '.md', 1, 'pending')""",
+            """INSERT INTO import_files (
+                   import_id, source_id, slot_id, logical_path, extension,
+                   declared_bytes, upload_state
+               ) VALUES ('import-1', 'source-2', 'slot-2', 'other.md', '.md', -1, 'pending')""",
+            """INSERT INTO imports (
+                   id, request_json, request_fingerprint, agent_id, status,
+                   created_at, updated_at
+               ) VALUES ('import-invalid', '{}', 'fingerprint', 'file-qa', 'other', 1, 1)""",
+        ):
+            with self.subTest(statement=statement):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(statement)
+
+        workspace = self.state.parent / "workspace"
+        insert_session(connection, "session-1", workspace)
+        insert_session(connection, "session-2", workspace)
+        connection.execute(
+            "UPDATE sessions SET import_id='import-1' WHERE id='session-1'"
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE sessions SET import_id='import-1' WHERE id='session-2'"
+            )
+        with self.assertRaises(sqlite3.IntegrityError):
+            connection.execute("DELETE FROM imports WHERE id='import-1'")
+        connection.execute(
+            "UPDATE sessions SET import_id=NULL WHERE id='session-1'"
+        )
+        connection.execute("DELETE FROM imports WHERE id='import-1'")
+        self.assertEqual(
+            connection.execute("SELECT COUNT(*) FROM import_files").fetchone()[0], 0
+        )
+
+    def test_v2_migration_preserves_existing_session(self):
+        self.state.mkdir(mode=0o700)
+        database = self.state / "sessions.sqlite3"
+        create_v2_database(database, self.state.parent / "workspace")
+
+        store = SessionStore.open(self.state, clock=lambda: 1234.0)
+        self.addCleanup(store.close)
+
+        self.assertEqual(store.user_version(), 3)
+        self.assertEqual(
+            store.connection().execute(
+                "SELECT id, import_id FROM sessions"
+            ).fetchall(),
+            [("legacy-session", None)],
+        )
+        backup = next(self.state.glob("sessions.v2.*.sqlite3.backup"))
+        with closing(sqlite3.connect(backup)) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(
+                connection.execute("SELECT id FROM sessions").fetchall(),
+                [("legacy-session",)],
+            )
+
+    def test_v3_migration_rolls_back_all_ddl_on_conflicting_table(self):
+        self.state.mkdir(mode=0o700)
+        database = self.state / "sessions.sqlite3"
+        create_v2_database(database, self.state.parent / "workspace")
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute("CREATE TABLE import_files (sentinel TEXT NOT NULL)")
+            connection.execute("INSERT INTO import_files VALUES ('kept')")
+            connection.commit()
+
+        with self.assertRaisesRegex(StoreError, "STATE_MIGRATION_FAILED"):
+            SessionStore.open(self.state, clock=lambda: 1234.0)
+
+        with closing(sqlite3.connect(database)) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertNotIn(
+                "imports",
+                {row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )},
+            )
+            self.assertNotIn(
+                "import_id",
+                {row[1] for row in connection.execute("PRAGMA table_info(sessions)")},
+            )
+            self.assertEqual(
+                connection.execute("SELECT sentinel FROM import_files").fetchall(),
+                [("kept",)],
+            )
 
     def test_second_owner_is_rejected_without_touching_database(self):
         first = SessionStore.open(self.state)
@@ -456,7 +601,7 @@ class SessionStoreTests(unittest.TestCase):
             self.assertEqual(backup.execute("PRAGMA user_version").fetchone()[0], 0)
             self.assertEqual(backup.execute("SELECT value FROM legacy").fetchone()[0],
                              "kept")
-        self.assertEqual(store.user_version(), 2)
+        self.assertEqual(store.user_version(), 3)
 
     def test_migration_failure_preserves_old_database_and_releases_lock(self):
         self.state.mkdir(mode=0o700)

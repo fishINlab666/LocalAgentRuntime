@@ -21,6 +21,11 @@ BUDGETS = {'max_steps': 6, 'run_timeout': 120, 'model_timeout': 45,
            'max_files': 4, 'max_file_bytes': 32768}
 CAPS = {**BUDGETS, 'max_steps': 10, 'tool_timeout': 15, 'max_files': 16}
 TOOLS = {'read_file', 'list_files', 'write_file', 'session_history'}
+_LEGACY_TOOLS = {
+    'file': ('read_file', 'write_file', 'session_history'),
+    'directory': ('read_file', 'list_files', 'write_file', 'session_history'),
+    'combined': ('read_file', 'list_files', 'write_file', 'session_history'),
+}
 ID = re.compile(r'[a-z0-9][a-z0-9-]{0,63}\Z')
 HASH = re.compile(r'[0-9a-f]{64}\Z')
 
@@ -155,9 +160,14 @@ class AgentDefinition:
                                 use_system_proxy=model['use_system_proxy'])
 
 
-def builtin_agent(mode='file'):
+def builtin_agent(mode='file', *, legacy=False):
     if mode not in {'file', 'directory', 'combined'}:
         raise AgentError()
+    if type(legacy) is not bool:
+        raise AgentError()
+    tools = (list(_LEGACY_TOOLS[mode]) if legacy else
+             ['read_file', *(['list_files'] if mode != 'file' else []),
+              'write_file', 'session_history'])
     return AgentDefinition.from_dict({
         'schema_version': 1,
         'id': {'file': 'file-qa', 'directory': 'directory-qa', 'combined': 'project-brief'}[mode],
@@ -166,8 +176,7 @@ def builtin_agent(mode='file'):
         'model': {'provider': 'deepseek', 'name': os.environ.get('AGENT_MODEL', 'deepseek-v4-flash'),
                   'api_key_env': 'DEEPSEEK_API_KEY',
                   'use_system_proxy': os.environ.get('AGENT_USE_SYSTEM_PROXY', '0') == '1'},
-        'tools': ['read_file', *(['list_files'] if mode != 'file' else []),
-                  'write_file', 'session_history'],
+        'tools': tools,
         'budgets': {**BUDGETS, **({'max_steps': 10, 'tool_timeout': 15} if mode == 'combined' else {})},
         'approval': 'ask_writes', 'skills': [], 'mcp': [],
     })

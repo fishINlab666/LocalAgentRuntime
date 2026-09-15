@@ -1,6 +1,7 @@
 from contextlib import closing
 import hashlib
 import importlib
+import inspect
 import json
 from pathlib import Path
 import sqlite3
@@ -10,7 +11,13 @@ import unittest
 from unittest.mock import patch
 
 from local_agent.session_store import SessionStore, StoreError, _V1_SCHEMA
-from local_agent.sessions import RunSubmission, SessionError, SessionScope, SessionService
+from local_agent.sessions import (
+    RunSubmission,
+    SessionError,
+    SessionRecord,
+    SessionScope,
+    SessionService,
+)
 
 
 class AgentSessionTests(unittest.TestCase):
@@ -85,13 +92,28 @@ class AgentSessionTests(unittest.TestCase):
         other = RunSubmission('chosen', '检查项目', 'files', session.scope, None, None, {})
         self.assertNotEqual(restored.fingerprint(), other.fingerprint())
 
+    def test_builtin_legacy_snapshot_keeps_pre_import_tool_set(self):
+        agents = importlib.import_module('local_agent.agents')
+        self.assertIn('legacy', inspect.signature(agents.builtin_agent).parameters)
+        self.assertEqual(
+            agents.builtin_agent('file', legacy=True).to_dict()['tools'],
+            ['read_file', 'write_file', 'session_history'],
+        )
+        for mode in ('directory', 'combined'):
+            self.assertEqual(
+                agents.builtin_agent(mode, legacy=True).to_dict()['tools'],
+                ['read_file', 'list_files', 'write_file', 'session_history'],
+            )
+
     def test_v1_migration_preserves_history_and_marks_unknown_run_configuration(self):
         self.legacy_database()
         store = self.open_store()
-        self.assertEqual(store.user_version(), 2)
+        self.assertEqual(store.user_version(), 3)
         service = SessionService(store)
         self.assertEqual(service.load('old-file').agent_id, 'file-qa')
         self.assertEqual(service.load('old-directory').agent_id, 'directory-qa')
+        self.assertNotIn('search_documents', service.load('old-file').agent_snapshot['tools'])
+        self.assertNotIn('search_documents', service.load('old-directory').agent_snapshot['tools'])
         run = service.load_run('old-file', 'old-run')
         self.assertEqual(run.agent_id, 'file-qa')
         self.assertEqual(run.agent_revision, 'legacy')
@@ -131,6 +153,53 @@ class AgentSessionTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(),
                              [('legacy',)])
             self.assertEqual(connection.execute('SELECT value FROM legacy').fetchone()[0], 'kept')
+
+    def test_v0_upgrade_rolls_back_all_schema_steps_if_v3_fails(self):
+        self.state.mkdir(mode=0o700)
+        database = self.state / 'sessions.sqlite3'
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute('CREATE TABLE legacy (value TEXT)')
+            connection.execute("INSERT INTO legacy VALUES ('kept')")
+            connection.commit()
+        with patch.object(
+            SessionStore, '_migrate_v3', side_effect=ValueError('injected failure'),
+            create=True,
+        ):
+            with self.assertRaisesRegex(StoreError, 'STATE_MIGRATION_FAILED'):
+                SessionStore.open(self.state)
+        with closing(sqlite3.connect(database)) as connection:
+            self.assertEqual(connection.execute('PRAGMA user_version').fetchone()[0], 0)
+            self.assertEqual(
+                connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(),
+                [('legacy',)],
+            )
+            self.assertEqual(connection.execute('SELECT value FROM legacy').fetchone()[0], 'kept')
+
+    def test_session_record_keeps_positional_compatibility_and_loads_import_id(self):
+        positional = SessionRecord(
+            'session', 'title', str(self.workspace), 1, 2,
+            SessionScope('file', 'note.md'), 'active', 1, 1.0, 1.0,
+            'file-qa', 'revision', {},
+        )
+        self.assertTrue(hasattr(positional, 'import_id'))
+        self.assertIsNone(positional.import_id)
+
+        store = self.open_store()
+        service = SessionService(store)
+        created = service.create(self.workspace, '导入会话', SessionScope('file', 'note.md'))
+        self.assertIsNone(created.import_id)
+        with store.transaction() as connection:
+            connection.execute(
+                """INSERT INTO imports (
+                       id, request_json, request_fingerprint, agent_id, status,
+                       created_at, updated_at
+                   ) VALUES ('import-1', '{}', 'fingerprint', 'file-qa', 'ready', 1, 1)"""
+            )
+            connection.execute(
+                "UPDATE sessions SET import_id='import-1' WHERE id=?", (created.id,)
+            )
+        self.assertEqual(service.load(created.id).import_id, 'import-1')
+        self.assertEqual(service.list(self.workspace).items[0].import_id, 'import-1')
 
     def test_session_and_run_snapshot_survive_restart_and_are_not_execution_options(self):
         store = self.open_store()
