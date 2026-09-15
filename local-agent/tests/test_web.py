@@ -68,7 +68,11 @@ class WebTests(unittest.TestCase):
         status, headers, page = self.request('GET', '/')
         self.assertEqual(status, 200)
         self.assertIn(self.server.token, page)
-        self.assertIn('单文件问答', page)
+        self.assertIn('<title>Local Agent 工作台</title>', page)
+        for marker in ('data-region="sidebar"', 'data-region="thread"',
+                       'data-region="inspector"', 'id="sidebar-toggle"',
+                       'id="inspector-toggle"'):
+            self.assertIn(marker, page)
         self.assertIn("frame-ancestors 'none'", headers['Content-Security-Policy'])
         for path in ('/app.js', '/app.css'):
             self.assertEqual(self.request('GET', path)[0], 200)

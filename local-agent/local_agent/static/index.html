@@ -4,138 +4,197 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="session-token" content="__SESSION_TOKEN__">
-  <title>单文件问答 · Local Agent</title>
+  <title>Local Agent 工作台</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/app.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
   <a class="skip" href="#question">跳到问题输入</a>
-  <div class="shell">
-    <header class="topbar">
-      <div class="brand"><span class="brand-mark" aria-hidden="true">L<span>·</span>A</span><span>LOCAL AGENT<span class="brand-sub">本地资料助手</span></span></div>
-      <span class="badge" id="connection">正在连接本地服务</span>
-    </header>
-    <main>
-      <div class="intro"><div><p class="eyebrow">WORKSPACE / 单文件问答 · 目录发现</p><h1>让答案，回到文件。</h1><p class="intro-copy">读资料，问问题。每个回答，都有原文可查。</p></div><span class="version">01<span>资料问答体验版</span></span></div>
-      <div id="mode-notice" class="notice" hidden></div>
-      <div id="connection-error" class="notice error" role="alert" hidden></div>
-      <section class="session-panel" aria-labelledby="agent-heading">
-        <div class="panel-title"><h2 id="agent-heading">助手与能力</h2></div>
-        <label for="agent-select">当前助手</label>
+  <div class="workbench-shell">
+    <aside class="sidebar" id="sidebar-panel" data-region="sidebar" aria-label="助手与会话">
+      <header class="sidebar-header">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">L<span>·</span>A</span>
+          <span>LOCAL AGENT<span class="brand-sub">本地智能工作台</span></span>
+        </div>
+        <button type="button" class="icon-button panel-close" id="sidebar-close" aria-label="关闭助手与会话面板">×</button>
+      </header>
+
+      <section class="sidebar-section agent-section" aria-labelledby="agent-heading">
+        <div class="section-kicker">ASSISTANT</div>
+        <h2 id="agent-heading">当前助手</h2>
+        <label class="sr-only" for="agent-select">当前助手</label>
         <select id="agent-select"><option value="">自动选择（按单文件 / 目录模式）</option></select>
         <p id="agent-status" class="field-help">每个助手有自己的会话、工具与能力绑定。</p>
-        <details id="capability-management" class="capability-management">
-          <summary>管理助手、Skills 与 MCP</summary>
-          <p class="field-help">修改绑定后请新建会话；旧会话保留原来的助手修订与能力版本。停用会立即阻止新调用。</p>
-          <div class="extension-grid">
-            <section>
-              <h3>从模板创建助手</h3>
-              <label for="agent-template">复制模板</label><select id="agent-template" data-management></select>
-              <label for="agent-id">助手 ID</label><input id="agent-id" maxlength="64" placeholder="例如：project-brief" data-management>
-              <label for="agent-name">名称</label><input id="agent-name" maxlength="80" placeholder="项目简报助手" data-management>
-              <label for="agent-model">模型名称</label><input id="agent-model" maxlength="100" placeholder="deepseek-chat" data-management>
-              <label for="agent-instructions">助手说明</label><textarea id="agent-instructions" rows="3" maxlength="4096" data-management></textarea>
-              <details><summary>高级：工具与预算</summary><label for="agent-advanced">JSON 配置（tools / budgets）</label><textarea id="agent-advanced" rows="6" spellcheck="false" data-management></textarea></details>
-              <div class="actions"><button type="button" id="agent-create" class="secondary" data-management>创建助手</button><button type="button" id="agent-toggle" class="secondary" data-management disabled>停用当前助手</button></div>
-            </section>
-            <section>
-              <h3>导入本地能力</h3>
-              <label for="skill-path">Skill 文件夹路径</label><input id="skill-path" placeholder="/本机路径/skill-directory" data-management>
-              <button type="button" id="skill-install" class="secondary" data-management>导入 Skill</button>
-              <label for="mcp-path">MCP 配置文件路径</label><input id="mcp-path" placeholder="/本机路径/server.json" data-management>
-              <button type="button" id="mcp-install" class="secondary" data-management>导入 MCP 配置</button>
-              <p class="field-help">导入已安装 Server 的本地配置；测试连接会启动配置中的程序。密钥仍从本机环境提供。</p>
-              <div id="capability-list" class="capability-list" aria-label="已导入能力"></div>
-            </section>
-          </div>
-          <p id="extension-status" class="field-help" role="status"></p>
-          <p id="extension-error" class="form-error" role="alert" hidden></p>
-        </details>
       </section>
-      <section class="session-panel" aria-labelledby="session-title-heading">
-        <div class="panel-title"><span class="section-number">00</span><h2 id="session-title-heading">长期会话</h2></div>
-        <p class="field-help">对话、工具结果和已读取内容保存在本机。选择会话后，资料范围保持固定；服务重启后仍可继续。</p>
-        <div class="session-grid">
-          <label for="session-select">当前会话</label>
-          <select id="session-select"><option value="">临时任务（不保存会话）</option></select>
-          <div class="session-create-fields">
-            <input id="session-name" maxlength="120" placeholder="会话名称，例如：项目资料核对">
-            <select id="session-mode" aria-label="新会话资料范围"><option value="file">单文件</option><option value="directory">目录发现</option></select>
-            <input id="session-file" maxlength="1024" placeholder="note.md" aria-label="新会话文件路径">
-            <button type="button" class="secondary" id="session-create">新建会话</button>
-          </div>
-          <div id="session-actions" class="session-actions" hidden>
-            <input id="session-rename-title" maxlength="120" aria-label="新会话名称">
+
+      <section class="sidebar-section session-panel" aria-labelledby="session-title-heading">
+        <div class="section-heading">
+          <div><span class="section-kicker">CONVERSATIONS</span><h2 id="session-title-heading">会话</h2></div>
+          <span class="local-pill">本机</span>
+        </div>
+        <p class="field-help">会话固定资料范围，服务重启后仍可继续。</p>
+        <label for="session-select">当前会话</label>
+        <select id="session-select"><option value="">临时任务（不保存会话）</option></select>
+
+        <div class="session-create-fields">
+          <label for="session-name">新会话名称</label>
+          <input id="session-name" maxlength="120" placeholder="例如：项目资料核对">
+          <label for="session-mode">资料范围</label>
+          <select id="session-mode"><option value="file">单文件</option><option value="directory">目录发现</option></select>
+          <label for="session-file">文件路径</label>
+          <input id="session-file" maxlength="1024" placeholder="note.md">
+          <button type="button" class="primary full-width" id="session-create">＋ 新建会话</button>
+        </div>
+
+        <div id="session-actions" class="session-actions" hidden>
+          <label for="session-rename-title">会话名称</label>
+          <input id="session-rename-title" maxlength="120">
+          <div class="button-row compact">
             <button type="button" class="secondary" id="session-rename">改名</button>
             <button type="button" class="secondary" id="session-archive">归档</button>
             <button type="button" class="secondary" id="session-restore" hidden>恢复</button>
           </div>
         </div>
-        <p id="session-scope" class="field-help" hidden></p>
         <p id="session-error" class="form-error" role="alert" hidden></p>
-        <div id="session-history" class="session-history" aria-label="会话历史"></div>
       </section>
-      <div class="layout">
-        <section class="input-panel" aria-labelledby="input-title">
-          <div class="panel-title"><span class="section-number">01</span><h2 id="input-title">文件与问题</h2></div>
-          <div class="workspace"><span class="small-label">当前工作区</span><code id="workspace">正在读取配置…</code></div>
-          <form id="question-form">
-            <label for="task-type">本轮任务</label>
-            <select id="task-type"><option value="files">核对资料</option><option value="conversation">聊这段记录</option></select>
-            <p class="field-help">“核对资料”会重新读取当前文件；“聊这段记录”只查询本会话历史。</p>
-            <label class="mode-toggle" for="discover"><input type="checkbox" id="discover" disabled aria-describedby="discover-help">目录发现</label>
-            <p class="field-help" id="discover-help">从当前工作区列出的 .md / .txt 资料中选择读取。勾选后只需填写问题。</p>
-            <label for="file">文件路径</label>
-            <input id="file" name="file" placeholder="例如：demo-note.md" required maxlength="1024" autocomplete="off" aria-describedby="file-help">
-            <p class="field-help" id="file-help">填写工作区内的相对路径 · .md / .txt</p>
-            <button type="button" class="sample" id="sample" hidden>填入演示文件与问题 <span aria-hidden="true">↗</span></button>
-            <div class="label-row"><label for="question">想了解什么？</label><span id="count">0 / 4000</span></div>
-            <textarea id="question" name="question" rows="6" maxlength="4000" required placeholder="例如：项目代号、评审人和演示日期分别是什么？请引用原文。"></textarea>
-            <div class="suggestions"><button type="button" data-question="资料的主要内容是什么？请引用原文。">概括主要内容</button><button type="button" data-question="资料中写的预算是多少？">查找预算信息</button></div>
-            <label for="run-skill" class="extension-label">本轮指定 Skill（可选）</label><select id="run-skill"><option value="">由模型选择</option></select>
-            <label for="run-prompt" class="extension-label">本轮 MCP 模板（可选）</label><select id="run-prompt"><option value="">不指定模板</option></select>
-            <p class="field-help">只显示当前助手或会话已绑定的能力；正文仍须通过工具读取。</p>
-            <div class="label-row"><label for="output-file">输出文件路径（可选）</label></div>
-            <input id="output-file" name="output_file" placeholder="留空由模型决定，例如：summary.md" maxlength="1024" autocomplete="off" aria-describedby="output-file-help">
-            <p class="field-help" id="output-file-help">助手启用写入后，可由模型决定文件名；也可在此指定一份交付文件。同一任务可逐次新建多个 .md / .txt 文件，每份内容经你确认后才写入。父目录须已存在，不覆盖已有文件。</p>
-            <p id="form-error" class="form-error" role="alert" hidden></p>
-            <div class="actions"><button class="primary" type="submit" id="start" disabled>开始问答 <span aria-hidden="true">↗</span></button><button type="button" class="secondary" id="cancel" hidden>取消运行</button></div>
-            <button type="button" class="secondary" id="continue-run" hidden>从中断处新建一次继续运行</button>
-            <p class="privacy" id="privacy">开始后，所选文件内容和问题将发送给 DeepSeek。原文件保持只读。</p>
-          </form>
+
+      <div class="sidebar-foot"><span class="privacy-dot" aria-hidden="true"></span><span>会话与执行记录保存在本机</span></div>
+    </aside>
+
+    <main class="thread" id="thread-panel" data-region="thread">
+      <header class="thread-header">
+        <button type="button" class="icon-button mobile-toggle" id="sidebar-toggle" aria-controls="sidebar-panel" aria-expanded="false" aria-label="打开助手与会话">☰</button>
+        <div class="thread-title">
+          <span class="section-kicker">LOCAL WORKSPACE</span>
+          <h1>会话工作台</h1>
+          <p id="session-scope" class="thread-scope" hidden></p>
+        </div>
+        <div class="thread-actions">
+          <span id="run-status" class="badge neutral" role="status" aria-live="polite">等待提问</span>
+          <button type="button" class="icon-button" id="inspector-toggle" aria-controls="inspector-panel" aria-expanded="false" aria-label="打开本轮工作">⌘</button>
+        </div>
+      </header>
+
+      <div id="mode-notice" class="notice" hidden></div>
+      <div id="connection-error" class="notice error" role="alert" hidden></div>
+
+      <div class="thread-scroll" id="conversation-scroll">
+        <section class="history-block" aria-labelledby="history-heading">
+          <div class="section-heading compact-heading"><h2 id="history-heading">对话记录</h2><span class="field-help">选择一轮查看完整结果</span></div>
+          <div id="session-history" class="session-history" aria-label="会话历史"></div>
         </section>
-        <section class="result-panel" aria-labelledby="result-title">
-          <div class="panel-title result-heading"><div><span class="section-number">02</span><h2 id="result-title">回答与依据</h2></div><span id="run-status" class="badge neutral" role="status" aria-live="polite">等待提问</span></div>
-          <div id="empty" class="empty">
-            <svg class="document-art" viewBox="0 0 130 130" aria-hidden="true"><path d="M28 19h53l22 22v66H28z" fill="var(--paper)" stroke="currentColor" stroke-width="1.5"/><path d="M81 19v22h22M43 56h44M43 68h35M43 80h27" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="96" cy="99" r="19" fill="var(--accent)"/><path d="m88 99 6 6 10-13" fill="none" stroke="white" stroke-width="2"/></svg>
-            <h3>从资料开始</h3><p>在左侧填写文件路径，或启用目录发现，再输入问题。<br>回答生成后，原文摘录会一起出现在这里。</p>
-            <div class="empty-steps"><span>读取文件</span><i aria-hidden="true">→</i><span>生成回答</span><i aria-hidden="true">→</i><span>核对依据</span></div>
+
+        <div id="empty" class="empty">
+          <div class="empty-mark" aria-hidden="true">
+            <svg viewBox="0 0 92 92"><path d="M22 14h36l15 15v49H22z" fill="var(--paper)" stroke="currentColor" stroke-width="1.5"/><path d="M58 14v15h15M33 41h29M33 51h23M33 61h18" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="68" cy="69" r="13" fill="var(--accent)"/><path d="m63 69 4 4 7-9" fill="none" stroke="white" stroke-width="2"/></svg>
           </div>
-          <div id="output" hidden>
-            <p class="source-line" id="source-line"></p>
-            <p class="field-help" id="scope-summary" hidden></p>
-            <div id="progress" class="progress" hidden><span class="spinner" aria-hidden="true"></span><span id="progress-text">正在启动…</span></div>
-            <section id="approval" class="approval" aria-labelledby="approval-title" hidden>
-              <h3 id="approval-title">确认这次新建</h3>
-              <p id="approval-action" class="approval-action"></p>
-              <p id="approval-details" class="field-help"></p>
-              <p id="approval-intent" class="field-help"></p>
-              <details class="approval-preview" open><summary>完整内容预览</summary><pre id="approval-content"></pre></details>
-              <p id="approval-status" class="field-help" role="status"></p>
-              <p id="approval-error" class="form-error" role="alert" hidden></p>
-              <div class="actions" id="approval-actions"><button type="button" id="approval-allow" class="primary">确认这次新建</button><button type="button" id="approval-deny" class="secondary">拒绝</button></div>
-            </section>
-            <div id="answer-block" hidden><div class="answer-heading"><h3 id="answer-title">文件中的答案</h3><button type="button" class="copy" id="copy">复制回答</button></div><p id="answer-text" class="answer-text"></p><p id="answer-note" class="field-help"></p></div>
-            <div id="failure" class="failure" role="alert" hidden><h3 id="failure-title"></h3><p id="failure-message"></p></div>
-            <section id="artifacts" class="artifacts" aria-labelledby="artifact-title" hidden><h3 id="artifact-title">已创建文件</h3><p id="artifact-note" class="field-help"></p><div id="artifact-list"></div></section>
-            <div id="evidence" hidden><div class="evidence-heading"><h3>原文依据</h3><span id="citation-count"></span></div><div id="citations"></div></div>
-            <details id="trace" class="trace"><summary>查看执行记录 <span id="event-count"></span></summary><ol id="events"></ol><p class="trace-note">仅展示执行步骤；默认本地日志不保存问题、正文和回答全文。</p><code id="trace-path"></code></details>
-          </div>
-        </section>
+          <span class="section-kicker">READY WHEN YOU ARE</span>
+          <h2>从一份真实资料开始</h2>
+          <p>创建持久会话，或直接使用临时任务。模型会按需调用工具，回答、依据和产物都能在这里核对。</p>
+          <div class="empty-steps"><span>选择助手</span><i aria-hidden="true">→</i><span>提出问题</span><i aria-hidden="true">→</i><span>核对结果</span></div>
+        </div>
+
+        <div id="output" class="run-output" hidden>
+          <article class="message user-message">
+            <span class="message-label">你的任务</span>
+            <p class="source-line" id="source-line" tabindex="-1"></p>
+          </article>
+          <p class="scope-summary field-help" id="scope-summary" hidden></p>
+          <div id="progress" class="progress" hidden><span class="spinner" aria-hidden="true"></span><span id="progress-text">正在启动…</span></div>
+
+          <section id="approval" class="approval" aria-labelledby="approval-title" hidden>
+            <div class="message-label warning-label">需要你的确认</div>
+            <h2 id="approval-title" tabindex="-1">确认这次新建</h2>
+            <p id="approval-action" class="approval-action"></p>
+            <p id="approval-details" class="field-help"></p>
+            <p id="approval-intent" class="field-help"></p>
+            <details class="approval-preview" open><summary>完整内容预览</summary><pre id="approval-content"></pre></details>
+            <p id="approval-status" class="field-help" role="status"></p>
+            <p id="approval-error" class="form-error" role="alert" hidden></p>
+            <div class="button-row" id="approval-actions"><button type="button" id="approval-allow" class="primary">确认这次新建</button><button type="button" id="approval-deny" class="secondary">拒绝</button></div>
+          </section>
+
+          <article id="answer-block" class="message assistant-message" hidden>
+            <div class="answer-heading"><div><span class="message-label">Agent 回答</span><h2 id="answer-title" tabindex="-1">文件中的答案</h2></div><button type="button" class="copy" id="copy">复制回答</button></div>
+            <p id="answer-text" class="answer-text"></p><p id="answer-note" class="field-help"></p>
+          </article>
+          <div id="failure" class="failure" role="alert" hidden><h2 id="failure-title" tabindex="-1"></h2><p id="failure-message"></p></div>
+          <section id="artifacts" class="artifacts result-card" aria-labelledby="artifact-title" hidden><div class="message-label">生成产物</div><h2 id="artifact-title">已创建文件</h2><p id="artifact-note" class="field-help"></p><div id="artifact-list"></div></section>
+          <section id="evidence" class="evidence result-card" hidden><div class="evidence-heading"><div><span class="message-label">SOURCE CHECK</span><h2>原文依据</h2></div><span id="citation-count"></span></div><div id="citations"></div></section>
+          <details id="trace" class="trace result-card"><summary>查看执行记录 <span id="event-count"></span></summary><ol id="events"></ol><p class="trace-note">仅展示执行步骤；默认本地日志不保存问题、正文和回答全文。</p><code id="trace-path"></code></details>
+        </div>
       </div>
-      <footer><span>依据在文件里，判断在你手中。</span><span>本地界面 · 确认后新建 · 可核对引用</span></footer>
+
+      <section class="composer" aria-labelledby="input-title">
+        <form id="question-form">
+          <div class="composer-topline"><h2 id="input-title">给 Agent 一个任务</h2><span id="count">0 / 4000</span></div>
+          <textarea id="question" name="question" rows="3" maxlength="4000" required placeholder="问资料里的事实、继续一段会话，或让 Agent 生成文件…"></textarea>
+          <div class="suggestions"><button type="button" data-question="资料的主要内容是什么？请引用原文。">概括资料</button><button type="button" data-question="资料中写的预算是多少？">查找预算</button><button type="button" class="sample" id="sample" hidden>使用演示问题</button></div>
+
+          <details class="composer-settings" open>
+            <summary>本轮设置 <span>资料范围 · Skill · MCP · 输出</span></summary>
+            <div class="settings-grid">
+              <div class="field-group"><label for="task-type">本轮任务</label><select id="task-type"><option value="files">核对资料</option><option value="conversation">聊这段记录</option></select><p class="field-help">核对资料会读取当前范围；聊记录只查询本会话历史。</p></div>
+              <div class="field-group"><label class="mode-toggle" for="discover"><input type="checkbox" id="discover" disabled aria-describedby="discover-help">目录发现</label><p class="field-help" id="discover-help">从工作区的 .md / .txt 中按需发现并读取。</p></div>
+              <div class="field-group span-two"><label for="file">文件路径</label><input id="file" name="file" placeholder="例如：demo-note.md" required maxlength="1024" autocomplete="off" aria-describedby="file-help"><p class="field-help" id="file-help">工作区内的相对路径 · .md / .txt</p></div>
+              <div class="field-group"><label for="run-skill">指定 Skill（可选）</label><select id="run-skill"><option value="">由模型选择</option></select></div>
+              <div class="field-group"><label for="run-prompt">MCP 模板（可选）</label><select id="run-prompt"><option value="">不指定模板</option></select></div>
+              <div class="field-group span-two"><label for="output-file">输出文件路径（可选）</label><input id="output-file" name="output_file" placeholder="留空由模型决定，例如：summary.md" maxlength="1024" autocomplete="off" aria-describedby="output-file-help"><p class="field-help" id="output-file-help">模型也可决定文件名；每份 .md / .txt 都会先展示完整内容，经你单独确认后才新建，且不覆盖已有文件。</p></div>
+            </div>
+          </details>
+
+          <p id="form-error" class="form-error" role="alert" hidden></p>
+          <div class="composer-actions">
+            <p class="privacy" id="privacy">开始后，所选文件内容和问题将发送给 DeepSeek。原文件保持只读。</p>
+            <div class="button-row"><button type="button" class="secondary" id="cancel" hidden>取消运行</button><button class="primary send-button" type="submit" id="start" disabled>发送任务 ↑</button></div>
+          </div>
+          <button type="button" class="secondary full-width" id="continue-run" hidden>从中断处新建一次继续运行</button>
+        </form>
+      </section>
     </main>
+
+    <aside class="inspector" id="inspector-panel" data-region="inspector" aria-label="本轮工作">
+      <header class="inspector-header"><div><span class="section-kicker">RUN INSPECTOR</span><h2>本轮工作</h2></div><button type="button" class="icon-button panel-close" id="inspector-close" aria-label="关闭本轮工作面板">×</button></header>
+      <section class="inspector-block connection-block">
+        <div class="section-heading compact-heading"><h3>运行环境</h3><span class="badge" id="connection">正在连接本地服务</span></div>
+        <span class="small-label">当前工作区</span><code id="workspace">正在读取配置…</code>
+      </section>
+      <section class="inspector-block module-preview" aria-labelledby="module-preview-title">
+        <span class="section-kicker">AVAILABLE NOW</span><h3 id="module-preview-title">可以这样使用</h3>
+        <ul><li><strong>单文件问答</strong><span>核对一份 Markdown 或文本资料</span></li><li><strong>目录发现</strong><span>让模型按需查找多份资料</span></li><li><strong>项目助手</strong><span>组合会话、Skill 与 MCP</span></li></ul>
+      </section>
+
+      <details id="capability-management" class="capability-management inspector-block">
+        <summary>管理助手、Skills 与 MCP</summary>
+        <p class="field-help">修改绑定后请新建会话；旧会话保留原来的助手修订与能力版本。停用会立即阻止新调用。</p>
+        <div class="extension-grid">
+          <section>
+            <h3>从模板创建助手</h3>
+            <label for="agent-template">复制模板</label><select id="agent-template" data-management></select>
+            <label for="agent-id">助手 ID</label><input id="agent-id" maxlength="64" placeholder="例如：project-brief" data-management>
+            <label for="agent-name">名称</label><input id="agent-name" maxlength="80" placeholder="项目简报助手" data-management>
+            <label for="agent-model">模型名称</label><input id="agent-model" maxlength="100" placeholder="deepseek-chat" data-management>
+            <label for="agent-instructions">助手说明</label><textarea id="agent-instructions" rows="3" maxlength="4096" data-management></textarea>
+            <details><summary>高级：工具与预算</summary><label for="agent-advanced">JSON 配置（tools / budgets）</label><textarea id="agent-advanced" rows="6" spellcheck="false" data-management></textarea></details>
+            <div class="button-row"><button type="button" id="agent-create" class="secondary" data-management>创建助手</button><button type="button" id="agent-toggle" class="secondary" data-management disabled>停用当前助手</button></div>
+          </section>
+          <section>
+            <h3>导入本地能力</h3>
+            <label for="skill-path">Skill 文件夹路径</label><input id="skill-path" placeholder="/本机路径/skill-directory" data-management>
+            <button type="button" id="skill-install" class="secondary full-width" data-management>导入 Skill</button>
+            <label for="mcp-path">MCP 配置文件路径</label><input id="mcp-path" placeholder="/本机路径/server.json" data-management>
+            <button type="button" id="mcp-install" class="secondary full-width" data-management>导入 MCP 配置</button>
+            <p class="field-help">连接测试会启动本地配置中的程序；密钥仍从环境变量提供。</p>
+            <div id="capability-list" class="capability-list" aria-label="已导入能力"></div>
+          </section>
+        </div>
+        <p id="extension-status" class="field-help" role="status"></p><p id="extension-error" class="form-error" role="alert" hidden></p>
+      </details>
+      <footer class="inspector-footer"><span>依据在文件里，判断在你手中。</span></footer>
+    </aside>
   </div>
+  <button type="button" id="workspace-backdrop" class="workspace-backdrop" aria-label="关闭面板" hidden></button>
 </body>
 </html>
