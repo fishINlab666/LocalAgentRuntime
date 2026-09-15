@@ -1,5 +1,15 @@
 # 受限目录发现验收记录
 
+## 当前任务入口（2026-09-16：受管本地文档导入）
+
+当前为**受管文档导入 Task 1–11 已完成实现，固定离线 Gate PASS；真实 DeepSeek Gate 尚未运行**。页面可将 `.md/.txt`、带文字层 PDF 和 DOCX 保存为 State Store 内的私有副本，在兼容的目录型助手中通过 `search_documents` 定位、`read_file` 读取，并把结果按原 ToolCall ID 交回下一轮；最终引用可回到原文本行、PDF 页、DOCX 段落或表格行。扫描件／纯图片 PDF 不支持 OCR。
+
+固定离线验收用一批 MD、TXT、两页 PDF、含表格 DOCX 和被忽略 PNG，完成 2 个持久 Run、6 次脚本化模型请求。证据覆盖：初始请求无正文；搜索结果及 PDF/Word 读取结果进入紧接的模型上下文；引用映射为 PDF 第 2 页和 DOCX 表 1 行 1；外部原件删除并重启后仍能搜索、读取和校验引用；另一 Import 的秘密搜索为空且路径读取被拒绝；SQLite 与 imports sidecar 恢复到新 State Store 后，同一 Session 保留历史并再次读取 TXT 原文。异常后的必需证据不完整时 Gate 必定失败，不能用已有检查误报通过。
+
+验证结果：导入定向组 127 项通过；完整 Python 回归 661 项通过且无 ResourceWarning；JavaScript 语法和六组浏览器回归通过；权限／上下文与重启／恢复两路限定代码 Gate 均 PASS。本次检查当前 Codex 进程未取得 `DEEPSEEK_API_KEY` 或备用变量，[原始报告](results/import-evaluation-1e84050dd0624e17a443fe949f4322ca/report.json)为 `NOT_RUN / CONFIG_MISSING / 0 model calls`。该报告位于按规则忽略的本地结果目录，不作为已提交的真实证据；不得把脚本化 Provider 冒充真实模型通过。
+
+本批停止在已确认范围：不增加 OCR、自动同步、资料删除、向量检索、新格式或额外 UI 打磨。剩余一步仅是在已经持有环境变量的进程中执行一次 `python3 -m local_agent evaluate-imports`，上限 1 个 Session、2 个 Run、12 次模型请求，再单独核对回答和引用语义。实际玩法、保存位置及备份恢复命令见[README](../README.md)，实现与验收口径见[导入实施计划 §0](../../docs/superpowers/plans/2026-09-15-local-document-import.md)。
+
 ## 当前任务入口（2026-09-15：会话工作台）
 
 当前为**三栏会话工作台的首次试玩阻断已修复，最终回归 PASS**。用户实际打开页面后发现发送按钮在常用桌面高度下落到视口之外，Enter 也不能发送；这属于主输入闭环阻断。当前修复让输入框和发送操作保持可见，支持 Enter 发送与 Shift+Enter 换行；设置和新建会话表单默认收起，缺少单文件范围时给出可见提示并聚焦文件字段。页面仍将配置化助手与持久会话放在左栏，连续任务、审批与回答放在中栏，将依据、产物、执行记录和能力管理放在右栏；平板与手机使用不可聚焦的响应式抽屉。会话和 Run 支持签名游标续页，切换助手、会话或历史 Run 时会丢弃旧请求，避免内容或加载状态串线。设计见[工作台设计](../../docs/superpowers/specs/2026-09-15-local-agent-conversation-workbench-design.md)，实施与验证见[工作台实施计划 §0](../../docs/superpowers/plans/2026-09-15-local-agent-conversation-workbench.md)。

@@ -473,6 +473,8 @@ class SessionRecoveryTests(unittest.TestCase):
                 ))
             except Exception as error:  # Preserve the exact worker outcome for the assertion.
                 outcome.append(error)
+            finally:
+                self.store.close_thread_connection()
 
         worker = threading.Thread(target=inspect_fifo, daemon=True)
         worker.start()

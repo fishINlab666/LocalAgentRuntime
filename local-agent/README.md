@@ -4,6 +4,8 @@
 
 ## 当前状态
 
+**受管本地文档导入的离线闭环已通过。** 页面可以选择文件或文件夹，将 `.md/.txt`、带文字层 PDF 和 DOCX 保存为 State Store 内的私有副本，并在新建的持久会话中按需搜索、读取和返回原始页码／段落／表格行。固定混合资料验收用 2 个 Run、6 次脚本化模型请求证明了工具结果回填、跨重启历史、跨 Import 隔离和成对备份恢复；完整 Python 661 项及六组浏览器回归通过。当前进程没有模型密钥，受限 DeepSeek 验收记录为 `NOT_RUN`，因此这部分尚不能称为真实模型通过。
+
 **多助手配置、Skills、MCP 已接入同一 Runtime，固定真实模型联合验收及 AI 语义复核均已通过。** 页面和 CLI 可以创建/选择助手、安装和绑定能力；会话保存固定配置版本，旧会话继续原配置。MCP 首批只接本地 stdio 的明确白名单能力；Skill 读取方法和引用，不执行脚本。当前状态和验证边界以[扩展实施计划](../docs/superpowers/plans/2026-09-14-agent-extensions.md)为准。这里的多助手指可切换的配置化助手，仍只有一个活跃 Run，不包含自动派发子 Agent。
 
 本机已准备扩展环境。启用扩展时使用 `.venv/bin/python`，首次在其他环境安装：
@@ -50,12 +52,32 @@ python3 -m local_agent serve --workspace examples/workspace --open
 
 默认打开 `http://127.0.0.1:8765`。终端保持运行；`Ctrl+C` 关闭服务并取消在途任务。端口被占用时加 `--port 8769`。页面显示“DeepSeek 已配置”表示已加载凭据，是否连通由实际问答验证；缺密钥时页面可打开，但不能开始问答，不会自动切到模拟模式。
 
+### 导入文件或文件夹
+
+1. 启动最新服务后，在左栏点击“导入本地资料”。旧服务进程不会自动取得新入口，升级代码后需停止并重新启动一次。
+2. 选择多份文件或一个文件夹。页面支持 `.md`、`.txt`、`.pdf`、`.docx`；其他格式会列为忽略项，不会上传。
+3. 填写会话名称并选择兼容的目录型助手，核对文件数和大小后点击“开始导入”。解析完成后页面自动进入新会话，输入问题即可使用。
+
+PDF 必须含可提取的文字层；扫描件或纯图片 PDF 当前会明确失败，不做 OCR。DOCX 会按段落和表格行提取，PDF 会保留原页码；回答右侧的来源信息显示原逻辑文件名及页／段／表格行。导入时浏览器顺序发送所选文件的原始字节，本机解析后生成只读正文块。初始模型请求不预装正文；`search_documents` 会把受限的命中摘录发给 Provider，`read_file` 会把模型选中的提取正文发给 Provider。
+
+默认 State Store 位于 `~/.local/share/local-agent/`。每批导入保存在 `imports/<import-id>/` 下，包含私有原件副本、只读提取工作区、来源位置表和独立 `artifacts/`；页面和模型不会获得这些绝对路径。原始外部文件移动或删除后，受管会话仍可跨服务重启继续。需要长期保留时，应同时备份 SQLite 与 imports sidecar：
+
+```zsh
+python3 -m local_agent sessions backup "/Users/you/Backups/LocalAgent"
+python3 -m local_agent sessions restore-backup \
+  "/Users/you/Backups/LocalAgent/sessions.TIMESTAMP.sqlite3" \
+  "/Users/you/Backups/LocalAgent/sessions.TIMESTAMP.sqlite3.imports" \
+  "/Users/you/LocalAgent-restored"
+```
+
+恢复目标必须是尚不存在的目录。恢复后以 `--state-dir "/Users/you/LocalAgent-restored"` 启动页面；Session、Import 和助手快照保持不变，文件身份会绑定到新目录。若任务预先声明输出路径并获批准，生成文件位于该 Import 的 `artifacts/`，可从页面右栏下载。当前没有自动同步、自动删除、向量检索或跨设备恢复；State Store 和备份都由用户本地保管。
+
 ### 现在可以怎么玩
 
 | 模块 | 页面中的入口 | 适合尝试的任务 |
 |---|---|---|
-| `file-qa` | 左侧“单文件问答” | 从一份 `.md/.txt` 中找事实并核对逐字引用 |
-| `directory-qa` | 左侧“目录问答” | 让模型列出目录并综合多份资料 |
+| `file-qa` | 左侧“单文件问答” | 从工作区的一份 `.md/.txt` 中找事实并核对逐字引用 |
+| `directory-qa` | 左侧“目录问答”或“导入本地资料” | 发现工作区文件，或搜索导入的 MD/TXT/PDF/DOCX 并综合资料 |
 | `project-brief` | 左侧“项目简报” | 组合本地资料、已绑定 Skill/MCP 和受控写入 |
 | 持久会话 | 左侧新建、切换、改名、归档和恢复 | 重启服务后继续同一资料范围与历史 |
 | 文件工具 | 模型自主调用；中间显示状态 | `read_file`、`list_files`、`write_file`、`session_history` |
@@ -70,7 +92,7 @@ python3 -m local_agent serve --workspace examples/workspace --open
 
 左栏负责选择助手和持久会话，中间是连续任务、回答与审批，右栏是工作区、引用、产物、执行记录和能力管理。输入任务后按 `Enter` 发送，按 `Shift+Enter` 换行；发送按钮始终位于输入框下方。手机端用左上角打开助手/会话，用右上角打开本轮工作；“本轮设置”和“新建会话”表单默认收起。临时单文件任务尚未选择文件时，页面会展开设置并把焦点移到文件输入框。
 
-当前边界：只接 DeepSeek，同一时刻只有一个活跃 Run，只读写本地 `.md/.txt`；写文件须由用户在提交前声明唯一目标且每个任务最多成功写一次；MCP 首批仅本地 stdio 白名单，Skill 脚本不执行，也没有自动子 Agent、Cron、Memory、远程 MCP/OAuth 或流式输出。页面按游标加载更多会话和 Run；这些界面能力不会扩大工作区、助手或会话权限。
+当前边界：只接 DeepSeek，同一时刻只有一个活跃 Run；直接工作区读写仍限 `.md/.txt`，受管导入额外接受带文字层 PDF 与 DOCX。写文件须由用户在提交前声明唯一目标且每个任务最多成功写一次；MCP 首批仅本地 stdio 白名单，Skill 脚本不执行，也没有自动子 Agent、Cron、Memory、远程 MCP/OAuth 或流式输出。页面按游标加载更多会话和 Run；这些界面能力不会扩大工作区、助手或会话权限。
 
 操作顺序：
 
@@ -80,7 +102,7 @@ python3 -m local_agent serve --workspace examples/workspace --open
 4. 如需文件，提交前填写一个新的相对目标。模型只能为该路径提出完整内容，且只有收到真实 Artifact 回执后页面才显示“已创建”。
 5. 切换历史 Run 可查看旧回答和只读审批；刷新不会重复提交。持久会话可跨服务重启继续，临时任务不提供这一保证。
 
-工作区由 `--workspace` 指定，页面不能扩大它。要试用其他文件夹，重新启动并更换该参数；日志目录必须在该工作区外，必要时用 `--log-dir` 指定。默认单文件模式只读取提交的文件；启用目录发现后，模型可以列目录并读取本轮发现的文件。两种模式都不提前把正文放进初始请求；真实模式会将问题、目录元数据和实际读取的正文发送给 DeepSeek。
+工作区由 `--workspace` 指定，普通会话不能扩大它。要直接使用另一个文件夹，可重新启动并更换该参数；也可通过“导入本地资料”只复制明确选择的文件并创建独立受管会话。日志目录必须在普通可读工作区外，必要时用 `--log-dir` 指定。单文件模式只读取提交的文件；目录模式允许模型发现并读取本轮需要的文件。各模式都不提前把正文放进初始请求；真实模式会将问题、目录元数据和实际读取的正文发送给 DeepSeek。
 
 只看页面和本地执行效果，无需密钥：
 
@@ -256,6 +278,7 @@ PYTHONPATH=local-agent python3 -m unittest discover -s local-agent/tests -v
 | `local_agent/trace.py` | 每次运行的本地事件记录 |
 | `local_agent/evaluation.py` | 四类固定场景与未放行的评测报告 |
 | `local_agent/directory_evaluation.py` | 两文件固定验收与上下文回填核对 |
+| `local_agent/import_evaluation.py` | 两轮混合文档导入、重启、隔离和备份恢复固定验收 |
 | `local_agent/demo.py`、`__main__.py` | 模拟替身与运行入口 |
 | `tests/` | 文件、引用、协议、Runtime、入口与验收规则测试 |
 

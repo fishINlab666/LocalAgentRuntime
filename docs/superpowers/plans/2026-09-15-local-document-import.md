@@ -12,7 +12,9 @@
 
 ## §0 当前进度与停止条件
 
-2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过；Task 7 已在 commit `06e4bfe` 完成，导入会话的预声明输出只写独立 `artifacts/`，一次成功、审批、禁止改名/覆盖、真实回执、未知写入恢复和受权下载均已接通。Task 8 已在 commit `417a579` 完成，SQLite、受管资料与 Artifact 作为一个清单约束的目录原子备份，恢复到不存在的 State Store 时重绑目录身份并全量验真；24 项备份/CLI 定向测试、89 项共享链路测试及最终 647 项 Python 回归通过，限定安全 Gate 通过。Task 9 已在 commit `d153368` 完成，受限 HTTP 导入、Agent 隔离、单 worker、幂等重放、失败重试及受限 Session 摘要已接通；11 项导入 HTTP 测试和 55 项 Web 回归通过，限定安全 Gate 通过。Task 10 已在 commit `6d7ddc7` 完成，文件／文件夹预检、顺序原始字节上传、取消与刷新恢复、兼容 Agent、成功后的 Session 身份核验、来源事实和响应式交互已接通；六组浏览器回归通过，三路限定终审通过。下一步执行 Task 11 的固定离线闭环和最终 Gate；只有离线证据通过后才进入一次受限真实 DeepSeek 验收。
+2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过；Task 7 已在 commit `06e4bfe` 完成，导入会话的预声明输出只写独立 `artifacts/`，一次成功、审批、禁止改名/覆盖、真实回执、未知写入恢复和受权下载均已接通。Task 8 已在 commit `417a579` 完成，SQLite、受管资料与 Artifact 作为一个清单约束的目录原子备份，恢复到不存在的 State Store 时重绑目录身份并全量验真；24 项备份/CLI 定向测试、89 项共享链路测试及最终 647 项 Python 回归通过，限定安全 Gate 通过。Task 9 已在 commit `d153368` 完成，受限 HTTP 导入、Agent 隔离、单 worker、幂等重放、失败重试及受限 Session 摘要已接通；11 项导入 HTTP 测试和 55 项 Web 回归通过，限定安全 Gate 通过。Task 10 已在 commit `6d7ddc7` 完成，文件／文件夹预检、顺序原始字节上传、取消与刷新恢复、兼容 Agent、成功后的 Session 身份核验、来源事实和响应式交互已接通；六组浏览器回归通过，三路限定终审通过。Task 11 的固定离线闭环已完成：2 个 Run、6 次脚本化模型请求贯通混合导入、搜索／读取回填、PDF/Word 原位置、删除外部原件后的重启校验、跨 Import 隔离及新 State Store 恢复后追问；127 项导入测试、661 项完整 Python 回归和六组浏览器回归通过，两路限定 Gate PASS。
+
+当前 Codex 进程没有继承模型密钥，受限真实入口已按 `NOT_RUN / CONFIG_MISSING / 0 model calls` 保存原始报告；离线 Provider 不冒充真实模型。实现可以提交和推送，真实 DeepSeek 的 2 Run 语义验收仍是独立待验证项；取得环境变量后只运行这一组，不扩展样例。
 
 本批完成条件：Task 1–10 的定向测试、完整 Python 回归和既有浏览器回归通过；Task 11 的固定混合资料闭环证明“导入 → 搜索 → 读取 → ToolCall 结果进入下一轮 → 原始位置引用 → 重启追问 → 隔离与恢复”。离线证据全部通过后，最多执行一个真实 DeepSeek 会话、2 个 Run、12 次模型请求；任一核心失败立即停止并保留证据。达到条件后不增加 OCR、同步、资料删除、向量检索或新格式。
 
@@ -38,6 +40,7 @@
 | `local-agent/local_agent/static/index.html` | 导入入口、选择器、预检、进度、错误、隐私说明与资料详情 |
 | `local-agent/local_agent/static/app.js` | 浏览器预检、逐文件上传、轮询/取消、迟到响应保护和自动进入会话 |
 | `local-agent/local_agent/static/app.css` | 导入面板、进度和响应式可访问状态 |
+| `local-agent/local_agent/import_evaluation.py` | 两轮合成混合资料验收、上下文／来源／重启／隔离／恢复检查及原始报告 |
 | `local-agent/tests/import_fixtures.py` | 确定性生成小文本 PDF、DOCX 和恶意边界夹具 |
 | `local-agent/tests/test_import_parsers.py` | 解析、位置映射、资源限制、取消与错误映射 |
 | `local-agent/tests/test_import_store.py` | 上传、切块、manifest、幂等发布、取消和崩溃窗口 |
@@ -1088,9 +1091,10 @@ git commit -m "Add document import to the workbench"
 - Modify: `local-agent/local_agent/__main__.py`
 - Modify: `local-agent/README.md`
 - Modify: `local-agent/trial/directory-check.md`
+- Modify: `local-agent/tests/test_session_recovery.py`
 - Modify: `docs/superpowers/plans/2026-09-15-local-document-import.md`
 
-- [ ] **Step 1: 写混合资料离线闭环失败测试**
+- [x] **Step 1: 写混合资料离线闭环失败测试**
 
 固定资料包含 MD、TXT、两页文字 PDF、段落/表格 DOCX 和被忽略 PNG。`ScriptedProvider` 必须依次发出 search、read PDF、read DOCX，再回答。断言初始请求没有正文；两个 tool result 按原 ID 进入紧接的下一轮；引用页码与 Word 位置正确；原始文件移走并重启仍可追问；另一 import 无法读取；成对备份恢复到新 State Store 后再次追问成功。
 
@@ -1103,7 +1107,7 @@ self.assertEqual(result['answer']['citations'][1]['source']['locations'],
                  [{'kind': 'docx_table_row', 'table': 1, 'row': 1}])
 ```
 
-- [ ] **Step 2: 运行导入定向组和完整 Python 回归**
+- [x] **Step 2: 运行导入定向组和完整 Python 回归**
 
 Run:
 
@@ -1116,7 +1120,9 @@ PYTHONPATH=. .venv/bin/python -W error::ResourceWarning -m unittest discover -s 
 
 Expected: 导入定向组全部 PASS；完整回归 0 failure/0 error/0 ResourceWarning。
 
-- [ ] **Step 3: 跑静态语法和全部浏览器回归**
+Actual: 导入定向组 127 项 PASS；完整回归 661 项 PASS，0 failure/0 error/0 ResourceWarning。首次完整运行发现既有 FIFO 检查线程未关闭自己的 SQLite thread-local connection，仅在该测试线程的 `finally` 调用现有清理接口；相关 53 项及完整组重跑均无警告，产品运行逻辑未改。
+
+- [x] **Step 3: 跑静态语法和全部浏览器回归**
 
 Run:
 
@@ -1140,11 +1146,13 @@ python3 /Users/wujingyu/.codex/skills/webapp-testing/scripts/with_server.py \
 
 Expected: 语法检查与六组浏览器测试全部 PASS。
 
-- [ ] **Step 4: 更新玩法、限制和当前阶段证据**
+Actual: JavaScript 语法与 `browser_imports`、`browser_workbench`、`browser_extensions`、`browser_tools`、`browser_sessions`、`browser_web` 六组全部 PASS。
 
-README 写明页面“导入资料”玩法、四种格式、纯图片 PDF 不支持、受管副本位置、Provider 只收到实际读取的提取文本、Artifact 下载、备份恢复命令及本地长期保存提示。`directory-check.md` 顶部新增当前阶段入口，只陈述已经取得的离线/真实证据和剩余限制；不覆盖历史失败。
+- [x] **Step 4: 更新玩法、限制和当前阶段证据**
 
-- [ ] **Step 5: 提交离线闭环并执行代码 Review Gate**
+README 写明页面“导入资料”玩法、四种格式、纯图片 PDF 不支持、受管副本位置、初始请求无正文而搜索会发送受限命中摘录、读取会发送选中正文、Artifact 下载、备份恢复命令及本地长期保存提示。`directory-check.md` 顶部新增当前阶段入口，只陈述已经取得的离线/真实证据和剩余限制；不覆盖历史失败。
+
+- [x] **Step 5: 提交离线闭环并执行代码 Review Gate**
 
 Commit:
 
@@ -1157,6 +1165,8 @@ git commit -m "Complete managed document import loop"
 
 Review 只检查设计验收项、权限绕过、虚假执行、来源映射、资源上限和备份一致性。P0/P1 修完并重跑受影响检查；一般 UI 建议记录后置，不扩大本批。
 
+Actual: 权限／上下文审查 PASS。重启／恢复审查先发现“reopen 后只 resolve”及异常后必需检查可能不完整两项阻塞；已增加 reopen 后真实 search/read/引用 probe，并要求无 error、必需检查键精确完整且全真，故障注入测试通过；复审 PASS。
+
 - [ ] **Step 6: 在所有离线证据通过后运行一次受限 DeepSeek 验收**
 
 只在调用进程已经通过环境变量取得 `DEEPSEEK_API_KEY` 时运行：
@@ -1167,6 +1177,8 @@ PYTHONPATH=. .venv/bin/python -m local_agent evaluate-imports
 ```
 
 验收只用合成的小混合资料，首问跨 PDF/Word 找两项事实，次问引用上一轮结论并核对文本资料。上限为 2 个 Run、12 次模型请求；输出原始机器报告和待语义复核状态。缺密钥时记录 `NOT_RUN`，不得把离线 Provider 冒充真实模型通过，也不得索取或记录密钥。
+
+Actual: 当前进程无密钥，命令返回 `NOT_RUN / CONFIG_MISSING`，模型调用 0；原始报告位于本地忽略目录 `trial/results/import-evaluation-1e84050dd0624e17a443fe949f4322ca/report.json`。真实 2 Run 尚未执行。
 
 - [ ] **Step 7: 核对真实结果、更新 §0 并推送**
 

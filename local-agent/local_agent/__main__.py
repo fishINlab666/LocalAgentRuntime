@@ -16,6 +16,7 @@ from .demo import DemoProvider
 from .directory_evaluation import evaluate_directory
 from .discovery import DirectoryTools
 from .evaluation import evaluate
+from .import_evaluation import evaluate_imports
 from .files import ReadFile
 from .file_tools import adapt_tools
 from .provider import DeepSeekProvider, ProviderError
@@ -271,6 +272,7 @@ def _build_parser():
     for name, help_text in (
         ("evaluate", "真实模型四类场景各三次，全部使用合成数据"),
         ("evaluate-directory", "真实模型目录发现四类场景各三次，全部使用合成数据"),
+        ("evaluate-imports", "真实模型运行两轮受管文档导入固定验收，仅使用合成数据"),
     ):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("--log-dir", type=Path, default=ROOT / "runs")
@@ -389,8 +391,12 @@ def main() -> int:
         elif args.command == "run" and args.session:
             args.continue_run = None
             output, code = _persistent_run(args, control)
-        elif args.command in {"evaluate", "evaluate-directory"}:
-            evaluator = evaluate_directory if args.command == "evaluate-directory" else evaluate
+        elif args.command in {"evaluate", "evaluate-directory", "evaluate-imports"}:
+            evaluator = ({
+                "evaluate": evaluate,
+                "evaluate-directory": evaluate_directory,
+                "evaluate-imports": evaluate_imports,
+            })[args.command]
             output = evaluator(DeepSeekProvider.from_env, args.log_dir, cancel=cancel)
             code = 2 if output["gate"] == "NOT_RUN" else 1 if output["gate"] == "FAILED" else 3
         else:
