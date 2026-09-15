@@ -12,6 +12,7 @@ let sessionCursors = {active: null, archived: null};
 const sessionAgentIds = new Map();
 let pendingApproval = null, approvalSendingId = null, approvalBlockedId = null, approvalDeadline = 0, approvalTimer = null;
 let cancelling = false, cancelSendingId = null;
+let drawerTrigger = null;
 const errors = {
   CONFIG_MISSING: '模型尚未配置。请在已配置 DEEPSEEK_API_KEY 的终端启动页面服务。',
   CONFIG_INVALID: '模型配置有误，请检查启动服务的环境变量。',
@@ -97,6 +98,20 @@ function eventLabel(event) {
   return eventNames[event?.event] || event?.event || '正在启动';
 }
 const messageFor = code => errors[code] || `本次未完成（${code || 'UNKNOWN_ERROR'}），请重新提问。`;
+
+function setDrawer(name = null, returnFocus = true) {
+  const wasOpen = document.body.dataset.drawer;
+  if (name) {
+    document.body.dataset.drawer = name;
+    drawerTrigger = $(name === 'sidebar' ? 'sidebar-toggle' : 'inspector-toggle');
+  } else {
+    delete document.body.dataset.drawer;
+  }
+  $('sidebar-toggle').setAttribute('aria-expanded', String(name === 'sidebar'));
+  $('inspector-toggle').setAttribute('aria-expanded', String(name === 'inspector'));
+  $('workspace-backdrop').hidden = !name;
+  if (!name && wasOpen && returnFocus && drawerTrigger) drawerTrigger.focus();
+}
 
 async function api(path, body) {
   const controller = new AbortController();
@@ -348,7 +363,8 @@ function updateControls() {
   const conversation = sessionMode && $('task-type').value === 'conversation';
   const archived = activeSession?.status === 'archived';
   $('start').disabled = busy || !ready || archived || (sessionMode && !conversation && !workspaceAvailable);
-  $('start').textContent = busy ? '运行中…' : '开始问答 ↗';
+  $('start').textContent = busy ? 'Agent 工作中…' : '发送任务 ↑';
+  $('thread-panel').setAttribute('aria-busy', String(busy));
   $('cancel').hidden = !busy || !activeId;
   $('discover').disabled = sessionMode || busy || !ready;
   $('file').disabled = sessionMode || busy || $('discover').checked;
@@ -411,6 +427,10 @@ function renderApproval(job) {
   if (id !== previousId) {
     $('approval-error').hidden = true;
     $('approval-content').textContent = approval.content;
+    if (!approval.historical) requestAnimationFrame(() => {
+      const currentId = pendingApproval?.approval_id || pendingApproval?.id;
+      if (currentId === id) $('approval-title').focus();
+    });
   }
   $('approval-action').textContent = `实际操作：${approval.action_summary || approval.name}`;
   $('approval-details').textContent = `目标：${approval.path} · ${approval.bytes} 字节 · ${['create', 'created'].includes(approval.operation) ? '新建，不覆盖' : approval.operation} · 来源：${sourceLabel(approval.source)} · ${riskLabel(approval.risk)}`;
@@ -466,6 +486,8 @@ function runPath(runId, tail = '') {
 function clearRunView() {
   clearTimeout(timer); activeId = null; busy = false; renderedEvents = 0; renderedRevision = -1;
   pendingApproval = null; cancelling = false; $('output').hidden = true; $('empty').hidden = false;
+  $('inspector-run-empty').hidden = false;
+  for (const id of ['scope-summary', 'artifacts', 'evidence', 'trace']) $(id).hidden = true;
   $('continue-run').hidden = true; updateControls();
 }
 
@@ -657,6 +679,7 @@ function prepareOutput(job) {
   activeId = job.id; renderedEvents = 0; renderedRevision = -1; viewGeneration++;
   pendingApproval = null; approvalBlockedId = null; cancelling = false; clearTimeout(approvalTimer);
   $('empty').hidden = true; $('output').hidden = false;
+  $('inspector-run-empty').hidden = true; $('trace').hidden = false;
   for (const id of ['answer-block', 'evidence', 'failure', 'form-error', 'scope-summary', 'approval', 'artifacts']) $(id).hidden = true;
   $('continue-run').hidden = true;
   $('events').replaceChildren(); $('citations').replaceChildren(); $('trace-path').textContent = '';
@@ -727,11 +750,13 @@ function render(job) {
     } else {
       const cancelled = job.state === 'cancelled';
       const interrupted = job.state === 'interrupted';
-      status(cancelled ? '已取消' : interrupted ? '运行已中断'
-        : '本次未完成', 'warning');
-      $('failure').hidden = false; $('failure-title').textContent = cancelled ? '本次运行已取消' : '没有生成有效答案';
       const toolError = [...job.events].reverse().find(e => e.event === 'tool.completed' && e.detail.code)?.detail.code;
       const reason = job.state === 'unable' ? (toolError || result.stop_reason) : result.stop_reason;
+      const unreadable = ['FILE_NOT_FOUND', 'UNSUPPORTED_FILE', 'READ_ERROR', 'OS_PERMISSION_DENIED',
+        'DIRECTORY_NOT_FOUND', 'LIST_ERROR'].includes(reason);
+      status(cancelled ? '已取消' : interrupted ? '运行已中断'
+        : unreadable ? '无法读取' : '本次未完成', 'warning');
+      $('failure').hidden = false; $('failure-title').textContent = cancelled ? '本次运行已取消' : '没有生成有效答案';
       $('failure-message').textContent = interrupted
         ? '服务曾在这次运行中停止。旧运行不会自动重做；可以新建一次继续运行。'
         : messageFor(reason) + (answer?.answer ? `\n${answer.answer}` : '');
@@ -966,4 +991,22 @@ $('copy').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText($('answer-text').textContent); $('copy').textContent = '已复制'; }
   catch { $('copy').textContent = '请选中文字复制'; }
 });
+for (const name of ['sidebar', 'inspector']) {
+  $(name + '-toggle').addEventListener('click', () => {
+    setDrawer(name);
+    requestAnimationFrame(() => $(name + '-close').focus());
+  });
+  $(name + '-close').addEventListener('click', () => setDrawer());
+}
+$('workspace-backdrop').addEventListener('click', () => setDrawer());
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && document.body.dataset.drawer) setDrawer();
+});
+const compactComposer = matchMedia('(max-width: 767px)');
+const syncComposerDensity = event => {
+  document.querySelector('.composer-settings').open = !event.matches;
+};
+if (compactComposer.addEventListener) compactComposer.addEventListener('change', syncComposerDensity);
+else compactComposer.addListener(syncComposerDensity);
+syncComposerDensity(compactComposer);
 initialize();

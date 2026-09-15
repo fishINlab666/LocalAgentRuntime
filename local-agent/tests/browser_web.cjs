@@ -17,6 +17,8 @@ const { chromium } = require('playwright');
     }
   });
   async function submit(question, file = 'demo-note.md') {
+    const settings = page.locator('.composer-settings');
+    if (!await settings.evaluate(element => element.open)) await settings.locator('summary').click();
     await page.locator('#file').fill(file);
     await page.locator('#question').fill(question);
     await page.locator('#start').click();

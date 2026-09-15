@@ -105,7 +105,6 @@
             <span class="message-label">你的任务</span>
             <p class="source-line" id="source-line" tabindex="-1"></p>
           </article>
-          <p class="scope-summary field-help" id="scope-summary" hidden></p>
           <div id="progress" class="progress" hidden><span class="spinner" aria-hidden="true"></span><span id="progress-text">正在启动…</span></div>
 
           <section id="approval" class="approval" aria-labelledby="approval-title" hidden>
@@ -125,9 +124,6 @@
             <p id="answer-text" class="answer-text"></p><p id="answer-note" class="field-help"></p>
           </article>
           <div id="failure" class="failure" role="alert" hidden><h2 id="failure-title" tabindex="-1"></h2><p id="failure-message"></p></div>
-          <section id="artifacts" class="artifacts result-card" aria-labelledby="artifact-title" hidden><div class="message-label">生成产物</div><h2 id="artifact-title">已创建文件</h2><p id="artifact-note" class="field-help"></p><div id="artifact-list"></div></section>
-          <section id="evidence" class="evidence result-card" hidden><div class="evidence-heading"><div><span class="message-label">SOURCE CHECK</span><h2>原文依据</h2></div><span id="citation-count"></span></div><div id="citations"></div></section>
-          <details id="trace" class="trace result-card"><summary>查看执行记录 <span id="event-count"></span></summary><ol id="events"></ol><p class="trace-note">仅展示执行步骤；默认本地日志不保存问题、正文和回答全文。</p><code id="trace-path"></code></details>
         </div>
       </div>
 
@@ -165,6 +161,14 @@
         <div class="section-heading compact-heading"><h3>运行环境</h3><span class="badge" id="connection">正在连接本地服务</span></div>
         <span class="small-label">当前工作区</span><code id="workspace">正在读取配置…</code>
       </section>
+      <section class="inspector-block run-overview" aria-labelledby="run-overview-title">
+        <span class="section-kicker">CURRENT RUN</span><h3 id="run-overview-title">执行概览</h3>
+        <p id="inspector-run-empty" class="field-help">开始任务后，这里会显示检查范围、依据、产物和执行步骤。</p>
+        <p class="scope-summary field-help" id="scope-summary" hidden></p>
+      </section>
+      <section id="artifacts" class="artifacts result-card inspector-result" aria-labelledby="artifact-title" hidden><div class="message-label">生成产物</div><h2 id="artifact-title">已创建文件</h2><p id="artifact-note" class="field-help"></p><div id="artifact-list"></div></section>
+      <section id="evidence" class="evidence result-card inspector-result" hidden><div class="evidence-heading"><div><span class="message-label">SOURCE CHECK</span><h2>原文依据</h2></div><span id="citation-count"></span></div><div id="citations"></div></section>
+      <details id="trace" class="trace result-card inspector-result" hidden><summary>查看执行记录 <span id="event-count"></span></summary><ol id="events"></ol><p class="trace-note">仅展示执行步骤；默认本地日志不保存问题、正文和回答全文。</p><code id="trace-path"></code></details>
       <section class="inspector-block module-preview" aria-labelledby="module-preview-title">
         <span class="section-kicker">AVAILABLE NOW</span><h3 id="module-preview-title">可以这样使用</h3>
         <ul><li><strong>单文件问答</strong><span>核对一份 Markdown 或文本资料</span></li><li><strong>目录发现</strong><span>让模型按需查找多份资料</span></li><li><strong>项目助手</strong><span>组合会话、Skill 与 MCP</span></li></ul>

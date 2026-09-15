@@ -57,12 +57,29 @@ const requests = [];
     if (sessionMatch) return send({session: sessions.find(item => item.id === sessionMatch[1])});
     const runListMatch = path.match(/^\/api\/sessions\/([^/]+)\/runs$/);
     if (runListMatch) {
+      if (request.method() === 'POST') {
+        const body = request.postDataJSON();
+        return send({run: {id: 'approval-run', session_id: runListMatch[1],
+          question: body.question, task_type: body.task_type, output_file: body.output_file,
+          state: 'running', phase: 'model', revision: 0}});
+      }
       return url.searchParams.get('cursor') === 'runs-2'
         ? send({runs: runs.slice(20), next_cursor: null})
         : send({runs: runs.slice(0, 20), next_cursor: 'runs-2'});
     }
     const runMatch = path.match(/^\/api\/sessions\/([^/]+)\/runs\/([^/]+)$/);
     if (runMatch) {
+      if (runMatch[2] === 'approval-run') {
+        return send({run: {id: 'approval-run', session_id: runMatch[1],
+          question: '请生成一份报告', task_type: 'files', output_file: null,
+          state: 'waiting_approval', phase: 'approval', revision: 1,
+          events: [{elapsed: 0.1, event: 'approval.required', detail: {name: 'write_file'}}],
+          approvals: [], artifacts: [], result: null,
+          pending_approval: {approval_id: 'approval-1', name: 'write_file', path: 'generated.md',
+            bytes: 12, operation: 'create', source: 'builtin', risk: 'medium',
+            action_summary: '新建 generated.md', arguments: {intent: '保存报告'},
+            content: '合成报告内容', remaining_seconds: 60}}});
+      }
       const item = runs.find(value => value.id === runMatch[2]);
       return send({run: {...item, events: [], approvals: [], artifacts: [],
         result: {state: 'completed', stop_reason: 'ANSWERED', model_calls: 2,
@@ -90,7 +107,42 @@ const requests = [];
     await page.waitForFunction(() => document.querySelectorAll('#session-history button').length === 22);
     assert(requests.some(item => item.path.endsWith('/runs') && item.cursor === 'runs-2'));
     assert.match(await page.locator('#active-capabilities').innerText(), /read_file/);
+    assert.equal(await page.locator('#session-history button').first().getAttribute('aria-current'), 'true');
+    for (const id of ['scope-summary', 'artifacts', 'evidence', 'trace']) {
+      assert.equal(await page.locator('#' + id).evaluate(element =>
+        Boolean(element.closest('[data-region="inspector"]'))), true, `${id} must live in inspector`);
+    }
+    assert.equal(await page.locator('#trace').isVisible(), true);
+    await page.locator('#session-select').selectOption('');
+    await page.waitForFunction(() => document.querySelector('#output').hidden);
+    assert.equal(await page.locator('#trace').isVisible(), false);
+    await page.locator('#session-select').selectOption(sessions[0].id);
+    await page.waitForFunction(() => document.querySelectorAll('#session-history button').length === 20);
+
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await page.locator('.composer-settings').evaluate(element => element.open), false);
+    await page.locator('#sidebar-toggle').click();
+    assert.equal(await page.locator('body').getAttribute('data-drawer'), 'sidebar');
+    assert.equal(await page.locator('#sidebar-toggle').getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.locator('#workspace-backdrop').isVisible(), true);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('body').getAttribute('data-drawer'), null);
+    assert.equal(await page.locator('#sidebar-toggle').getAttribute('aria-expanded'), 'false');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'sidebar-toggle');
+    await page.locator('#inspector-toggle').click();
+    assert.equal(await page.locator('body').getAttribute('data-drawer'), 'inspector');
+    await page.waitForTimeout(250);
+    await page.locator('#inspector-close').click();
+    assert.equal(await page.locator('body').getAttribute('data-drawer'), null);
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+
+    await page.locator('#question').fill('请生成一份报告');
+    await page.locator('#start').click();
+    await page.locator('#approval').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#thread-panel').getAttribute('aria-busy'), 'true');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'approval-title');
+    assert((await page.locator('#approval-allow').boundingBox()).height >= 44);
     assert.deepEqual(pageErrors, []);
-    console.log('PASS: workbench shell, assistant/session navigation, signed-cursor pagination');
+    console.log('PASS: workbench navigation, pagination, responsive drawers, approval focus');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

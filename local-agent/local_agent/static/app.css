@@ -72,7 +72,7 @@ input::placeholder,textarea::placeholder{color:#78869a;opacity:1}
 .thread-actions,.button-row{display:flex;align-items:center;gap:9px}
 .icon-button{display:inline-grid;place-content:center;width:44px;height:44px;border:1px solid var(--line);border-radius:12px;background:white;color:var(--ink);font-size:18px}
 .icon-button:hover{background:var(--panel-soft);border-color:var(--line-strong)}
-.panel-close,.mobile-toggle{display:none}
+.panel-close,.mobile-toggle,#inspector-toggle{display:none}
 .badge{display:inline-flex;align-items:center;gap:7px;min-height:32px;padding:7px 10px;border-radius:999px;background:var(--success-soft);color:var(--success);font-size:11px;line-height:1.25;font-weight:700;white-space:nowrap}
 .badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .badge.neutral{background:#edf1f5;color:var(--muted)}
@@ -153,6 +153,10 @@ input::placeholder,textarea::placeholder{color:#78869a;opacity:1}
 .full-width{width:100%;margin-top:10px}.compact{gap:7px;flex-wrap:wrap}
 .form-error{margin-top:10px;padding:9px 11px;border-radius:9px;background:var(--danger-soft);color:var(--danger);font-size:11px;line-height:1.5}
 .inspector-block{padding:18px 19px;border-bottom:1px solid var(--line)}
+.run-overview h3{margin:5px 0 10px;font-size:16px}
+.run-overview .scope-summary{margin-top:10px}
+.inspector-result{margin:0;padding:18px 19px;border:0;border-bottom:1px solid var(--line);border-radius:0;box-shadow:none}
+.inspector-result .evidence-heading{margin-bottom:9px}
 .connection-block code{display:block;margin-top:7px;padding:10px;border-radius:9px;background:var(--panel-soft);font-size:10px;color:var(--muted)}
 .connection-block .section-heading{align-items:flex-start;margin-bottom:15px}
 .module-preview h3{margin:5px 0 13px;font-size:16px}
@@ -179,17 +183,18 @@ input::placeholder,textarea::placeholder{color:#78869a;opacity:1}
 @media (max-width:1179px){
   .workbench-shell{grid-template-columns:244px minmax(0,1fr)}
   .inspector{position:fixed;z-index:40;inset:0 0 0 auto;width:min(380px,92vw);transform:translateX(105%);box-shadow:var(--shadow);transition:transform .2s ease}
-  .inspector-close,.mobile-toggle{display:inline-grid}
+  #inspector-close,.mobile-toggle,#inspector-toggle{display:inline-grid}
 }
 @media (max-width:767px){
   .workbench-shell{display:block}.thread{min-height:100dvh;max-height:100dvh}
   .sidebar{position:fixed;z-index:40;inset:0 auto 0 0;width:min(328px,92vw);transform:translateX(-105%);box-shadow:var(--shadow);transition:transform .2s ease}
-  .sidebar-close{display:inline-grid}.thread-header{padding:11px 12px;min-height:68px}.thread-title h1{font-size:18px}.thread-title .section-kicker{display:none}
+  #sidebar-close{display:inline-grid}.thread-header{padding:11px 12px;min-height:68px}.thread-title h1{font-size:18px}.thread-title .section-kicker{display:none}
   .thread-scope{max-width:47vw}.thread-actions{gap:5px}.thread-actions .badge{display:none}.thread-scroll{padding:16px 12px 22px}
   .history-block{margin-bottom:10px}.compact-heading .field-help{display:none}.empty{min-height:360px;padding:10px}.empty h2{font-size:20px}
   .empty-steps{gap:6px}.empty-steps i{display:none}.message,.approval,.failure,.result-card{padding:16px}.user-message,.assistant-message{margin-left:0;margin-right:0}
   .composer{padding:12px 12px calc(12px + env(safe-area-inset-bottom))}.composer-topline h2{font-size:14px}#question{font-size:16px}
   .settings-grid{grid-template-columns:1fr;max-height:38vh;overflow-y:auto;padding-right:3px}.span-two{grid-column:auto}.composer-actions{align-items:flex-end}.privacy{display:none}.send-button{min-width:108px}
 }
+body[data-drawer="sidebar"] .sidebar,body[data-drawer="inspector"] .inspector{transform:translateX(0)}
 @media (max-width:390px){.badge{padding:6px 8px}.answer-heading{align-items:center}.empty-steps span{font-size:10px;padding:6px 8px}.composer-settings>summary span{display:none}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.001ms!important;animation-iteration-count:1!important;transition:none!important}}
