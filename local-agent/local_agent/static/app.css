@@ -192,6 +192,8 @@ input::placeholder,textarea::placeholder{color:#78869a;opacity:1}
   .thread-scope{max-width:47vw}.thread-actions{gap:5px}.thread-actions .badge{display:none}.thread-scroll{padding:16px 12px 22px}
   .history-block{margin-bottom:10px}.compact-heading .field-help{display:none}.empty{min-height:360px;padding:10px}.empty h2{font-size:20px}
   .empty-steps{gap:6px}.empty-steps i{display:none}.message,.approval,.failure,.result-card{padding:16px}.user-message,.assistant-message{margin-left:0;margin-right:0}
+  .answer-text,.source-line,.failure p,.empty>p{font-size:16px}
+  .copy,.suggestions button,.session-history button,.quiet,.capability-item button,.composer-settings>summary,.extension-grid details summary{min-height:44px}
   .composer{padding:12px 12px calc(12px + env(safe-area-inset-bottom))}.composer-topline h2{font-size:14px}#question{font-size:16px}
   .settings-grid{grid-template-columns:1fr;max-height:38vh;overflow-y:auto;padding-right:3px}.span-two{grid-column:auto}.composer-actions{align-items:flex-end}.privacy{display:none}.send-button{min-width:108px}
 }

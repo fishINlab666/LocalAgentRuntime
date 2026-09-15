@@ -5,9 +5,9 @@ const token = document.querySelector('meta[name="session-token"]').content;
 let ready = false, simulated = false, activeId = null, busy = false, timer = null, renderedEvents = 0;
 let viewGeneration = 0, renderedRevision = -1;
 let activeSessionId = null, activeSession = null, fixedSessionSelection = false;
-let workspaceAvailable = true, historyRuns = [], runHistoryCursor = null, runPageLoading = false;
+let workspaceAvailable = true, historyRuns = [], runHistoryCursor = null, runPageRequest = null;
 let agents = [], capabilities = {skills: [], servers: []}, selectedAgentId = '', managing = false;
-let sessionListGeneration = 0, visibleSessions = [], sessionPageLoading = false;
+let sessionListGeneration = 0, visibleSessions = [], sessionPageRequest = null;
 let sessionCursors = {active: null, archived: null};
 const sessionAgentIds = new Map();
 let pendingApproval = null, approvalSendingId = null, approvalBlockedId = null, approvalDeadline = 0, approvalTimer = null;
@@ -85,6 +85,17 @@ const eventNames = {'run.started':'任务开始', 'model.requested':'请求模�
   'approval.expired':'确认已过期', 'answer.rejected':'回答格式不合规，正在纠错', 'run.ended':'任务结束'};
 const sourceLabel = value => ({builtin: '内置', user: '用户工具', skill: 'Skill', mcp: 'MCP'})[value] || value || '未提供';
 const riskLabel = value => ({low: '低风险', medium: '中风险', high: '高风险'})[value] || value || '未提供';
+const runStateLabel = value => ({queued: '排队中', running: '运行中', waiting_approval: '待确认',
+  completed: '已完成', unable: '未完成', validation_failed: '校验失败', timed_out: '已超时',
+  cancelled: '已取消', interrupted: '已中断', failed: '失败'})[value] || value || '未知状态';
+function formatTimestamp(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const parsed = typeof value === 'number' && value < 1e12 ? value * 1000 : value;
+  const date = new Date(parsed);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('zh-CN', {year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false});
+}
 function eventLabel(event) {
   if (event?.event === 'answer.rejected' && event.detail?.code === 'IDENTIFIER_MISMATCH') {
     return '标识与原文不一致，正在纠错';
@@ -110,7 +121,20 @@ function setDrawer(name = null, returnFocus = true) {
   $('sidebar-toggle').setAttribute('aria-expanded', String(name === 'sidebar'));
   $('inspector-toggle').setAttribute('aria-expanded', String(name === 'inspector'));
   $('workspace-backdrop').hidden = !name;
+  syncDrawerAccess();
   if (!name && wasOpen && returnFocus && drawerTrigger) drawerTrigger.focus();
+}
+
+function syncDrawerAccess() {
+  const open = document.body.dataset.drawer || null;
+  const sidebarHidden = mobileDrawer.matches && open !== 'sidebar';
+  const inspectorHidden = inspectorDrawer.matches && open !== 'inspector';
+  for (const [panel, hidden] of [[$('sidebar-panel'), sidebarHidden],
+                                 [$('inspector-panel'), inspectorHidden]]) {
+    panel.inert = hidden;
+    if (hidden) panel.setAttribute('aria-hidden', 'true');
+    else panel.removeAttribute('aria-hidden');
+  }
 }
 
 async function api(path, body) {
@@ -498,6 +522,11 @@ function markCurrentRun(runId) {
   }
 }
 
+function currentRunPageLoading() {
+  return Boolean(runPageRequest && runPageRequest.sessionId === activeSessionId
+    && runPageRequest.generation === viewGeneration);
+}
+
 function renderRunHistory(runs, append = false) {
   const merged = append ? [...historyRuns, ...runs] : [...runs];
   historyRuns = [...new Map(merged.map(item => [item.id, item])).values()];
@@ -505,20 +534,22 @@ function renderRunHistory(runs, append = false) {
   for (const item of historyRuns) {
     const button = document.createElement('button');
     button.type = 'button'; button.dataset.runId = item.id;
-    button.textContent = `${item.state === 'completed' ? '✓' : '·'} ${item.question}`;
+    const when = formatTimestamp(item.started_at || item.created_at);
+    button.textContent = `${runStateLabel(item.state)} · ${item.question}${when ? ` · ${when}` : ''}`;
     button.title = item.question;
     button.addEventListener('click', () => openSessionRun(item.id));
     $('session-history').append(button);
   }
   markCurrentRun(activeId);
   $('run-load-more').hidden = !runHistoryCursor;
-  $('run-load-more').disabled = runPageLoading || busy;
+  $('run-load-more').disabled = currentRunPageLoading() || busy;
 }
 
 async function loadMoreRuns() {
-  if (!activeSessionId || !runHistoryCursor || runPageLoading) return;
+  if (!activeSessionId || !runHistoryCursor || currentRunPageLoading()) return;
   const sessionId = activeSessionId, generation = viewGeneration, cursor = runHistoryCursor;
-  runPageLoading = true; $('run-load-more').disabled = true;
+  const request = {sessionId, generation, cursor};
+  runPageRequest = request; $('run-load-more').disabled = true;
   try {
     const response = await api(`/api/sessions/${sessionId}/runs?cursor=${encodeURIComponent(cursor)}`);
     if (sessionId !== activeSessionId || generation !== viewGeneration) return;
@@ -527,7 +558,7 @@ async function loadMoreRuns() {
   } catch (error) {
     if (sessionId === activeSessionId && generation === viewGeneration) showError(error, 'session-error');
   } finally {
-    runPageLoading = false;
+    if (runPageRequest === request) runPageRequest = null;
     if (sessionId === activeSessionId && generation === viewGeneration) renderRunHistory([], true);
   }
 }
@@ -544,10 +575,20 @@ async function openSessionRun(runId) {
     $('output-file').value = job.output_file || '';
     prepareOutput(job); render(job);
     markCurrentRun(job.id);
+    focusRunResult(job);
     if (busy) timer = setTimeout(poll, 450);
   } catch (error) {
     if (sessionId === activeSessionId && generation === viewGeneration) showError(error, 'session-error');
   }
+}
+
+function focusRunResult(job) {
+  const target = job.state === 'completed' && !$('answer-block').hidden
+    ? $('answer-title') : !$('failure').hidden ? $('failure-title') : null;
+  if (!target || document.activeElement === $('question')) return;
+  requestAnimationFrame(() => {
+    if (activeId === job.id && document.activeElement !== $('question')) target.focus();
+  });
 }
 
 function sessionListPath(kind, cursor = null) {
@@ -586,7 +627,8 @@ function renderSessionList() {
     button.disabled = busy || managing;
     title.textContent = session.title;
     const scope = session.scope?.mode === 'directory' ? '目录' : session.scope?.file || '单文件';
-    details.textContent = `${scope}${session.status === 'archived' ? ' · 已归档' : ''}`;
+    const when = formatTimestamp(session.updated_at || session.created_at);
+    details.textContent = `${scope}${session.status === 'archived' ? ' · 已归档' : ''}${when ? ` · ${when}` : ''}`;
     button.addEventListener('click', () => {
       $('session-select').value = session.id;
       selectSession(session.id);
@@ -594,17 +636,24 @@ function renderSessionList() {
     button.append(title, details); list.append(button);
   }
   $('session-load-more').hidden = fixedSessionSelection || (!sessionCursors.active && !sessionCursors.archived);
-  $('session-load-more').disabled = sessionPageLoading || busy || managing;
+  $('session-load-more').disabled = currentSessionPageLoading() || busy || managing;
+}
+
+function currentSessionPageLoading() {
+  return Boolean(sessionPageRequest && sessionPageRequest.generation === sessionListGeneration
+    && sessionPageRequest.agentId === selectedAgentId);
 }
 
 async function loadMoreSessions() {
-  if (fixedSessionSelection || sessionPageLoading || (!sessionCursors.active && !sessionCursors.archived)) return;
+  if (fixedSessionSelection || currentSessionPageLoading()
+      || (!sessionCursors.active && !sessionCursors.archived)) return;
   const generation = sessionListGeneration, requestedAgent = selectedAgentId;
   const cursors = {...sessionCursors};
+  const request = {generation, agentId: requestedAgent, cursors};
   const pending = [];
   if (cursors.active) pending.push(api(sessionListPath('active', cursors.active)).then(data => ({kind: 'active', data})));
   if (cursors.archived) pending.push(api(sessionListPath('archived', cursors.archived)).then(data => ({kind: 'archived', data})));
-  sessionPageLoading = true; $('session-load-more').disabled = true;
+  sessionPageRequest = request; $('session-load-more').disabled = true;
   try {
     const pages = await Promise.all(pending);
     if (generation !== sessionListGeneration || requestedAgent !== selectedAgentId) return;
@@ -617,7 +666,7 @@ async function loadMoreSessions() {
   } catch (error) {
     if (generation === sessionListGeneration && requestedAgent === selectedAgentId) showError(error, 'session-error');
   } finally {
-    sessionPageLoading = false;
+    if (sessionPageRequest === request) sessionPageRequest = null;
     if (generation === sessionListGeneration && requestedAgent === selectedAgentId) renderSessionList();
   }
 }
@@ -671,7 +720,10 @@ async function loadSessions(selectedId = null, fixed = fixedSessionSelection) {
   $('session-create').hidden = fixedSessionSelection;
   const wanted = selectedId || active.sessions?.[0]?.id || null;
   if (wanted) { $('session-select').value = wanted; await selectSession(wanted); }
-  else { $('session-select').value = ''; await selectSession(''); }
+  else {
+    $('session-select').value = ''; await selectSession('');
+    if (document.activeElement === document.body) $('question').focus();
+  }
 }
 
 function prepareOutput(job) {
@@ -690,6 +742,7 @@ function prepareOutput(job) {
 
 function render(job) {
   if (activeId !== job.id || job.revision < renderedRevision) return;
+  const focusWhenFinished = busy && renderedRevision >= 0 && job.result !== null;
   renderedRevision = job.revision;
   for (const event of job.events.slice(renderedEvents)) {
     const li = document.createElement('li'), stamp = document.createElement('time'), label = document.createElement('span');
@@ -764,6 +817,7 @@ function render(job) {
     }
   }
   updateControls();
+  if (focusWhenFinished) focusRunResult(job);
 }
 
 async function poll() {
@@ -1002,11 +1056,18 @@ $('workspace-backdrop').addEventListener('click', () => setDrawer());
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && document.body.dataset.drawer) setDrawer();
 });
-const compactComposer = matchMedia('(max-width: 767px)');
+const mobileDrawer = matchMedia('(max-width: 767px)');
+const inspectorDrawer = matchMedia('(max-width: 1179px)');
+const compactComposer = mobileDrawer;
 const syncComposerDensity = event => {
   document.querySelector('.composer-settings').open = !event.matches;
 };
 if (compactComposer.addEventListener) compactComposer.addEventListener('change', syncComposerDensity);
 else compactComposer.addListener(syncComposerDensity);
+for (const media of [mobileDrawer, inspectorDrawer]) {
+  if (media.addEventListener) media.addEventListener('change', syncDrawerAccess);
+  else media.addListener(syncDrawerAccess);
+}
 syncComposerDensity(compactComposer);
+syncDrawerAccess();
 initialize();

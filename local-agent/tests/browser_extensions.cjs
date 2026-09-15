@@ -75,6 +75,7 @@ const clone = value => JSON.parse(JSON.stringify(value));
   });
   try {
     await page.goto('http://extensions.test/', {waitUntil: 'networkidle'});
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'question');
     for (const id of ['agent-select', 'agent-create', 'skill-install', 'mcp-install', 'run-skill', 'run-prompt']) {
       assert.equal(await page.locator('#' + id).count(), 1, 'Missing extension control: ' + id);
     }

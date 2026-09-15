@@ -24,6 +24,10 @@ const makeRun = number => ({id: `run-${String(number).padStart(2, '0')}`,
   started_at: 100 - number, finished_at: 101 - number});
 const runs = Array.from({length: 22}, (_, index) => makeRun(index + 1));
 const requests = [];
+let delayNextRunPage = false, releaseRunPage;
+let delayNextSessionPage = false, releaseSessionPage;
+const runPageGate = new Promise(resolve => { releaseRunPage = resolve; });
+const sessionPageGate = new Promise(resolve => { releaseSessionPage = resolve; });
 
 (async () => {
   const browser = await chromium.launch({headless: true,
@@ -33,6 +37,11 @@ const requests = [];
   page.on('pageerror', error => pageErrors.push(error.message));
   await page.route('http://workbench.test/**', async route => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
+    const requestedAgent = request.headers()['x-agent-id'];
+    const scopedSession = item => requestedAgent ? {...item,
+      title: `${item.title} · ${requestedAgent}`, agent_id: requestedAgent,
+      agent_revision: `${requestedAgent}-revision`,
+      agent_snapshot: agents.find(agent => agent.id === requestedAgent) || item.agent_snapshot} : item;
     requests.push({path, cursor: url.searchParams.get('cursor'), archived: url.searchParams.get('archived')});
     if (['/', '/app.js', '/app.css'].includes(path)) {
       const file = path === '/' ? 'index.html' : path.slice(1);
@@ -49,12 +58,15 @@ const requests = [];
     if (path === '/api/capabilities') return send({skills: [], servers: []});
     if (path === '/api/sessions') {
       if (url.searchParams.get('archived') === '1') return send({sessions: [], next_cursor: null});
+      if (url.searchParams.get('cursor') === 'sessions-2' && delayNextSessionPage) {
+        delayNextSessionPage = false; await sessionPageGate;
+      }
       return url.searchParams.get('cursor') === 'sessions-2'
-        ? send({sessions: sessions.slice(20), next_cursor: null})
-        : send({sessions: sessions.slice(0, 20), next_cursor: 'sessions-2'});
+        ? send({sessions: sessions.slice(20).map(scopedSession), next_cursor: null})
+        : send({sessions: sessions.slice(0, 20).map(scopedSession), next_cursor: 'sessions-2'});
     }
     const sessionMatch = path.match(/^\/api\/sessions\/([^/]+)$/);
-    if (sessionMatch) return send({session: sessions.find(item => item.id === sessionMatch[1])});
+    if (sessionMatch) return send({session: scopedSession(sessions.find(item => item.id === sessionMatch[1]))});
     const runListMatch = path.match(/^\/api\/sessions\/([^/]+)\/runs$/);
     if (runListMatch) {
       if (request.method() === 'POST') {
@@ -62,6 +74,9 @@ const requests = [];
         return send({run: {id: 'approval-run', session_id: runListMatch[1],
           question: body.question, task_type: body.task_type, output_file: body.output_file,
           state: 'running', phase: 'model', revision: 0}});
+      }
+      if (url.searchParams.get('cursor') === 'runs-2' && delayNextRunPage) {
+        delayNextRunPage = false; await runPageGate;
       }
       return url.searchParams.get('cursor') === 'runs-2'
         ? send({runs: runs.slice(20), next_cursor: null})
@@ -71,7 +86,7 @@ const requests = [];
     if (runMatch) {
       if (runMatch[2] === 'approval-run') {
         return send({run: {id: 'approval-run', session_id: runMatch[1],
-          question: '请生成一份报告', task_type: 'files', output_file: null,
+          question: '请生成一份报告', task_type: 'files', output_file: 'generated.md',
           state: 'waiting_approval', phase: 'approval', revision: 1,
           events: [{elapsed: 0.1, event: 'approval.required', detail: {name: 'write_file'}}],
           approvals: [], artifacts: [], result: null,
@@ -97,17 +112,22 @@ const requests = [];
     }
     assert.equal(await page.locator('#agent-list [data-agent-id]').count(), 3);
     assert.equal(await page.locator('#session-list [data-session-id]').count(), 20);
+    assert.match(await page.locator('#session-list [data-session-id]').first().innerText(), /1970/);
     assert.equal(await page.locator('#session-load-more').isVisible(), true);
     await page.locator('#session-load-more').click();
     await page.waitForFunction(() => document.querySelectorAll('#session-list [data-session-id]').length === 22);
     assert(requests.some(item => item.path === '/api/sessions' && item.cursor === 'sessions-2'));
     assert.equal(await page.locator('#session-history button').count(), 20);
+    assert.match(await page.locator('#session-history button').first().innerText(), /已完成.*1970/);
     assert.equal(await page.locator('#run-load-more').isVisible(), true);
     await page.locator('#run-load-more').click();
     await page.waitForFunction(() => document.querySelectorAll('#session-history button').length === 22);
     assert(requests.some(item => item.path.endsWith('/runs') && item.cursor === 'runs-2'));
     assert.match(await page.locator('#active-capabilities').innerText(), /read_file/);
     assert.equal(await page.locator('#session-history button').first().getAttribute('aria-current'), 'true');
+    await page.locator('#session-history button').nth(1).click();
+    await page.waitForFunction(() => document.querySelector('#answer-text')?.textContent.includes('第 2 轮问题'));
+    await page.waitForFunction(() => document.activeElement?.id === 'answer-title');
     for (const id of ['scope-summary', 'artifacts', 'evidence', 'trace']) {
       assert.equal(await page.locator('#' + id).evaluate(element =>
         Boolean(element.closest('[data-region="inspector"]'))), true, `${id} must live in inspector`);
@@ -119,23 +139,67 @@ const requests = [];
     await page.locator('#session-select').selectOption(sessions[0].id);
     await page.waitForFunction(() => document.querySelectorAll('#session-history button').length === 20);
 
+    delayNextRunPage = true;
+    await page.locator('#run-load-more').click();
+    await page.waitForFunction(() => document.querySelector('#run-load-more').disabled);
+    await page.locator('[data-session-id="session-02"]').click();
+    await page.waitForFunction(() => document.querySelector('[data-session-id="session-02"]')
+      ?.getAttribute('aria-current') === 'true');
+    assert.equal(await page.locator('#run-load-more').isDisabled(), false,
+      'an old run page must not disable the new session page');
+    releaseRunPage();
+
+    await page.locator('[data-agent-id="file-qa"]').click();
+    await page.waitForFunction(() => {
+      const button = document.querySelector('#session-load-more');
+      return button && !button.hidden && !button.disabled
+        && document.querySelectorAll('#session-list [data-session-id]').length === 20;
+    });
+    delayNextSessionPage = true;
+    await page.locator('#session-load-more').click();
+    await page.waitForFunction(() => document.querySelector('#session-load-more').disabled);
+    await page.locator('[data-agent-id="directory-qa"]').click();
+    await page.waitForFunction(() => document.querySelector('#session-list [data-session-id] strong')
+      ?.textContent.includes('directory-qa'));
+    assert.equal(await page.locator('#session-load-more').isDisabled(), false,
+      'an old session page must not disable the new agent page');
+    releaseSessionPage();
+
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await page.locator('.composer-settings').evaluate(element => element.open), false);
+    assert.equal(await page.locator('#sidebar-panel').evaluate(element => element.inert), true);
+    assert.equal(await page.locator('#inspector-panel').evaluate(element => element.inert), true);
+    await page.locator('#sidebar-toggle').focus();
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'inspector-toggle',
+      'Tab must skip both hidden drawers');
+    assert(Number.parseFloat(await page.locator('#answer-text').evaluate(element =>
+      getComputedStyle(element).fontSize)) >= 16);
+    for (const selector of ['#copy', '.suggestions button', '#session-history button']) {
+      assert((await page.locator(selector).first().boundingBox()).height >= 44,
+        `${selector} must remain a 44px touch target`);
+    }
     await page.locator('#sidebar-toggle').click();
     assert.equal(await page.locator('body').getAttribute('data-drawer'), 'sidebar');
     assert.equal(await page.locator('#sidebar-toggle').getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.locator('#sidebar-panel').evaluate(element => element.inert), false);
+    assert.equal(await page.locator('#inspector-panel').evaluate(element => element.inert), true);
     assert.equal(await page.locator('#workspace-backdrop').isVisible(), true);
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('body').getAttribute('data-drawer'), null);
     assert.equal(await page.locator('#sidebar-toggle').getAttribute('aria-expanded'), 'false');
+    assert.equal(await page.locator('#sidebar-panel').evaluate(element => element.inert), true);
     assert.equal(await page.evaluate(() => document.activeElement.id), 'sidebar-toggle');
     await page.locator('#inspector-toggle').click();
     assert.equal(await page.locator('body').getAttribute('data-drawer'), 'inspector');
+    assert.equal(await page.locator('#inspector-panel').evaluate(element => element.inert), false);
     await page.waitForTimeout(250);
     await page.locator('#inspector-close').click();
     assert.equal(await page.locator('body').getAttribute('data-drawer'), null);
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
 
+    await page.locator('.composer-settings summary').click();
+    await page.locator('#output-file').fill('generated.md');
     await page.locator('#question').fill('请生成一份报告');
     await page.locator('#start').click();
     await page.locator('#approval').waitFor({state: 'visible'});
@@ -143,6 +207,6 @@ const requests = [];
     assert.equal(await page.evaluate(() => document.activeElement.id), 'approval-title');
     assert((await page.locator('#approval-allow').boundingBox()).height >= 44);
     assert.deepEqual(pageErrors, []);
-    console.log('PASS: workbench navigation, pagination, responsive drawers, approval focus');
-  } finally { await browser.close(); }
+    console.log('PASS: workbench navigation, scoped pagination races, responsive inert drawers, result/approval focus');
+  } finally { releaseRunPage(); releaseSessionPage(); await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

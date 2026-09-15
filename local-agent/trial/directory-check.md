@@ -1,5 +1,11 @@
 # 受限目录发现验收记录
 
+## 当前任务入口（2026-09-15：会话工作台）
+
+当前为**三栏会话工作台已经实现，最终离线 Review Gate PASS，等待用户实际试玩**。页面将配置化助手与持久会话放在左栏，连续任务、审批与回答放在中栏，将依据、产物、执行记录和能力管理放在右栏；平板与手机使用不可聚焦的响应式抽屉。会话和 Run 支持签名游标续页，切换助手、会话或历史 Run 时会丢弃旧请求，避免内容或加载状态串线。设计见[工作台设计](../../docs/superpowers/specs/2026-09-15-local-agent-conversation-workbench-design.md)，实施与验证见[工作台实施计划 §0](../../docs/superpowers/plans/2026-09-15-local-agent-conversation-workbench.md)。
+
+Review 同时发现分支内 `write_file` 曾偏离用户约束，提交 `90e5bb4` 已恢复为：用户提交任务前声明唯一输出路径，未声明时不注册写工具；模型不能改路径，每个 Run 最多成功新建一次。最终离线回归为 Python 465 项通过，五组本地浏览器检查 PASS，桌面、手机和审批截图已核对。本轮没有调用 DeepSeek；原有真实 Agent/会话/Skill/MCP 证据继续有效，页面实际使用是否顺手仍由用户试玩判断。本阶段按工作台范围停止，不追加新后端能力或第二套视觉。
+
 ## 当前任务入口（2026-09-14）
 
 当前为**多助手配置、MCP、Skills、会话与工具层的本批联合闭环已完成**。方案见[扩展设计 §0](../../docs/superpowers/specs/2026-09-14-agent-extensions-design.md)，实施与历史失败证据见[实施计划 §0](../../docs/superpowers/plans/2026-09-14-agent-extensions.md)。[第八次最终真实报告](results/extensions-acceptance-20260915T030927702169Z/report.json)的 R1–R6 机器检查全部 PASS；后置[联合验收记录](extensions-live-check.md)逐项核对事实、引用、摘要、工具结果回填、审批、落盘与错误收口后，AI 语义 Gate PASS。完整回归 464 项通过；固定组累计使用 50/60 次真实 DeepSeek 请求，剩余 10 次，已按停止条件停止追加调用。原机器报告的用户验收仍为 pending；合成审批 `human_approval=false`，不冒充用户签字。当前结论只覆盖本批配置化助手与联合能力，不包含 Memory、Cron、自动子 Agent、远程 MCP/OAuth、多 Provider 或全路线发布质量。
