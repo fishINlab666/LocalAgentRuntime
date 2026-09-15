@@ -33,7 +33,7 @@ def _check_identifiers(answer: str, evidence: dict[str, dict]) -> None:
 
 def validate_answer(text: str, snapshots: dict[str, dict], target_path: str | None,
                     read_attempted: bool, *, coverage: dict | None = None,
-                    task_failure: bool = False) -> dict:
+                    task_failure: bool = False, imported: bool = False) -> dict:
     if not isinstance(text, str):
         raise AnswerError("INVALID_ANSWER", "The final answer must be JSON text.")
     try:
@@ -51,6 +51,8 @@ def validate_answer(text: str, snapshots: dict[str, dict], target_path: str | No
         raise AnswerError("INVALID_ANSWER", "The answer fields have invalid values or types.")
 
     directory_mode = target_path is None
+    if type(imported) is not bool or (imported and not directory_mode):
+        raise AnswerError("INVALID_ANSWER", "Invalid evidence mode.")
     coverage = coverage or {}
     permitted = coverage.get('read_files', []) if directory_mode else [target_path]
     evidence = {path: snapshot for path, snapshot in snapshots.items()
@@ -58,9 +60,11 @@ def validate_answer(text: str, snapshots: dict[str, dict], target_path: str | No
                 and snapshot.get('ok') is True and snapshot.get('path') == path
                 and isinstance(snapshot.get('content'), str)}
     has_read = bool(evidence)
-    complete = (coverage.get('complete') is True and not coverage.get('unlisted_directories')
-                and not coverage.get('unread_files') and '.' in coverage.get('listed_directories', [])
+    complete = (coverage.get('complete') is True and not coverage.get('unread_files')
                 and all(path in evidence for path in coverage.get('discovered_files', [])))
+    if not imported:
+        complete = (complete and not coverage.get('unlisted_directories')
+                    and '.' in coverage.get('listed_directories', []))
     if status == "unable":
         if not task_failure and not (coverage.get('attempted') if directory_mode else read_attempted):
             raise AnswerError("MISSING_READ", "A file read must be attempted before returning unable.")
@@ -75,6 +79,8 @@ def validate_answer(text: str, snapshots: dict[str, dict], target_path: str | No
         if not complete:
             raise AnswerError('INCOMPLETE_SEARCH', 'All discovered directories and files must be checked before not_found.')
     elif not has_read:
+        if imported and citations:
+            raise AnswerError('INVALID_CITATION', 'Catalog results are not fact evidence.')
         raise AnswerError("MISSING_READ", "A successful target read is required.")
     if status == "answered" and not citations:
         raise AnswerError("MISSING_CITATION", "An answered result requires at least one citation.")

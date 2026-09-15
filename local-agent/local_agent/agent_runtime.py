@@ -12,7 +12,6 @@ import re
 from .agents import AgentCatalog, AgentDefinition, AgentError, HASH, canonical, _id, build_file_engine
 from .answers import AnswerError, _unique_object, _reject_constant
 from .approvals import RunStopped
-from .file_tools import model_request
 from .skills import SkillLibrary, SkillTool, SkillError
 
 
@@ -217,11 +216,13 @@ class ExtensionPolicy:
                 if not self.library.server_enabled(adapter.server_id):
                     raise RunStopped('MCP_DISABLED')
         self.attempted = True
-        if name in {'read_file', 'list_files', 'write_file', 'session_history'}:
+        if name in {'read_file', 'list_files', 'write_file', 'session_history',
+                    'search_documents'}:
             self.base.before(name, arguments)
 
     def accept(self, name, arguments, result):
-        if name in {'read_file', 'list_files', 'write_file', 'session_history'}:
+        if name in {'read_file', 'list_files', 'write_file', 'session_history',
+                    'search_documents'}:
             self.base.accept(name, arguments, result)
         if not result.get('ok'):
             self.last_error = result.get('error', {}).get('code')
@@ -271,7 +272,7 @@ class ExtensionPolicy:
                                 'end_line': line_count,
                             }
                 message['content'] = json.dumps(value, ensure_ascii=False)
-        return model_request(projected, limit, schemas)
+        return self.base.model_request(projected, limit, schemas)
 
     def repair_prompt(self, code):
         return ('上一条答案没有通过校验（' + code
@@ -327,6 +328,9 @@ class ExtensionPolicy:
             resolved.append({**citation, 'quote': quote,
                              **({'source': copy.deepcopy(source['source'])} if 'source' in source else {})})
         value['citations'] = resolved
+        enrich = getattr(self.base, 'enrich_validated_answer', None)
+        if callable(enrich):
+            value = enrich(value)
         return value
 
 
@@ -363,14 +367,16 @@ class AuthorityPolicy:
 
 
 def assemble(agent, workspace, target_path, output_path, library, *, run_id,
-             control=None, agent_catalog=None, selected_skill=None, selected_prompt=None):
+             control=None, agent_catalog=None, selected_skill=None, selected_prompt=None,
+             source_mapper=None):
     if selected_skill is not None and (not isinstance(selected_skill, str) or not selected_skill):
         raise AgentError('SKILL_NOT_BOUND')
     if selected_prompt is not None and (not isinstance(selected_prompt, dict)
             or set(selected_prompt) != {'server_id', 'name'}
             or any(not isinstance(v, str) or not v for v in selected_prompt.values())):
         raise AgentError('MCP_CAPABILITY_DENIED')
-    engine = build_file_engine(agent, workspace, target_path, output_path)
+    engine = build_file_engine(agent, workspace, target_path, output_path,
+                               source_mapper=source_mapper)
     raw = agent.to_dict()
     assembly = Assembly(engine)
     adapters, statuses = [], []

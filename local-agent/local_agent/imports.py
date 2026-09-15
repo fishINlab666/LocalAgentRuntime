@@ -320,6 +320,12 @@ class ImportedWorkspace:
     workspace_inode: int
     artifact_device: int
     artifact_inode: int
+    manifest_sha256: str | None = None
+    manifest_hashes: MappingProxyType | None = None
+    source_records: tuple[MappingProxyType, ...] = ()
+    root_device: int | None = None
+    root_inode: int | None = None
+    locations_bytes: int = 0
 
 
 @dataclass(frozen=True)
@@ -1503,11 +1509,23 @@ class ImportStore:
                 if any(item['parser_json'] != record['parser_json']
                        for item, record in zip(files, published.file_records)):
                     raise ValueError('parser record changed')
+                root_fd = self._batch_fd(import_id, formal=True)
+                try:
+                    root_details = os.fstat(root_fd)
+                    location_details = os.stat(
+                        'locations.json', dir_fd=root_fd, follow_symlinks=False)
+                    if (not stat.S_ISREG(location_details.st_mode)
+                            or location_details.st_nlink != 1):
+                        raise ValueError('invalid locations file')
+                finally:
+                    os.close(root_fd)
                 return ImportedWorkspace(
                     import_id, published.root, published.root / 'originals',
                     published.workspace, published.artifacts, published.manifest,
                     published.locations, *published.identities['workspace'],
-                    *published.identities['artifacts'])
+                    *published.identities['artifacts'], published.manifest_sha256,
+                    published.manifest_hashes, published.file_records,
+                    root_details.st_dev, root_details.st_ino, location_details.st_size)
             except (ImportStoreError, OSError, ValueError, TypeError, KeyError, sqlite3.Error):
                 with self.store.transaction() as connection:
                     connection.execute(

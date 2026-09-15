@@ -138,9 +138,14 @@ class ManagedWorkspaceResolver:
             if (session.workspace_device, session.workspace_inode) != (
                     workspace.workspace_device, workspace.workspace_inode):
                 raise SessionError('IMPORT_INTEGRITY_ERROR')
+            from .import_tools import ImportedDocumentError, ImportedSourceMapper
+            try:
+                source_mapper = ImportedSourceMapper(workspace)
+            except ImportedDocumentError:
+                raise SessionError('IMPORT_INTEGRITY_ERROR') from None
             return ResolvedWorkspace(workspace.workspace,
                 (workspace.workspace_device, workspace.workspace_inode), workspace.artifacts,
-                (workspace.artifact_device, workspace.artifact_inode))
+                (workspace.artifact_device, workspace.artifact_inode), source_mapper)
         except ImportStoreError as error:
             raise SessionError(error.code) from None
         except (sqlite3.Error, StoreError):
@@ -556,7 +561,7 @@ class SessionService:
                     raise SessionError('AGENT_DISABLED')
                 snapshot = agent.to_dict()
                 if snapshot['strategy'] not in {'directory', 'combined'} or not {
-                        'list_files', 'read_file'}.issubset(snapshot['tools']):
+                        'list_files', 'read_file', 'search_documents'}.issubset(snapshot['tools']):
                     raise SessionError('AGENT_CONFIG_INVALID')
                 title = _validate_title(request['name'])
                 session_id, now = self._new_id(), self._clock()
@@ -1346,7 +1351,8 @@ class SessionService:
                 assembly = assemble(agent, workspace, target, prepared.submission.output_path,
                     CapabilityStore(self.store.state_dir), run_id=prepared.run_id, control=control,
                     agent_catalog=catalog, selected_skill=prepared.submission.skill_id,
-                    selected_prompt=prepared.submission.mcp_prompt)
+                    selected_prompt=prepared.submission.mcp_prompt,
+                    source_mapper=resolved.source_mapper)
                 engine = assembly.engine
                 if (engine.policy.tool.workspace != resolved.read_root
                         or engine.policy.tool.workspace_identity != resolved.read_identity):

@@ -98,9 +98,18 @@ class ManagedWorkspaceTests(unittest.TestCase):
         self.assertEqual(resolved.write_root, published.artifacts)
         self.assertEqual(resolved.read_identity, published.identities['workspace'])
         self.assertEqual(resolved.write_identity, published.identities['artifacts'])
-        self.assertIsNone(resolved.source_mapper)
+        self.assertIsNotNone(resolved.source_mapper)
+        self.assertEqual(resolved.source_mapper.fact_paths,
+                         tuple(path.relative_to(published.workspace).as_posix()
+                               for path in published.chunk_paths))
         with self.assertRaises(FrozenInstanceError):
             resolved.read_root = self.secret
+
+    def test_ordinary_workspace_has_no_import_source_mapper(self):
+        workspace = self.root / 'ordinary'
+        workspace.mkdir()
+        session = self.service.create(workspace, '普通目录', SessionScope('directory', None))
+        self.assertIsNone(self.service.resolver.resolve(session).source_mapper)
 
     def test_other_import_id_and_noncanonical_id_cannot_resolve_session(self):
         _, _, session = self.ready()

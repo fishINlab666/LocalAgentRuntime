@@ -20,7 +20,7 @@ BUDGETS = {'max_steps': 6, 'run_timeout': 120, 'model_timeout': 45,
            'tool_timeout': 5, 'max_tool_calls': 4, 'max_input_bytes': 65536,
            'max_files': 4, 'max_file_bytes': 32768}
 CAPS = {**BUDGETS, 'max_steps': 10, 'tool_timeout': 15, 'max_files': 16}
-TOOLS = {'read_file', 'list_files', 'write_file', 'session_history'}
+TOOLS = {'read_file', 'list_files', 'write_file', 'session_history', 'search_documents'}
 _LEGACY_TOOLS = {
     'file': ('read_file', 'write_file', 'session_history'),
     'directory': ('read_file', 'list_files', 'write_file', 'session_history'),
@@ -67,6 +67,7 @@ class AgentDefinition:
                     or data['approval'] not in {'ask_writes', 'deny_writes'}
                     or not _strings(data['tools']) or not set(data['tools']) <= TOOLS
                     or 'read_file' not in data['tools']
+                    or (data['strategy'] == 'file' and 'search_documents' in data['tools'])
                     or (data['strategy'] != 'file' and 'list_files' not in data['tools'])):
                 raise AgentError()
             model = data['model']
@@ -166,7 +167,7 @@ def builtin_agent(mode='file', *, legacy=False):
     if type(legacy) is not bool:
         raise AgentError()
     tools = (list(_LEGACY_TOOLS[mode]) if legacy else
-             ['read_file', *(['list_files'] if mode != 'file' else []),
+             ['read_file', *(['list_files', 'search_documents'] if mode != 'file' else []),
               'write_file', 'session_history'])
     return AgentDefinition.from_dict({
         'schema_version': 1,
@@ -182,7 +183,7 @@ def builtin_agent(mode='file', *, legacy=False):
     })
 
 
-def build_file_engine(agent, workspace, target_path, output_path=None):
+def build_file_engine(agent, workspace, target_path, output_path=None, *, source_mapper=None):
     from .discovery import DirectoryTools
     from .files import ReadFile
     from .file_tools import adapt_tools
@@ -201,7 +202,20 @@ def build_file_engine(agent, workspace, target_path, output_path=None):
             raise AgentError('AGENT_SCOPE_MISMATCH')
         tool = DirectoryTools(workspace, max_files=config['budgets']['max_files'],
                               max_bytes=config['budgets']['max_file_bytes'])
-    engine = adapt_tools(tool, output_path, agent=agent)
+    policy = None
+    extra_adapters = ()
+    if source_mapper is not None:
+        if agent.strategy == 'file':
+            raise AgentError('AGENT_SCOPE_MISMATCH')
+        from .import_tools import ImportedDocumentPolicy, SearchDocumentsAdapter
+        try:
+            policy = ImportedDocumentPolicy(tool, source_mapper, output_path, agent=agent)
+            if 'search_documents' in agent.tools:
+                extra_adapters = (SearchDocumentsAdapter(source_mapper),)
+        except ValueError:
+            raise AgentError('IMPORT_INTEGRITY_ERROR') from None
+    engine = adapt_tools(tool, output_path, agent=agent, policy=policy,
+                         extra_adapters=extra_adapters)
     engine.registry = ToolRegistry([engine.registry.get(name) for name in agent.tools
                                    if engine.registry.get(name) is not None],
                                   summary=engine.policy.result_fields)

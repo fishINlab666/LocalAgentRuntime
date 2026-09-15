@@ -211,7 +211,8 @@ class ConversationPolicy:
 class SessionTaskPolicy:
     """Keep history results out of the file evidence and permission ledger."""
 
-    FILE_TOOLS = frozenset({"list_files", "read_file", "write_file"})
+    FILE_TOOLS = frozenset({"list_files", "read_file", "write_file",
+                            "search_documents"})
 
     def __init__(self, file_policy):
         self.file_policy = file_policy

@@ -95,6 +95,9 @@ class AgentSessionTests(unittest.TestCase):
     def test_builtin_legacy_snapshot_keeps_pre_import_tool_set(self):
         agents = importlib.import_module('local_agent.agents')
         self.assertIn('legacy', inspect.signature(agents.builtin_agent).parameters)
+        self.assertNotIn('search_documents', agents.builtin_agent('file').tools)
+        self.assertIn('search_documents', agents.builtin_agent('directory').tools)
+        self.assertIn('search_documents', agents.builtin_agent('combined').tools)
         self.assertEqual(
             agents.builtin_agent('file', legacy=True).to_dict()['tools'],
             ['read_file', 'write_file', 'session_history'],

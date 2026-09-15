@@ -15,8 +15,12 @@ class AgentTests(unittest.TestCase):
     def test_builtin_configs_preserve_modes_and_budget_single_source(self):
         file_agent = self.agents.builtin_agent('file')
         directory = self.agents.builtin_agent('directory')
+        combined = self.agents.builtin_agent('combined')
         self.assertEqual(file_agent.id, 'file-qa')
         self.assertEqual(directory.id, 'directory-qa')
+        self.assertNotIn('search_documents', file_agent.tools)
+        self.assertIn('search_documents', directory.tools)
+        self.assertIn('search_documents', combined.tools)
         changed = directory.to_dict()
         changed['id'] = 'small-project'
         changed['budgets']['max_files'] = 2
@@ -36,6 +40,62 @@ class AgentTests(unittest.TestCase):
             self.assertFalse(read['ok'])
             self.assertEqual(read['error']['code'], 'FILE_TOO_LARGE')
             self.assertEqual(agent.run_config().max_steps, 3)
+
+    def test_search_is_registered_only_for_managed_compatible_agents(self):
+        from local_agent.import_tools import ImportedSourceMapper
+        from local_agent.imports import ImportedWorkspace
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            workspace = root / 'workspace'
+            workspace.mkdir()
+            workspace.chmod(0o700)
+            artifacts = root / 'artifacts'
+            artifacts.mkdir()
+            artifacts.chmod(0o700)
+            source = 'documents/' + 'a' * 32 + '/chunk-0001.md'
+            (workspace / Path(source).parent).mkdir(parents=True)
+            content = b'budget: 42\n'
+            (workspace / source).write_bytes(content)
+            (workspace / 'index.md').write_text('# Imported documents\n')
+            import hashlib
+            locations = {source: {'1': [{'kind': 'text_lines', 'start': 1, 'end': 1}]}}
+            locations_path = root / 'locations.json'
+            locations_path.write_text(json.dumps(locations, separators=(',', ':')))
+            locations_path.chmod(0o600)
+            manifest = {'version': 1, 'status': 'parsed', 'sources': [{
+                'source_id': 'a' * 32, 'logical_path': 'notes.txt', 'format': 'txt',
+                'chunks': [{'path': source, 'bytes': len(content), 'line_count': 1,
+                            'location_start': locations[source]['1'][0],
+                            'location_end': locations[source]['1'][0]}]}],
+                'hashes': {'workspace/' + source: hashlib.sha256(content).hexdigest(),
+                           'workspace/index.md': hashlib.sha256(b'# Imported documents\n').hexdigest(),
+                           'locations.json': hashlib.sha256(locations_path.read_bytes()).hexdigest()}}
+            manifest_path = root / 'manifest.json'
+            manifest_path.write_text(json.dumps(manifest, separators=(',', ':')))
+            manifest_path.chmod(0o600)
+            identity = (workspace.stat().st_dev, workspace.stat().st_ino)
+            imported = ImportedWorkspace('b' * 32, root, root / 'originals', workspace,
+                artifacts, manifest_path, locations_path, *identity,
+                artifacts.stat().st_dev, artifacts.stat().st_ino,
+                hashlib.sha256(manifest_path.read_bytes()).hexdigest(), manifest['hashes'], ({
+                    'source_id': 'a' * 32, 'logical_path': 'notes.txt',
+                    'extension': '.txt', 'parser_json': json.dumps(manifest['sources'][0]),
+                },), root.stat().st_dev, root.stat().st_ino,
+                locations_path.stat().st_size)
+            mapper = ImportedSourceMapper(imported)
+
+            managed = self.agents.build_file_engine(
+                self.agents.builtin_agent('directory'), workspace, None,
+                source_mapper=mapper)
+            ordinary = self.agents.build_file_engine(
+                self.agents.builtin_agent('directory'), workspace, None)
+            legacy = self.agents.build_file_engine(
+                self.agents.builtin_agent('directory', legacy=True), workspace, None,
+                source_mapper=mapper)
+            self.assertIsNotNone(managed.registry.get('search_documents'))
+            self.assertIsNone(ordinary.registry.get('search_documents'))
+            self.assertIsNone(legacy.registry.get('search_documents'))
 
     def test_snapshot_is_immutable_and_revision_changes_with_behavior(self):
         agent = self.agents.builtin_agent('directory')
