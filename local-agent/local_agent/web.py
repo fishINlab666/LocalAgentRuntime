@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import secrets
 import socket
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote_from_bytes, urlsplit
 import webbrowser
 
 from .provider import DeepSeekProvider
@@ -61,6 +61,33 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def respond_file(self, artifact):
+        name = artifact.download_name
+        try:
+            if (not isinstance(name, str) or not name or '/' in name or '\\' in name
+                    or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in name)):
+                raise WebError(409, 'IMPORT_INTEGRITY_ERROR')
+            if (not isinstance(artifact.content, bytes)
+                    or len(artifact.content) != artifact.length):
+                raise WebError(409, 'IMPORT_INTEGRITY_ERROR')
+            encoded = quote_from_bytes(name.encode('utf-8'), safe='')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/octet-stream')
+            self.send_header('Content-Length', str(artifact.length))
+            self.send_header('Content-Disposition',
+                             f"attachment; filename=\"artifact\"; filename*=UTF-8''{encoded}")
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Referrer-Policy', 'no-referrer')
+            self.send_header('Content-Security-Policy',
+                             "default-src 'self'; script-src 'self'; style-src 'self'; "
+                             "connect-src 'self'; img-src 'self' data:; object-src 'none'; "
+                             "base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
+            self.end_headers()
+            self.wfile.write(artifact.content)
+        except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
     def authorize(self, api=False):
@@ -118,6 +145,11 @@ class Handler(BaseHTTPRequestHandler):
                     raise WebError(400, 'INVALID_REQUEST')
                 return self.respond(200, self.server.runs.list_session_runs(
                     parts[3], cursor=query.get('cursor', [None])[0]))
+            if (len(parts) == 9 and parts[1:3] == ['api', 'sessions']
+                    and parts[4] == 'runs' and parts[6] == 'artifacts'
+                    and parts[8] == 'download'):
+                return self.respond_file(self.server.runs.open_artifact(
+                    parts[3], parts[5], parts[7], agent_id))
             if (len(parts) == 6 and parts[1:3] == ['api', 'sessions']
                     and parts[4] == 'runs'):
                 return self.respond(200, self.server.runs.session_snapshot(parts[3], parts[5]))

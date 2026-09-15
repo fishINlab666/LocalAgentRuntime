@@ -1,13 +1,18 @@
 import http.client
+import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
+from urllib.parse import quote
 
 from local_agent.demo import DemoProvider
 from local_agent.provider import ModelReply
+from local_agent.sessions import RunSubmission
 from local_agent.web import create_server
 
 
@@ -52,7 +57,9 @@ class SessionWebTests(unittest.TestCase):
         server.server_close()
         self.thread.join(2)
 
-    def request(self, method, path, data=None, *, auth=True, origin=None):
+    def raw_request(
+        self, method, path, data=None, *, auth=True, origin=None, agent_id=None
+    ):
         connection = http.client.HTTPConnection(
             "127.0.0.1", self.server.server_port, timeout=3
         )
@@ -64,14 +71,26 @@ class SessionWebTests(unittest.TestCase):
         headers = {"Content-Type": "application/json"}
         if auth:
             headers["X-Session-Token"] = self.server.token
-        if method == "POST":
+        if origin is not None or method == "POST":
             headers["Origin"] = origin or self.server.origin
+        if agent_id is not None:
+            headers["X-Agent-ID"] = agent_id
         connection.request(method, path, body, headers)
         response = connection.getresponse()
         raw = response.read()
-        value = json.loads(raw) if raw else None
+        response_headers = {key.lower(): value for key, value in response.getheaders()}
+        status = response.status
         connection.close()
-        return response.status, value
+        return status, response_headers, raw
+
+    def request(
+        self, method, path, data=None, *, auth=True, origin=None, agent_id=None
+    ):
+        status, _, raw = self.raw_request(
+            method, path, data, auth=auth, origin=origin, agent_id=agent_id
+        )
+        value = json.loads(raw) if raw else None
+        return status, value
 
     def restart_for_session(self, session_id, provider_factory=DemoProvider):
         self.close_server()
@@ -362,6 +381,217 @@ class SessionWebTests(unittest.TestCase):
         published, request = publish_import(self.server.runs.store)
         session = self.server.runs.service.attach_import(published, request)
         return published, session
+
+    def ready_import_artifact(self, *, name="报告 终稿.md"):
+        published, session = self.ready_import()
+        content = b"\x00\xfflocal-agent artifact\n"
+        submission = RunSubmission(
+            client_request_id=f"artifact-{time.time_ns()}",
+            question="整理资料并保存报告。",
+            task_type="files",
+            scope=session.scope,
+            output_path=name,
+            parent_run_id=None,
+            execution_options={},
+        )
+        with self.server.runs.store.transaction() as connection:
+            prepared = self.server.runs.service._submit_in_transaction(
+                connection, session.id, submission
+            )
+        call_id = "write-artifact"
+        prepared.journal.record_model_request({"messages": []}, {"kind": "test"})
+        prepared.journal.record_model_reply(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": "write_file",
+                            "arguments": json.dumps(
+                                {"path": name, "content": "test artifact"},
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                        },
+                    }
+                ],
+            },
+            usage=None,
+            validation="tool_calls_valid",
+        )
+        prepared.journal.record_approval_required(
+            call_id,
+            {
+                "id": "approval-artifact",
+                "preview": {"path": name, "action_summary": "创建报告"},
+                "argument_hash": "artifact-arguments",
+                "process_generation": "test-process",
+            },
+        )
+        prepared.journal.record_approval_decision("approval-artifact", "allowed")
+        digest = hashlib.sha256(content).hexdigest()
+        receipt = {"path": name, "bytes": len(content), "sha256": digest}
+        prepared.journal.record_publication_intent(call_id, receipt)
+        artifact_path = published.artifacts / name
+        artifact_path.write_bytes(content)
+        os.chmod(artifact_path, 0o600)
+        prepared.journal.record_publication_receipt(
+            call_id, {**receipt, "operation": "created"}
+        )
+        prepared.journal.record_tool_result(
+            call_id,
+            {
+                "ok": True,
+                "data": {**receipt, "operation": "created"},
+                "error": None,
+            },
+        )
+        prepared.journal.finish_run(
+            {"state": "completed", "stop_reason": "ANSWERED", "answer": None}
+        )
+        artifact_id = self.server.runs.store.connection().execute(
+            "SELECT id FROM artifacts WHERE session_id=? AND run_id=?",
+            (session.id, prepared.run_id),
+        ).fetchone()[0]
+        return published, session, prepared.run_id, artifact_id, artifact_path, content
+
+    @staticmethod
+    def artifact_download_path(session_id, run_id, artifact_id):
+        return (
+            f"/api/sessions/{session_id}/runs/{run_id}"
+            f"/artifacts/{artifact_id}/download"
+        )
+
+    def test_import_artifact_download_returns_binary_and_unicode_filename(self):
+        _, session, run_id, artifact_id, _, content = self.ready_import_artifact()
+        path = self.artifact_download_path(session.id, run_id, artifact_id)
+
+        status, headers, body = self.raw_request(
+            "GET", path, agent_id=session.agent_id
+        )
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body, content)
+        self.assertEqual(headers["content-type"], "application/octet-stream")
+        self.assertEqual(headers["content-length"], str(len(content)))
+        self.assertEqual(headers["cache-control"], "no-store")
+        self.assertEqual(headers["x-content-type-options"], "nosniff")
+        disposition = headers["content-disposition"]
+        self.assertTrue(disposition.startswith("attachment;"), disposition)
+        self.assertIn(
+            "filename*=UTF-8''" + quote("报告 终稿.md", safe=""), disposition
+        )
+        self.assertNotIn("\r", disposition)
+        self.assertNotIn("\n", disposition)
+
+    def test_import_artifact_download_requires_token_origin_and_exact_agent(self):
+        _, session, run_id, artifact_id, _, _ = self.ready_import_artifact()
+        path = self.artifact_download_path(session.id, run_id, artifact_id)
+
+        self.assertEqual(
+            self.request("GET", path, auth=False, agent_id=session.agent_id),
+            (403, {"error": "SESSION_EXPIRED"}),
+        )
+        self.assertEqual(
+            self.request(
+                "GET",
+                path,
+                origin="https://outside.example",
+                agent_id=session.agent_id,
+            ),
+            (403, {"error": "ORIGIN_DENIED"}),
+        )
+        self.assertEqual(
+            self.request("GET", path), (404, {"error": "NOT_FOUND"})
+        )
+        self.assertEqual(
+            self.request("GET", path, agent_id="combined"),
+            (404, {"error": "NOT_FOUND"}),
+        )
+
+    def test_import_artifact_download_hides_cross_scope_identifiers(self):
+        _, session, run_id, artifact_id, _, _ = self.ready_import_artifact()
+        _, other_session = self.ready_import()
+        other_run = self.server.runs.service.submit(
+            session.id,
+            RunSubmission(
+                client_request_id="other-run",
+                question="另一个任务",
+                task_type="files",
+                scope=session.scope,
+                output_path=None,
+                parent_run_id=None,
+                execution_options={},
+            ),
+        )
+        cases = (
+            ("missing-session", run_id, artifact_id),
+            (other_session.id, run_id, artifact_id),
+            (session.id, other_run.run_id, artifact_id),
+            (session.id, run_id, "0" * 32),
+        )
+        for candidate_session, candidate_run, candidate_artifact in cases:
+            with self.subTest(
+                session_id=candidate_session,
+                run_id=candidate_run,
+                artifact_id=candidate_artifact,
+            ):
+                self.assertEqual(
+                    self.request(
+                        "GET",
+                        self.artifact_download_path(
+                            candidate_session, candidate_run, candidate_artifact
+                        ),
+                        agent_id=session.agent_id,
+                    ),
+                    (404, {"error": "NOT_FOUND"}),
+                )
+
+    def test_import_artifact_download_rejects_changed_bytes(self):
+        _, session, run_id, artifact_id, artifact_path, content = (
+            self.ready_import_artifact()
+        )
+        artifact_path.write_bytes(b"X" + content[1:])
+
+        self.assertEqual(
+            self.request(
+                "GET",
+                self.artifact_download_path(session.id, run_id, artifact_id),
+                agent_id=session.agent_id,
+            ),
+            (409, {"error": "IMPORT_INTEGRITY_ERROR"}),
+        )
+
+    def test_import_artifact_download_streams_the_bytes_that_were_verified(self):
+        _, session, run_id, artifact_id, artifact_path, content = (
+            self.ready_import_artifact()
+        )
+        open_artifact = self.server.runs.service.open_artifact
+
+        def overwrite_after_open(*args, **kwargs):
+            opened = open_artifact(*args, **kwargs)
+            changed = b"X" + content[1:]
+            self.assertEqual(len(changed), len(content))
+            artifact_path.write_bytes(changed)
+            return opened
+
+        with patch.object(
+            self.server.runs.service,
+            "open_artifact",
+            side_effect=overwrite_after_open,
+        ):
+            status, _, body = self.raw_request(
+                "GET",
+                self.artifact_download_path(session.id, run_id, artifact_id),
+                agent_id=session.agent_id,
+            )
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body, content)
 
     def test_import_session_is_listed_and_selected_restart_ignores_forged_path(self):
         from test_managed_workspace import imported_provider

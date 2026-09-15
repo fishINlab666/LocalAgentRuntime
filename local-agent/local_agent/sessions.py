@@ -115,6 +115,13 @@ class ResolvedWorkspace:
     source_mapper: object | None = None
 
 
+@dataclass(frozen=True)
+class OpenArtifact:
+    content: bytes
+    length: int
+    download_name: str
+
+
 class ManagedWorkspaceResolver:
     def __init__(self, imports: ImportStore):
         self.imports = imports
@@ -963,6 +970,85 @@ class SessionService:
             "revision": len(messages) + len(tool_rows) + (run.finished_at is not None),
         }
 
+    def open_artifact(self, session_id: str, run_id: str, artifact_id: str,
+                      agent_id: str) -> OpenArtifact:
+        """Open one proven artifact through the session's current write authority."""
+        if any(not isinstance(value, str) or not value
+               for value in (session_id, run_id, artifact_id, agent_id)):
+            raise SessionError('NOT_FOUND')
+        try:
+            row = self.store.connection().execute(
+                """SELECT a.path, a.bytes, a.sha256, a.receipt_json,
+                          a.recovery_state, t.name, t.publication_state, t.recovery_state,
+                          r.output_path, s.agent_id
+                   FROM artifacts a
+                   JOIN tool_calls t
+                     ON t.run_id=a.run_id AND t.call_id=a.call_id
+                    AND t.session_id=a.session_id
+                   JOIN runs r ON r.id=a.run_id AND r.session_id=a.session_id
+                   JOIN sessions s ON s.id=a.session_id
+                   WHERE a.id=? AND a.session_id=? AND a.run_id=?""",
+                (artifact_id, session_id, run_id),
+            ).fetchone()
+        except (sqlite3.DatabaseError, StoreError):
+            raise SessionError('SESSION_STORE_ERROR') from None
+        if row is None or row[9] != agent_id:
+            raise SessionError('NOT_FOUND')
+        path, size, digest, receipt_json = row[:4]
+        try:
+            receipt = _parse_json_object(receipt_json)
+            int(digest, 16)
+            if (not _relative_file_path(path) or type(size) is not int
+                    or not 0 <= size <= 32768 or not isinstance(digest, str)
+                    or len(digest) != 64 or row[4] != 'confirmed'
+                    or row[5:8] != ('write_file', 'confirmed', 'confirmed')
+                    or row[8] != path or receipt.get('path') != path
+                    or receipt.get('bytes') != size
+                    or receipt.get('sha256') != digest
+                    or receipt.get('operation') != 'created'):
+                raise ValueError
+        except (SessionError, TypeError, ValueError):
+            raise SessionError('IMPORT_INTEGRITY_ERROR') from None
+
+        resolved = self.resolver.resolve(self.load(session_id))
+        from .files import _open_directory, _path_parts
+        parts = _path_parts(path)
+        descriptor = directory_fd = None
+        try:
+            if parts is None:
+                raise ValueError
+            directory_fd = _open_directory(
+                resolved.write_root, parts[:-1], resolved.write_identity)
+            descriptor = os.open(
+                parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                dir_fd=directory_fd)
+            before = os.fstat(descriptor)
+            if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                    or stat.S_IMODE(before.st_mode) != 0o600 or before.st_size != size):
+                raise ValueError
+            raw = b''
+            while len(raw) <= size:
+                chunk = os.read(descriptor, min(8192, size + 1 - len(raw)))
+                if not chunk:
+                    break
+                raw += chunk
+            after = os.fstat(descriptor)
+            named = os.stat(parts[-1], dir_fd=directory_fd, follow_symlinks=False)
+            metadata = lambda item: (item.st_dev, item.st_ino, item.st_mode, item.st_nlink,
+                                     item.st_size, item.st_mtime_ns, item.st_ctime_ns)
+            if (len(raw) != size or hashlib.sha256(raw).hexdigest() != digest
+                    or metadata(before) != metadata(after)
+                    or metadata(after) != metadata(named)):
+                raise ValueError
+            return OpenArtifact(raw, size, parts[-1])
+        except (OSError, TypeError, ValueError):
+            raise SessionError('IMPORT_INTEGRITY_ERROR') from None
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            if directory_fd is not None:
+                os.close(directory_fd)
+
     def load_message(self, session_id: str, message_id: str) -> MessageRecord:
         try:
             row = self.store.connection().execute(
@@ -1249,8 +1335,6 @@ class SessionService:
     def _resolve_submission(self, session, submission):
         if submission.task_type != 'files':
             return None
-        if session.import_id is not None and submission.output_path is not None:
-            raise SessionError('IMPORT_OUTPUT_UNSUPPORTED')
         return self.resolver.resolve(session)
 
     def import_history_bound(self, session: SessionRecord) -> bool:
@@ -1352,17 +1436,25 @@ class SessionService:
                     CapabilityStore(self.store.state_dir), run_id=prepared.run_id, control=control,
                     agent_catalog=catalog, selected_skill=prepared.submission.skill_id,
                     selected_prompt=prepared.submission.mcp_prompt,
-                    source_mapper=resolved.source_mapper)
+                    source_mapper=resolved.source_mapper, write_root=resolved.write_root,
+                    read_identity=resolved.read_identity, write_identity=resolved.write_identity)
                 engine = assembly.engine
                 if (engine.policy.tool.workspace != resolved.read_root
                         or engine.policy.tool.workspace_identity != resolved.read_identity):
                     return fail_before_provider('IMPORT_INTEGRITY_ERROR'
                                                 if session.import_id is not None else 'WORKSPACE_UNAVAILABLE')
                 if (prepared.submission.output_path is not None
-                        and self.store.inspect_unknown_publication(
-                            prepared.session_id, prepared.submission.output_path
-                        ) is not None):
-                    return fail_before_provider("WRITE_OUTCOME_UNKNOWN")
+                        ):
+                    try:
+                        unknown = self.store.inspect_unknown_publication(
+                            prepared.session_id, prepared.submission.output_path,
+                            write_root=resolved.write_root,
+                            write_identity=resolved.write_identity)
+                    except StoreError as error:
+                        raise SessionError('IMPORT_INTEGRITY_ERROR'
+                                           if session.import_id is not None else error.code) from None
+                    if unknown is not None:
+                        return fail_before_provider("WRITE_OUTCOME_UNKNOWN")
                 if isinstance(engine.policy, ExtensionPolicy):
                     engine.policy.base = SessionTaskPolicy(engine.policy.base)
                 else:

@@ -167,18 +167,30 @@ class ManagedWorkspaceTests(unittest.TestCase):
         with self.store.maintenance_gate.maintenance():
             pass
 
-    def test_import_output_is_rejected_before_submit_and_before_execution(self):
+    def test_import_output_resolves_to_separate_artifact_root_without_writing(self):
         published, _, session = self.ready()
-        with self.assertRaises(SessionError) as caught:
-            self.prepare(session, output='answer.md')
-        self.assertEqual(caught.exception.code, 'IMPORT_OUTPUT_UNSUPPORTED')
-        prepared = self.prepare(session)
-        forged = replace(prepared, submission=replace(prepared.submission, output_path='answer.md'))
-        provider = ScriptedProvider([])
-        result = self.service.execute(forged, provider, self.trace(prepared, published.workspace))
-        self.assertEqual(result['stop_reason'], 'IMPORT_OUTPUT_UNSUPPORTED')
+        resolutions = []
+        resolve = self.service.resolver.resolve
+
+        def capture(record):
+            resolved = resolve(record)
+            resolutions.append(resolved)
+            return resolved
+
+        with patch.object(self.service.resolver, 'resolve', side_effect=capture):
+            prepared = self.prepare(session, output='answer.md')
+
+        self.assertEqual(prepared.submission.output_path, 'answer.md')
+        self.assertEqual(len(resolutions), 1)
+        resolved = resolutions[0]
+        self.assertEqual(resolved.read_root, published.workspace)
+        self.assertEqual(resolved.write_root, published.artifacts)
+        self.assertNotEqual(resolved.read_root, resolved.write_root)
+        self.assertEqual(resolved.read_identity, published.identities['workspace'])
+        self.assertEqual(resolved.write_identity, published.identities['artifacts'])
+        self.assertNotEqual(resolved.read_identity, resolved.write_identity)
         self.assertFalse((published.workspace / 'answer.md').exists())
-        self.assertEqual(provider.requests, [])
+        self.assertFalse((published.artifacts / 'answer.md').exists())
 
     def test_submit_resolves_under_short_gate_outside_run_transaction(self):
         _, _, session = self.ready()

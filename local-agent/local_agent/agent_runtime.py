@@ -368,7 +368,7 @@ class AuthorityPolicy:
 
 def assemble(agent, workspace, target_path, output_path, library, *, run_id,
              control=None, agent_catalog=None, selected_skill=None, selected_prompt=None,
-             source_mapper=None):
+             source_mapper=None, write_root=None, read_identity=None, write_identity=None):
     if selected_skill is not None and (not isinstance(selected_skill, str) or not selected_skill):
         raise AgentError('SKILL_NOT_BOUND')
     if selected_prompt is not None and (not isinstance(selected_prompt, dict)
@@ -376,7 +376,8 @@ def assemble(agent, workspace, target_path, output_path, library, *, run_id,
             or any(not isinstance(v, str) or not v for v in selected_prompt.values())):
         raise AgentError('MCP_CAPABILITY_DENIED')
     engine = build_file_engine(agent, workspace, target_path, output_path,
-                               source_mapper=source_mapper)
+                               write_root=write_root, read_identity=read_identity,
+                               write_identity=write_identity, source_mapper=source_mapper)
     raw = agent.to_dict()
     assembly = Assembly(engine)
     adapters, statuses = [], []

@@ -259,7 +259,8 @@ class FilePolicy:
         return model_request(messages, limit, schemas)
 
 
-def adapt_tools(tool, output_path=None, *, agent=None, policy=None, extra_adapters=()):
+def adapt_tools(tool, output_path=None, *, agent=None, write_root=None,
+                write_identity=None, policy=None, extra_adapters=()):
     if isinstance(tool, ToolRuntime):
         return tool
     policy = policy or FilePolicy(tool, output_path, agent=agent)
@@ -282,7 +283,9 @@ def adapt_tools(tool, output_path=None, *, agent=None, policy=None, extra_adapte
                                 lambda args: policy.take_read_proof('read_file', args))]
     if output_path is not None:
         from .write_file import WriteFile
-        adapters.append(WriteFile(tool.workspace, output_path, tool.workspace_identity))
+        root = tool.workspace if write_root is None else write_root
+        identity = tool.workspace_identity if write_identity is None else write_identity
+        adapters.append(WriteFile(root, output_path, identity))
     adapters.extend(extra_adapters)
     return ToolRuntime(ToolRegistry(adapters, summary=policy.result_fields), policy)
 

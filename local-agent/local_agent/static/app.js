@@ -475,6 +475,37 @@ function renderApproval(job) {
   if (approval.historical) $('approval-status').textContent = `历史审批：${approval.status}。仅供查看，不能再次执行。`;
 }
 
+async function downloadArtifact(runId, artifact, button, note) {
+  const agentId = activeSession?.agent_id || sessionAgentIds.get(activeSessionId);
+  if (!activeSessionId || !agentId || !artifact?.id) return;
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), 8000);
+  button.disabled = true; note.textContent = '正在准备下载…';
+  try {
+    const path = `/api/sessions/${encodeURIComponent(activeSessionId)}/runs/${encodeURIComponent(runId)}`
+      + `/artifacts/${encodeURIComponent(artifact.id)}/download`;
+    const response = await fetch(path, {method: 'GET', headers: {
+      'X-Session-Token': token, 'X-Agent-ID': agentId
+    }, signal: controller.signal});
+    if (!response.ok) {
+      let code = 'LOCAL_SERVER_ERROR';
+      try { code = (await response.json()).error || code; } catch (_) {}
+      const error = new Error(messageFor(code)); error.code = code; throw error;
+    }
+    const blob = await response.blob(), url = URL.createObjectURL(blob);
+    try {
+      const anchor = document.createElement('a');
+      anchor.href = url; anchor.download = artifact.path.split('/').at(-1); anchor.hidden = true;
+      document.body.append(anchor); anchor.click(); anchor.remove();
+    } finally { URL.revokeObjectURL(url); }
+    note.textContent = '下载已开始。';
+  } catch (error) {
+    note.textContent = error.name === 'AbortError' ? '下载超时，请重试。' : error.message;
+  } finally {
+    clearTimeout(deadline); button.disabled = false;
+  }
+}
+
 function renderArtifacts(job) {
   const artifacts = job.result?.artifacts || [];
   $('artifacts').hidden = artifacts.length === 0;
@@ -489,7 +520,15 @@ function renderArtifacts(job) {
     article.className = 'artifact';
     heading.textContent = `${artifact.path} · ${artifact.bytes} 字节 · ${artifact.operation === 'created' ? '已新建' : artifact.operation}`;
     summary.textContent = '查看文件校验值'; hash.textContent = `SHA-256：${artifact.sha256}`;
-    details.append(summary, hash); article.append(heading, details); $('artifact-list').append(article);
+    details.append(summary, hash); article.append(heading, details);
+    if (activeSessionId && artifact.id) {
+      const button = document.createElement('button'), note = document.createElement('p');
+      button.type = 'button'; button.className = 'secondary'; button.textContent = '下载文件';
+      note.className = 'field-help'; note.setAttribute('aria-live', 'polite');
+      button.addEventListener('click', () => downloadArtifact(job.id, artifact, button, note));
+      article.append(button, note);
+    }
+    $('artifact-list').append(article);
   }
 }
 
@@ -504,7 +543,8 @@ function normalizedSessionRun(run) {
   const terminal = !['queued', 'running', 'waiting_approval'].includes(run.state);
   const result = run.result || (terminal ? {answer: null, stop_reason: run.stop_reason,
     trace_path: run.trace_path || '', artifacts: run.artifacts || []} : null);
-  if (result && !result.artifacts && run.artifacts) result.artifacts = run.artifacts.map(item => ({
+  if (result && run.artifacts?.length) result.artifacts = run.artifacts.map(item => ({
+    id: item.id,
     path: item.path, bytes: item.bytes, sha256: item.sha256,
     operation: item.receipt?.operation || 'created'
   }));
@@ -602,6 +642,14 @@ function focusRunResult(job) {
   requestAnimationFrame(() => {
     if (activeId === job.id && document.activeElement !== $('question')) target.focus();
   });
+}
+
+function importedLocationLabel(location) {
+  if (location?.kind === 'text_lines') return `原文第 ${location.start}${location.end === location.start ? '' : '–' + location.end} 行`;
+  if (location?.kind === 'pdf_page') return `PDF 第 ${location.page} 页`;
+  if (location?.kind === 'docx_paragraph') return `Word 第 ${location.paragraph} 段`;
+  if (location?.kind === 'docx_table_row') return `Word 表格 ${location.table} 第 ${location.row} 行`;
+  return '';
 }
 
 function sessionListPath(kind, cursor = null) {
@@ -806,10 +854,15 @@ function render(job) {
         const article = document.createElement('article'), heading = document.createElement('header'), quote = document.createElement('blockquote');
         article.className = 'citation';
         const source = citation.source;
-        const sourceName = typeof source === 'string' ? source : source?.label || source?.name
-          || (source ? `${sourceLabel(source.type)} · ${source.server_id || source.id || citation.source_id || citation.path || ''}` : null);
+        const importedLocations = source?.kind === 'imported_document'
+          ? (source.locations || []).map(importedLocationLabel).filter(Boolean).join('、') : '';
+        const importedName = source?.kind === 'imported_document'
+          ? `${source.name || source.logical_path}${source.logical_path && source.logical_path !== source.name ? ` · ${source.logical_path}` : ''}${importedLocations ? ` · ${importedLocations}` : ''}`
+          : null;
+        const sourceName = importedName || (typeof source === 'string' ? source : source?.label || source?.name
+          || (source ? `${sourceLabel(source.type)} · ${source.server_id || source.id || citation.source_id || citation.path || ''}` : null));
         heading.textContent = sourceName || citation.source_id
-          ? `${sourceName || citation.source_id}${citation.start_line ? ` · 第 ${citation.start_line}${citation.end_line === citation.start_line ? '' : '–' + citation.end_line} 行` : ''}`
+          ? `${sourceName || citation.source_id}${citation.start_line && source?.kind !== 'imported_document' ? ` · 第 ${citation.start_line}${citation.end_line === citation.start_line ? '' : '–' + citation.end_line} 行` : ''}`
           : citation.message_id
           ? `会话消息 ${citation.message_id} · 字符 ${citation.start}–${citation.end}`
           : `${citation.path} · 第 ${citation.start_line}${citation.end_line === citation.start_line ? '' : '–' + citation.end_line} 行`;

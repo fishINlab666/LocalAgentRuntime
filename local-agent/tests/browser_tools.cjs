@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 
 class Element {
-  constructor() { this.children = []; this.listeners = {}; this.attributes = {}; this.dataset = {};
+  constructor(tagName = 'div') { this.tagName = tagName.toUpperCase(); this.children = []; this.listeners = {}; this.attributes = {}; this.dataset = {};
     this.value = ''; this.hidden = false; this.inert = false;
     this.classList = {toggle() {}}; }
   get firstElementChild() { return this.children[0] || null; }
@@ -17,6 +17,8 @@ class Element {
   removeAttribute(name) { delete this.attributes[name]; }
   querySelectorAll() { return []; }
   focus() {}
+  click() { if (this.listeners.click) return this.listeners.click(); }
+  remove() {}
 }
 
 const html = fs.readFileSync('local_agent/static/index.html', 'utf8');
@@ -25,7 +27,7 @@ const elements = Object.fromEntries([...html.matchAll(/\bid="([^"]+)"/g)].map(ma
 elements['session-select'].append(new Element());
 const body = new Element(), composerSettings = new Element();
 composerSettings.open = true;
-const requests = [], timers = new Map();
+const requests = [], timers = new Map(), objectUrls = [], revokedUrls = [];
 let nextTimer = 0, respond;
 const config = {workspace: '/synthetic', ready: true, provider: {simulated: true}};
 const context = vm.createContext({
@@ -35,7 +37,7 @@ const context = vm.createContext({
     querySelector: selector => selector === 'meta[name="session-token"]'
       ? {content: 'synthetic-session'} : selector === '.composer-settings' ? composerSettings : null,
     querySelectorAll: () => [],
-    createElement: () => new Element(),
+    createElement: tagName => new Element(tagName),
     addEventListener() {},
   },
   AbortController,
@@ -43,6 +45,8 @@ const context = vm.createContext({
   clearTimeout: id => timers.delete(id),
   requestAnimationFrame: callback => callback(),
   matchMedia: () => ({matches: false, addEventListener() {}, addListener() {}}),
+  URL: {createObjectURL: blob => { objectUrls.push(blob); return 'blob:artifact'; },
+    revokeObjectURL: value => revokedUrls.push(value)},
   fetch: async (path, options) => {
     requests.push({path, ...options});
     if (path === '/api/config') return {ok: true, json: async () => config};
@@ -99,8 +103,63 @@ const result = {answer: null, artifacts: [receipt], stop_reason: 'CANCELLED'};
   assert.match(elements['artifact-list'].textContent, /report\.md.*36/);
   assert.match(elements['artifact-note'].textContent, /后续步骤已取消/);
 
-  context.render(snapshot('run-1', {revision: 4, pending_approval: null, state: 'failed',
-    result: {...result, stop_reason: 'INVALID_ANSWER'}}));
+  vm.runInContext("activeSessionId = 'session-1'; activeSession = {agent_id: 'directory-qa'}", context);
+  const downloadable = {...receipt, id: 'artifact-1'};
+  respond = async () => ({ok: true, blob: async () => ({kind: 'artifact-blob'})});
+  const downloadJob = snapshot('download-run', {state: 'completed', result: {...result,
+    artifacts: [downloadable]}});
+  context.prepareOutput(downloadJob); context.render(downloadJob);
+  const artifactCard = elements['artifact-list'].children[0];
+  const downloadButton = artifactCard.children.find(child => child.tagName === 'BUTTON');
+  assert(downloadButton, 'Persisted session artifact must expose an authenticated download button');
+  await downloadButton.listeners.click();
+  const downloadRequest = requests.at(-1);
+  assert.equal(downloadRequest.path,
+    '/api/sessions/session-1/runs/download-run/artifacts/artifact-1/download');
+  assert.equal(downloadRequest.method, 'GET');
+  assert.equal(downloadRequest.headers['X-Session-Token'], 'synthetic-session');
+  assert.equal(downloadRequest.headers['X-Agent-ID'], 'directory-qa');
+  assert.equal(objectUrls.length, 1);
+  assert.deepEqual(revokedUrls, ['blob:artifact']);
+
+  const normalized = context.normalizedSessionRun({id: 'stored-run', state: 'completed',
+    question: 'q', task_type: 'files', result: {answer: null, artifacts: [receipt]},
+    artifacts: [{id: 'stored-artifact', path: receipt.path, bytes: receipt.bytes,
+      sha256: receipt.sha256, receipt: {operation: 'created'}}]});
+  assert.equal(normalized.result.artifacts[0].id, 'stored-artifact',
+    'Durable artifact ID must replace the transient receipt before rendering');
+  vm.runInContext("activeSessionId = null; activeSession = null", context);
+
+  const importedJob = snapshot('imported-citations', {state: 'completed', result: {
+    answer: {status: 'answered', answer: '已核对导入资料。', citations: [
+      {path: 'documents/source-pdf/chunk-0001.md', start_line: 1, end_line: 2,
+        quote: '合同原文', source: {kind: 'imported_document', name: '合同.pdf',
+          logical_path: '项目资料/合同.pdf', locations: [{kind: 'pdf_page', page: 2}]}},
+      {path: 'documents/source-docx/chunk-0003.md', start_line: 4, end_line: 6,
+        quote: '会议原文', source: {kind: 'imported_document', name: '会议纪要.docx',
+          logical_path: '会议/会议纪要.docx', locations: [
+            {kind: 'docx_paragraph', paragraph: 3},
+            {kind: 'docx_table_row', table: 2, row: 4},
+          ]}},
+    ]}, artifacts: []},
+  });
+  context.prepareOutput(importedJob); context.render(importedJob);
+  assert.equal(elements.citations.children.length, 2);
+  const pdfCitation = elements.citations.children[0].textContent;
+  assert.match(pdfCitation, /项目资料\/合同\.pdf/);
+  assert.match(pdfCitation, /PDF 第 2 页/);
+  assert.doesNotMatch(pdfCitation, /documents\/source-pdf\/chunk-0001\.md/,
+    'Normalized PDF chunk path must not replace the imported source path');
+  const wordCitation = elements.citations.children[1].textContent;
+  assert.match(wordCitation, /会议\/会议纪要\.docx/);
+  assert.match(wordCitation, /Word 第 3 段/);
+  assert.match(wordCitation, /Word 表格 2 第 4 行/);
+  assert.doesNotMatch(wordCitation, /documents\/source-docx\/chunk-0003\.md/,
+    'Normalized Word chunk path must not replace the imported source path');
+
+  const failedJob = snapshot('run-1', {revision: 4, pending_approval: null, state: 'failed',
+    result: {...result, stop_reason: 'INVALID_ANSWER'}});
+  context.prepareOutput(failedJob); context.render(failedJob);
   assert.equal(elements.artifacts.hidden, false, 'Created file remains visible after answer validation fails');
   assert.match(elements['artifact-note'].textContent, /后续步骤未完成/);
 

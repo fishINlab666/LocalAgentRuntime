@@ -495,6 +495,15 @@ class WebRuns:
     def session_view(self, session_id):
         return {"session": self._session_data(self._require_session(session_id))}
 
+    def open_artifact(self, session_id, run_id, artifact_id, agent_id):
+        if not isinstance(agent_id, str) or not agent_id:
+            raise WebError(404, 'NOT_FOUND')
+        self.require_agent_session(session_id, agent_id)
+        try:
+            return self.service.open_artifact(session_id, run_id, artifact_id, agent_id)
+        except (SessionError, StoreError) as error:
+            raise _session_web_error(error) from None
+
     def change_session(self, session_id, action, data):
         self._require_session(session_id)
         try:

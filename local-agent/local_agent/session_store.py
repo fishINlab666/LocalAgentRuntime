@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import threading
 import time
 from typing import Iterator
@@ -1386,52 +1387,104 @@ class SessionStore:
                 raise StoreError("SESSION_STORE_ERROR") from error
 
     def inspect_unknown_publication(
-        self, session_id: str, target_path: str
+        self, session_id: str, target_path: str, *, write_root: Path,
+        write_identity: tuple[int, int]
     ) -> str | None:
         try:
+            from .files import _open_directory, _path_parts
             connection = self.connection()
             session = connection.execute(
-                """SELECT workspace_path, workspace_device, workspace_inode
+                """SELECT import_id, workspace_device, workspace_inode
                    FROM sessions WHERE id=?""",
                 (session_id,),
             ).fetchone()
             if session is None:
                 raise StoreError("NOT_FOUND")
+            if (not isinstance(write_identity, tuple) or len(write_identity) != 2
+                    or any(type(value) is not int or value < 0 for value in write_identity)):
+                raise StoreError("WORKSPACE_CHANGED")
+            if session[0] is None:
+                expected_identity = session[1:]
+            else:
+                imported = connection.execute(
+                    """SELECT artifact_device, artifact_inode FROM imports
+                       WHERE id=?""", (session[0],)).fetchone()
+                if imported is None:
+                    raise StoreError("WORKSPACE_CHANGED")
+                expected_identity = imported
+            if tuple(expected_identity) != write_identity:
+                raise StoreError("WORKSPACE_CHANGED")
             rows = connection.execute(
                 """SELECT t.publication_intent_json
                    FROM tool_calls t
                    JOIN runs r ON r.id=t.run_id AND r.session_id=t.session_id
                    JOIN sessions s ON s.id=r.session_id
-                   WHERE s.workspace_path=? AND s.workspace_device=?
-                     AND s.workspace_inode=?
-                     AND t.recovery_state='WRITE_OUTCOME_UNKNOWN'""",
-                session,
+                   LEFT JOIN imports i ON i.id=s.import_id
+                   WHERE t.recovery_state='WRITE_OUTCOME_UNKNOWN'
+                     AND ((s.import_id IS NULL AND s.workspace_device=?
+                           AND s.workspace_inode=?)
+                       OR (s.import_id IS NOT NULL AND i.artifact_device=?
+                           AND i.artifact_inode=?))""",
+                (*write_identity, *write_identity),
             ).fetchall()
-            expected_hash = None
+            expected = None
             for row in rows:
                 intent = json.loads(row[0])
                 if isinstance(intent, dict) and intent.get("path") == target_path:
-                    expected_hash = intent.get("sha256")
+                    path, size, digest = RunJournal._publication_payload(intent)
+                    expected = (path, size, digest)
                     break
-            if expected_hash is None:
+            if expected is None:
                 return None
-            workspace = Path(session[0]).resolve(strict=True)
-            actual_identity = os.stat(workspace)
-            if (actual_identity.st_dev, actual_identity.st_ino) != session[1:]:
-                raise StoreError("WORKSPACE_CHANGED")
-            target = (workspace / target_path).resolve()
-            if not target.is_relative_to(workspace):
+            parts = _path_parts(target_path)
+            if parts is None:
                 raise StoreError("JOURNAL_PAYLOAD_INVALID")
-            if not target.exists():
-                return "missing"
-            if not target.is_file():
-                return "present_different_hash"
-            digest = hashlib.sha256(target.read_bytes()).hexdigest()
-            return (
-                "present_same_hash"
-                if digest == expected_hash
-                else "present_different_hash"
-            )
+            try:
+                directory_fd = _open_directory(Path(write_root), [], write_identity)
+            except OSError as error:
+                raise StoreError("WORKSPACE_CHANGED")
+            target_fd = None
+            try:
+                directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+                for part in parts[:-1]:
+                    try:
+                        child = os.open(part, directory_flags, dir_fd=directory_fd)
+                    except FileNotFoundError:
+                        return "missing"
+                    os.close(directory_fd)
+                    directory_fd = child
+                try:
+                    target_fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW
+                                        | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=directory_fd)
+                except FileNotFoundError:
+                    return "missing"
+                except OSError as error:
+                    if error.errno in {errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM}:
+                        return "present_different_hash"
+                    raise
+                before = os.fstat(target_fd)
+                if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                        or stat.S_IMODE(before.st_mode) != 0o600
+                        or before.st_size != expected[1]):
+                    return "present_different_hash"
+                raw = b''
+                while len(raw) <= expected[1]:
+                    chunk = os.read(target_fd, min(8192, expected[1] + 1 - len(raw)))
+                    if not chunk:
+                        break
+                    raw += chunk
+                after = os.fstat(target_fd)
+                named = os.stat(parts[-1], dir_fd=directory_fd, follow_symlinks=False)
+                metadata = lambda item: (item.st_dev, item.st_ino, item.st_mode, item.st_nlink,
+                                         item.st_size, item.st_mtime_ns, item.st_ctime_ns)
+                return ("present_same_hash" if len(raw) == expected[1]
+                        and hashlib.sha256(raw).hexdigest() == expected[2]
+                        and metadata(before) == metadata(after) == metadata(named)
+                        else "present_different_hash")
+            finally:
+                if target_fd is not None:
+                    os.close(target_fd)
+                os.close(directory_fd)
         except StoreError:
             raise
         except (sqlite3.DatabaseError, OSError, TypeError, ValueError) as error:

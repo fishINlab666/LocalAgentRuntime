@@ -183,7 +183,8 @@ def builtin_agent(mode='file', *, legacy=False):
     })
 
 
-def build_file_engine(agent, workspace, target_path, output_path=None, *, source_mapper=None):
+def build_file_engine(agent, read_root, target_path, output_path=None, *, write_root=None,
+                      read_identity=None, write_identity=None, source_mapper=None):
     from .discovery import DirectoryTools
     from .files import ReadFile
     from .file_tools import adapt_tools
@@ -193,15 +194,22 @@ def build_file_engine(agent, workspace, target_path, output_path=None, *, source
     config = agent.to_dict()
     if output_path and ('write_file' not in agent.tools or config['approval'] == 'deny_writes'):
         raise AgentError('TOOL_NOT_ALLOWED')
+    if (source_mapper is not None and output_path is not None
+            and (write_root is None or read_identity is None or write_identity is None
+                 or Path(write_root) == Path(read_root))):
+        raise AgentError('IMPORT_INTEGRITY_ERROR')
     if agent.strategy == 'file':
         if not isinstance(target_path, str) or not target_path:
             raise AgentError('AGENT_SCOPE_MISMATCH')
-        tool = ReadFile(workspace, {target_path}, max_bytes=config['budgets']['max_file_bytes'])
+        tool = ReadFile(read_root, {target_path}, max_bytes=config['budgets']['max_file_bytes'])
     else:
         if target_path is not None:
             raise AgentError('AGENT_SCOPE_MISMATCH')
-        tool = DirectoryTools(workspace, max_files=config['budgets']['max_files'],
+        tool = DirectoryTools(read_root, max_files=config['budgets']['max_files'],
                               max_bytes=config['budgets']['max_file_bytes'])
+    if read_identity is not None and tool.workspace_identity != tuple(read_identity):
+        raise AgentError('IMPORT_INTEGRITY_ERROR' if source_mapper is not None
+                         else 'WORKSPACE_UNAVAILABLE')
     policy = None
     extra_adapters = ()
     if source_mapper is not None:
@@ -215,6 +223,7 @@ def build_file_engine(agent, workspace, target_path, output_path=None, *, source
         except ValueError:
             raise AgentError('IMPORT_INTEGRITY_ERROR') from None
     engine = adapt_tools(tool, output_path, agent=agent, policy=policy,
+                         write_root=write_root, write_identity=write_identity,
                          extra_adapters=extra_adapters)
     engine.registry = ToolRegistry([engine.registry.get(name) for name in agent.tools
                                    if engine.registry.get(name) is not None],

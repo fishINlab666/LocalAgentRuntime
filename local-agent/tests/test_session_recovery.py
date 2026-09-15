@@ -1,5 +1,6 @@
 from contextlib import closing
 import hashlib
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from tests.test_import_store import ImportFinalizeFixture
@@ -129,18 +131,47 @@ class SessionRecoveryTests(unittest.TestCase):
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
     def submit(self, label):
+        return self.submit_for(self.session, label)
+
+    def submit_for(self, session, label):
         return self.service.submit(
-            self.session.id,
+            session.id,
             RunSubmission(
                 client_request_id=f"request-{label}",
                 question=f"任务 {label}",
                 task_type="files",
-                scope=self.session.scope,
+                scope=session.scope,
                 output_path="report.md",
                 parent_run_id=None,
                 execution_options={},
             ),
         )
+
+    def inspect_unknown(self, session_id, target_path):
+        session = self.service.load(session_id)
+        resolved = self.service.resolver.resolve(session)
+        return self.store.inspect_unknown_publication(
+            session_id,
+            target_path,
+            write_root=resolved.write_root,
+            write_identity=resolved.write_identity,
+        )
+
+    def imported_session(self):
+        raw = b"source\n"
+        request = {
+            "kind": "file",
+            "name": "恢复导入",
+            "agent_id": "directory-qa",
+            "files": [{"logical_path": "source.txt", "bytes": len(raw)}],
+            "ignored": [],
+        }
+        batch = self.service.imports.begin(request)
+        self.service.imports.add_file(
+            batch.id, batch.files[0].slot_id, BytesIO(raw), len(raw)
+        )
+        published = self.service.imports.start_finalize(batch.id).run()
+        return published, self.service.attach_import(published, request)
 
     @staticmethod
     def begin_write(prepared, label):
@@ -295,35 +326,159 @@ class SessionRecoveryTests(unittest.TestCase):
         self.store.recover_interrupted("new-process")
 
         self.assertEqual(
-            self.store.inspect_unknown_publication(
-                self.other_session.id, "report.md"
-            ),
+            self.inspect_unknown(self.other_session.id, "report.md"),
             "missing",
         )
         (self.workspace / "report.md").write_text("planned", encoding="utf-8")
+        os.chmod(self.workspace / "report.md", 0o600)
         self.assertEqual(
-            self.store.inspect_unknown_publication(
-                self.other_session.id, "report.md"
-            ),
+            self.inspect_unknown(self.other_session.id, "report.md"),
             "present_same_hash",
         )
         (self.workspace / "report.md").write_text("different", encoding="utf-8")
+        os.chmod(self.workspace / "report.md", 0o600)
         self.assertEqual(
-            self.store.inspect_unknown_publication(
-                self.other_session.id, "report.md"
-            ),
+            self.inspect_unknown(self.other_session.id, "report.md"),
             "present_different_hash",
         )
         self.assertIsNone(
-            self.store.inspect_unknown_publication(
-                self.other_session.id, "new-report.md"
-            )
+            self.inspect_unknown(self.other_session.id, "new-report.md")
         )
         state = self.store.connection().execute(
             "SELECT recovery_state FROM tool_calls WHERE run_id=? AND call_id=?",
             (prepared.run_id, call_id),
         ).fetchone()[0]
         self.assertEqual(state, "WRITE_OUTCOME_UNKNOWN")
+
+    def test_import_unknown_inspection_ignores_forged_workspace_and_uses_artifact_root(self):
+        published, session = self.imported_session()
+        prepared = self.submit_for(session, "import-unknown")
+        call_id = self.begin_write(prepared, "import-unknown")
+        approval_id = self.allow(prepared, call_id, "import-unknown")
+        digest = hashlib.sha256(b"planned").hexdigest()
+        prepared.journal.record_publication_intent(
+            call_id,
+            {
+                "path": "report.md",
+                "bytes": 7,
+                "sha256": digest,
+                "approval_id": approval_id,
+            },
+        )
+        self.store.recover_interrupted("new-process")
+        forged = self.root / "forged-workspace"
+        forged.mkdir()
+        self.store.connection().execute(
+            "UPDATE sessions SET workspace_path=? WHERE id=?",
+            (str(forged), session.id),
+        )
+        resolved = self.service.resolver.resolve(self.service.load(session.id))
+        source_decoy = published.workspace / "report.md"
+        source_decoy.write_bytes(b"planned")
+        os.chmod(source_decoy, 0o600)
+
+        self.assertEqual(
+            self.store.inspect_unknown_publication(
+                session.id,
+                "report.md",
+                write_root=resolved.write_root,
+                write_identity=resolved.write_identity,
+            ),
+            "missing",
+        )
+        artifact = published.artifacts / "report.md"
+        artifact.write_bytes(b"planned")
+        os.chmod(artifact, 0o600)
+        self.assertEqual(
+            self.store.inspect_unknown_publication(
+                session.id,
+                "report.md",
+                write_root=resolved.write_root,
+                write_identity=resolved.write_identity,
+            ),
+            "present_same_hash",
+        )
+
+    def test_unknown_inspection_rejects_changed_write_root_identity(self):
+        prepared = self.submit("root-replaced")
+        call_id = self.begin_write(prepared, "root-replaced")
+        approval_id = self.allow(prepared, call_id, "root-replaced")
+        prepared.journal.record_publication_intent(
+            call_id,
+            {
+                "path": "report.md",
+                "bytes": 7,
+                "sha256": hashlib.sha256(b"planned").hexdigest(),
+                "approval_id": approval_id,
+            },
+        )
+        self.store.recover_interrupted("new-process")
+        resolved = self.service.resolver.resolve(self.session)
+        moved = self.workspace.with_name("workspace-moved")
+        self.workspace.rename(moved)
+        self.workspace.symlink_to(moved, target_is_directory=True)
+        try:
+            with self.assertRaises(StoreError) as caught:
+                self.store.inspect_unknown_publication(
+                    self.session.id,
+                    "report.md",
+                    write_root=resolved.write_root,
+                    write_identity=resolved.write_identity,
+                )
+            self.assertEqual(caught.exception.code, "WORKSPACE_CHANGED")
+        finally:
+            self.workspace.unlink()
+            moved.rename(self.workspace)
+
+    def test_unknown_inspection_does_not_follow_target_symlink_or_block_on_fifo(self):
+        prepared = self.submit("special-target")
+        call_id = self.begin_write(prepared, "special-target")
+        approval_id = self.allow(prepared, call_id, "special-target")
+        prepared.journal.record_publication_intent(
+            call_id,
+            {
+                "path": "report.md",
+                "bytes": 7,
+                "sha256": hashlib.sha256(b"planned").hexdigest(),
+                "approval_id": approval_id,
+            },
+        )
+        self.store.recover_interrupted("new-process")
+        resolved = self.service.resolver.resolve(self.session)
+        outside = self.root / "outside.md"
+        outside.write_bytes(b"planned")
+        os.chmod(outside, 0o600)
+        target = self.workspace / "report.md"
+        target.symlink_to(outside)
+        self.assertEqual(
+            self.store.inspect_unknown_publication(
+                self.session.id,
+                "report.md",
+                write_root=resolved.write_root,
+                write_identity=resolved.write_identity,
+            ),
+            "present_different_hash",
+        )
+        target.unlink()
+        os.mkfifo(target, 0o600)
+        outcome = []
+
+        def inspect_fifo():
+            try:
+                outcome.append(self.store.inspect_unknown_publication(
+                    self.session.id,
+                    "report.md",
+                    write_root=resolved.write_root,
+                    write_identity=resolved.write_identity,
+                ))
+            except Exception as error:  # Preserve the exact worker outcome for the assertion.
+                outcome.append(error)
+
+        worker = threading.Thread(target=inspect_fifo, daemon=True)
+        worker.start()
+        worker.join(0.5)
+        self.assertFalse(worker.is_alive(), "unknown publication inspection blocked on a FIFO")
+        self.assertEqual(outcome, ["present_different_hash"])
 
     def test_saved_definitive_write_failure_does_not_become_unknown(self):
         prepared = self.submit("known-failure")
@@ -356,9 +511,7 @@ class SessionRecoveryTests(unittest.TestCase):
             ("failed", "none", "PROCESS_INTERRUPTED"),
         )
         self.assertIsNone(
-            self.store.inspect_unknown_publication(
-                self.other_session.id, "report.md"
-            )
+            self.inspect_unknown(self.other_session.id, "report.md")
         )
 
     def test_live_wal_backup_contains_relations_without_copying_artifact(self):
@@ -634,9 +787,15 @@ class SessionRecoveryTests(unittest.TestCase):
                     if target.exists():
                         self.assertEqual(target.read_text(encoding="utf-8"), "planned")
                     if pause_point == "publication_intent":
+                        resolved = service.resolver.resolve(
+                            service.load(payload["session_id"])
+                        )
                         self.assertEqual(
                             store.inspect_unknown_publication(
-                                payload["session_id"], "report.md"
+                                payload["session_id"],
+                                "report.md",
+                                write_root=resolved.write_root,
+                                write_identity=resolved.write_identity,
                             ),
                             "present_same_hash",
                         )

@@ -1280,7 +1280,10 @@ class ImportStore:
                             remaining_dirs.remove(relative)
                             child = _directory_at(descriptor, name, manifest["identities"].get(relative))
                             try:
-                                visit(child, relative + "/")
+                                # The artifact root is intentionally mutable and is not part of
+                                # the immutable imported-source manifest.
+                                if relative != "artifacts":
+                                    visit(child, relative + "/")
                                 if _identity(os.stat(name, dir_fd=descriptor, follow_symlinks=False)) != _identity(os.fstat(child)):
                                     raise ValueError("directory changed")
                             finally:
