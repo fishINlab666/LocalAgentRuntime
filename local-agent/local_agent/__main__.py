@@ -183,7 +183,8 @@ def _persistent_run(args, control):
         provider = agent.provider()
         trace = Trace(args.log_dir, Path(session.workspace_path),
                       debug_content=args.debug_content, run_id=prepared.run_id)
-        if prepared.submission.output_path is not None:
+        if (prepared.submission.task_type == 'files' and 'write_file' in agent.tools
+                and agent.to_dict()['approval'] == 'ask_writes'):
             approvals = ConsoleApprovalBroker(
                 prepared.run_id, publish=trace.emit, journal=prepared.journal
             )
@@ -390,7 +391,8 @@ def main() -> int:
                 tool = assembly.engine
             approvals = None
             try:
-                if output_path:
+                if (not simulated and 'write_file' in agent.tools
+                        and agent.to_dict()['approval'] == 'ask_writes'):
                     approvals = ConsoleApprovalBroker(trace.run_id, publish=trace.emit)
                 if not simulated:
                     provider = agent.provider()

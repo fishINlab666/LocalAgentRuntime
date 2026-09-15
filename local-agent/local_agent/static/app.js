@@ -582,7 +582,7 @@ function render(job) {
       const cancelled = job.state === 'cancelled';
       const interrupted = job.state === 'interrupted';
       status(cancelled ? '已取消' : interrupted ? '运行已中断'
-        : job.state === 'unable' && !job.output_file ? '无法读取' : '本次未完成', 'warning');
+        : '本次未完成', 'warning');
       $('failure').hidden = false; $('failure-title').textContent = cancelled ? '本次运行已取消' : '没有生成有效答案';
       const toolError = [...job.events].reverse().find(e => e.event === 'tool.completed' && e.detail.code)?.detail.code;
       const reason = job.state === 'unable' ? (toolError || result.stop_reason) : result.stop_reason;

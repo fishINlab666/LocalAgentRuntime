@@ -97,8 +97,8 @@
             <label for="run-prompt" class="extension-label">本轮 MCP 模板（可选）</label><select id="run-prompt"><option value="">不指定模板</option></select>
             <p class="field-help">只显示当前助手或会话已绑定的能力；正文仍须通过工具读取。</p>
             <div class="label-row"><label for="output-file">输出文件路径（可选）</label></div>
-            <input id="output-file" name="output_file" placeholder="例如：summary.md" maxlength="1024" autocomplete="off" aria-describedby="output-file-help">
-            <p class="field-help" id="output-file-help">留空只问答；填写后可新建 .md / .txt 文件。父目录须已存在，完整内容经你确认后才写入，不覆盖已有文件。</p>
+            <input id="output-file" name="output_file" placeholder="留空由模型决定，例如：summary.md" maxlength="1024" autocomplete="off" aria-describedby="output-file-help">
+            <p class="field-help" id="output-file-help">助手启用写入后，可由模型决定文件名；也可在此指定一份交付文件。同一任务可逐次新建多个 .md / .txt 文件，每份内容经你确认后才写入。父目录须已存在，不覆盖已有文件。</p>
             <p id="form-error" class="form-error" role="alert" hidden></p>
             <div class="actions"><button class="primary" type="submit" id="start" disabled>开始问答 <span aria-hidden="true">↗</span></button><button type="button" class="secondary" id="cancel" hidden>取消运行</button></div>
             <button type="button" class="secondary" id="continue-run" hidden>从中断处新建一次继续运行</button>

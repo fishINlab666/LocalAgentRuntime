@@ -92,6 +92,16 @@ const result = {answer: null, artifacts: [receipt], stop_reason: 'CANCELLED'};
   assert.equal(elements.artifacts.hidden, false, 'Created file remains visible after answer validation fails');
   assert.match(elements['artifact-note'].textContent, /后续步骤未完成/);
 
+  context.render(snapshot('run-1', {revision: 5, output_file: null, pending_approval: null,
+    state: 'unable', result: {...result, stop_reason: 'USER_REJECTED'}}));
+  assert.equal(elements['run-status'].textContent, '本次未完成', 'A declined dynamic write is not a read failure');
+  assert.equal(elements.artifacts.hidden, false, 'Earlier files remain visible after a later write is declined');
+  context.render(snapshot('run-1', {revision: 6, output_file: null, pending_approval: null,
+    state: 'completed', result: {...result, artifacts: [receipt, {...receipt, path: 'notes.txt'}]}}));
+  assert.equal(elements['artifact-list'].children.length, 2);
+  assert.match(elements['artifact-list'].textContent, /report\.md.*notes\.txt/);
+  assert.doesNotMatch(html, /留空只问答/);
+
   const denyJob = snapshot('deny-run', {pending_approval: {...approval, id: 'deny-approval', run_id: 'deny-run'}});
   context.prepareOutput(denyJob); context.render(denyJob);
   respond = async () => ({ok: true, json: async () => snapshot('deny-run', {revision: 2, state: 'unable',

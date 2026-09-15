@@ -68,7 +68,8 @@ class DirectoryRuntimeTests(unittest.TestCase):
         self.assertEqual([c['quote'] for c in result['answer']['citations']], ['项目代号：杉木-19', '评审人：顾宁'])
         requested = [e['data'] for e in events if e['event'] == 'model.requested']
         self.assertEqual(requested[-1]['messages'], provider.requests[-1])
-        self.assertEqual([t['function']['name'] for t in requested[0]['tools']], ['list_files', 'read_file'])
+        self.assertEqual([t['function']['name'] for t in requested[0]['tools']],
+                         ['list_files', 'read_file', 'write_file'])
 
     def test_undiscovered_read_error_returns_to_model_and_can_recover(self):
         result, provider, _ = self.run_script([

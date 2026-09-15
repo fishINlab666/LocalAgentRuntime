@@ -1129,6 +1129,11 @@ class SessionService:
                     agent_catalog=catalog, selected_skill=prepared.submission.skill_id,
                     selected_prompt=prepared.submission.mcp_prompt)
                 engine = assembly.engine
+                writer = engine.registry.get('write_file')
+                if writer is not None:
+                    writer.publication_guard = lambda path: self.store.inspect_unknown_publication(
+                        prepared.session_id, path
+                    ) is not None
                 if (prepared.submission.output_path is not None
                         and self.store.inspect_unknown_publication(
                             prepared.session_id, prepared.submission.output_path

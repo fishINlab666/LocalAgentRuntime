@@ -146,7 +146,7 @@ answered至少引用一条实际事实来源。本地引用为{path,start_line,e
 MCP结构化数据会作为规范JSON追加在content末尾，可用对应行引用。quote由程序从本轮快照生成，不要编造路径、URI或来源ID。
 必须原样复制历史结果返回的source_id；结果同时提供citation_line_count和可直接复制的citation，引用整段text/excerpt时原样复制citation，引用部分行时end_line不得超过citation_line_count。历史引用只证明当时记载，不证明当前状态。
 无法完成时用unable、空citations并解释；必要读取失败不得声称已经完成。not_found仅可表示完整检查的本地范围未记载，不能表示外部服务全部不存在。
-写文件只允许用户指定output_file，必须等待真实审批；只有实际创建回执支持“已创建”，拒绝后不再请求工具。
+写文件由模型提出工作区相对路径，逐次等待真实审批；用户指定output_file时该目标必须完成。可生成多个文件，只有各自实际创建回执支持“已创建”，拒绝后不再请求工具。
 '''
 
 
@@ -189,8 +189,9 @@ class ExtensionPolicy:
         messages = self.base.initial_messages(question, target)
         max_calls = self.agent.to_dict()['budgets']['max_tool_calls']
         write_rule = ''
-        if self.base.output_path is not None:
-            write_rule = ('\n写入回执只证明文件已创建；产物不能作为来源，'
+        if self.base.write_enabled:
+            from .file_tools import WRITE_TASK
+            write_rule = (WRITE_TASK + '\n写入回执只证明文件已创建；产物不能作为来源，'
                           '不要在citations中引用output_file。\n')
         metadata = {'skills': self.catalog, 'capability_status': self.statuses,
                     'agent': {'id': self.agent.id, 'revision': self.agent.revision},
@@ -295,7 +296,7 @@ class ExtensionPolicy:
             return value
         if self.selected_skill and self.selected_skill not in self.loaded_skills:
             raise AnswerError('SKILL_NOT_LOADED', 'Selected method has not been read')
-        if self.base.output_path is not None and not self.base.artifacts:
+        if not self.base.required_output_created():
             raise AnswerError('OUTPUT_NOT_CREATED', 'No actual creation receipt')
         if status == 'not_found':
             if self.agent.to_dict()['mcp']:

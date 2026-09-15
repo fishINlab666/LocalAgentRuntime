@@ -323,6 +323,46 @@ class SessionRecoveryTests(unittest.TestCase):
         ).fetchone()[0]
         self.assertEqual(state, "WRITE_OUTCOME_UNKNOWN")
 
+    def test_dynamic_write_checks_unknown_publication_after_reopen(self):
+        from local_agent.trace import Trace
+        from test_runtime import ScriptedProvider, call_message, final_message
+
+        interrupted = self.submit('dynamic-unknown')
+        call_id = self.begin_write(interrupted, 'dynamic-unknown')
+        approval_id = self.allow(interrupted, call_id, 'dynamic-unknown')
+        interrupted.journal.record_publication_intent(call_id, {
+            'path': 'report.md', 'bytes': 7,
+            'sha256': hashlib.sha256(b'planned').hexdigest(), 'approval_id': approval_id,
+        })
+        self.store.close()
+        self.store = SessionStore.open(self.state)
+        self.store.recover_interrupted('reopened-process')
+        self.service = SessionService(self.store)
+        prepared = self.service.submit(self.other_session.id, RunSubmission(
+            'dynamic-retry', '生成报告', 'files', self.other_session.scope, None, None, {}))
+        provider = ScriptedProvider([
+            call_message('dynamic-write', name='write_file', arguments=json.dumps({
+                'intent': '保存模型自主命名的报告', 'path': 'report.md', 'content': 'new content'})),
+            final_message(status='unable'),
+        ])
+        approvals = []
+        broker = ApprovalBroker(prepared.run_id, journal=prepared.journal)
+        self.addCleanup(broker.close)
+        def allow(event, data):
+            if event == 'approval.required':
+                approvals.append(data['path'])
+                broker.decide(data['id'], 'allow')
+        broker.publish = allow
+        result = self.service.execute(prepared, provider,
+            Trace(self.root / 'runs', self.workspace, run_id=prepared.run_id), approvals=broker)
+        tool_result = next(message for message in self.store.load_run_messages(
+            self.other_session.id, prepared.run_id) if message.role == 'tool')
+        self.assertEqual(tool_result.payload['tool_call_id'], 'dynamic-write')
+        self.assertEqual(tool_result.payload['result']['error']['code'], 'WRITE_OUTCOME_UNKNOWN')
+        self.assertEqual(result['stop_reason'], 'WRITE_OUTCOME_UNKNOWN')
+        self.assertEqual(approvals, [])
+        self.assertFalse((self.workspace / 'report.md').exists())
+
     def test_saved_definitive_write_failure_does_not_become_unknown(self):
         prepared = self.submit("known-failure")
         call_id = self.begin_write(prepared, "known-failure")

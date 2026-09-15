@@ -161,6 +161,60 @@ class AgentCliTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertTrue(closed.called, 'run-owned capabilities were left open')
 
+    def test_one_shot_prepares_approval_from_write_permission_without_output_path(self):
+        for permission in ('ask_writes', 'deny_writes', 'no_write_tool'):
+            with self.subTest(permission=permission):
+                _, document = self.agent_document()
+                document['approval'] = 'deny_writes' if permission == 'deny_writes' else 'ask_writes'
+                if permission == 'no_write_tool':
+                    document['tools'].remove('write_file')
+                AgentCatalog(self.state / 'agents').save(document)
+                with patch.object(AgentDefinition, 'provider', return_value=DemoProvider()), \
+                        patch('local_agent.__main__.ConsoleApprovalBroker') as broker, \
+                        patch('local_agent.__main__.Runtime') as runtime:
+                    runtime.return_value.run.return_value = {'state': 'completed'}
+                    self.ok('run', '--state-dir', self.state, '--agent', 'research',
+                        '--workspace', self.workspace, '--file', 'note.md', '--question', '生成两份文件',
+                        '--log-dir', self.root / 'runs')
+                if permission == 'ask_writes':
+                    broker.assert_called_once()
+                    self.assertIs(runtime.call_args.kwargs['approvals'], broker.return_value)
+                    broker.return_value.close.assert_called_once()
+                else:
+                    broker.assert_not_called()
+                    self.assertIsNone(runtime.call_args.kwargs['approvals'])
+
+    def test_persistent_files_prepare_approval_without_output_but_conversation_does_not(self):
+        from local_agent.sessions import SessionService
+        _, document = self.agent_document()
+        AgentCatalog(self.state / 'agents').save(document)
+        created = self.ok('sessions', '--state-dir', self.state, 'create', '--agent', 'research',
+            '--workspace', self.workspace, '--title', '动态写入', '--file', 'note.md')
+        def finish(_service, prepared, *_args, **_kwargs):
+            result = {'state': 'completed', 'stop_reason': 'ANSWER_VALIDATED'}
+            prepared.journal.finish_run(result)
+            return result
+        for conversation in (False, True):
+            with self.subTest(conversation=conversation):
+                selection = ['--conversation'] if conversation else []
+                with patch.object(AgentDefinition, 'provider', return_value=DemoProvider()), \
+                        patch('local_agent.__main__.ConsoleApprovalBroker') as broker, \
+                        patch.object(SessionService, 'execute', autospec=True,
+                                     side_effect=finish) as execute:
+                    self.ok('run', '--state-dir', self.state, '--session', created['session_id'],
+                        '--agent', 'research', '--question', '完成任务', *selection,
+                        '--log-dir', self.root / 'runs')
+                    prepared = execute.call_args.args[1]
+                self.assertIsNone(prepared.submission.output_path)
+                if conversation:
+                    broker.assert_not_called()
+                    self.assertIsNone(execute.call_args.kwargs['approvals'])
+                else:
+                    broker.assert_called_once()
+                    self.assertIs(execute.call_args.kwargs['approvals'], broker.return_value)
+                    self.assertIs(broker.call_args.kwargs['journal'], prepared.journal)
+                    broker.return_value.close.assert_called_once()
+
     def test_one_shot_uses_selected_budget_and_keeps_real_file_loop(self):
         from local_agent.runtime import Runtime
         for mode, expected in [('file', 6), ('combined', 10)]:
