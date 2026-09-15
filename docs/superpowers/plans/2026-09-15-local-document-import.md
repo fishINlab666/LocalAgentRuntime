@@ -12,7 +12,7 @@
 
 ## §0 当前进度与停止条件
 
-2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过。三项规格与代码质量 Gate 均为 PASS。Darwin 因系统共享地址空间预映射采用“启动时 VSZ + 512 MiB”新增预算，其他平台保持绝对 512 MiB；无法安装限制时仍明确不可用。下一步执行 Task 4 的解析、切块、原子发布与发布前恢复，不先接上传页面或 Session 执行入口。
+2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过。四项规格与代码质量 Gate 均为 PASS；Task 4 Gate 发现并修复了“路径短暂替换可使 original 与 chunk 内容不一致”的竞态，解析子进程现在继承父进程固定并校验的只读文件描述符。Darwin 因系统共享地址空间预映射采用“启动时 VSZ + 512 MiB”新增预算，其他平台保持绝对 512 MiB；无法安装限制时仍明确不可用。下一步执行 Task 5，用统一 Resolver 将完整发布接入持久 Session 与 Web、CLI、直接执行入口；不先接上传页面、搜索工具或 Artifact 写入。
 
 本批完成条件：Task 1–10 的定向测试、完整 Python 回归和既有浏览器回归通过；Task 11 的固定混合资料闭环证明“导入 → 搜索 → 读取 → ToolCall 结果进入下一轮 → 原始位置引用 → 重启追问 → 隔离与恢复”。离线证据全部通过后，最多执行一个真实 DeepSeek 会话、2 个 Run、12 次模型请求；任一核心失败立即停止并保留证据。达到条件后不增加 OCR、同步、资料删除、向量检索或新格式。
 
@@ -437,7 +437,7 @@ git commit -m "Store validated local import copies"
 - Modify: `local-agent/tests/test_import_store.py`
 - Modify: `local-agent/tests/test_session_recovery.py`
 
-- [ ] **Step 1: 写规范化产物和每个崩溃窗口的失败测试**
+- [x] **Step 1: 写规范化产物和每个崩溃窗口的失败测试**
 
 创建两份文本各跨越 12 KiB、两页 PDF 和段落/表格 DOCX，断言：
 
@@ -453,7 +453,7 @@ self.assertEqual(self.hash_manifest_files(published.root), published.manifest_ha
 
 Task 4 的故障注入点固定为 `after_parse_fsync`、`after_publish_rename`、`after_parent_fsync`。每个点重开 State Store 后断言：同一 complete 返回同一 job；完整正式目录可重建同一个 `PublishedImport`；不创建 Session；孤儿正式目录才清理。`before_link_transaction`、`after_link_commit`、同一 import 不会出现两个 Session，以及 `ready` 摘要错误转为 `unavailable` 依赖 Task 5 的关联事务与 resolver，在 Task 5 验证。
 
-- [ ] **Step 2: 运行并确认 finalize/恢复断言失败**
+- [x] **Step 2: 运行并确认 finalize/恢复断言失败**
 
 Run:
 
@@ -465,7 +465,7 @@ PYTHONPATH=. .venv/bin/python -W error::ResourceWarning -m unittest \
 
 Expected: 新 finalize、manifest 或恢复断言 FAIL。
 
-- [ ] **Step 3: 实现切块、索引、位置表和原子发布**
+- [x] **Step 3: 实现切块、索引、位置表和原子发布**
 
 将 parser 的有序 unit 转成 LF 行；按“来源单元 → 段落 → 行 → UTF-8 字符边界”切块，每块最大 12 KiB。生成：
 
@@ -480,11 +480,11 @@ Expected: 新 finalize、manifest 或恢复断言 FAIL。
 
 `index.md` 只列逻辑路径、格式、块号范围和原始位置范围。manifest 记录 originals、index、每块和 locations 的 SHA-256、parser 版本、统计、警告及目录身份。全批解析成功后依次 `fsync` 文件、目录，rename staging 到 `imports/<id>`，再 `fsync(imports/)`；任一已接纳文件失败则整批失败且不创建 Session。
 
-- [ ] **Step 4: 接入状态恢复与批次锁**
+- [x] **Step 4: 接入状态恢复与批次锁**
 
 `start_finalize()` 用数据库 CAS 从 `uploading` 进入 `finalizing`，重复调用返回同一 job。`ImportJob.run()` 返回冻结的 `PublishedImport`；Task 4 完成后 SQLite 仍为 `finalizing`，而“正式目录完整、staging 已消失、尚无 Session”推导为文件系统阶段 `published_unlinked`，不增加新的 SQLite 状态。finalize worker 持有 gate activity 到发布成功、失败或取消；批次锁仲裁 cancel/finalize；取消终止 parser 子进程并删除 staging。恢复逻辑按 SQLite 状态和目录事实重建同一个 `PublishedImport`，绝不创建 Session。worker 的 `finally` 释放 activity 并调用 `store.close_thread_connection()`。
 
-- [ ] **Step 5: 跑发布恢复检查并提交**
+- [x] **Step 5: 跑发布恢复检查并提交**
 
 Run:
 
