@@ -125,6 +125,13 @@ function setDrawer(name = null, returnFocus = true) {
   if (!name && wasOpen && returnFocus && drawerTrigger) drawerTrigger.focus();
 }
 
+function setSessionCreateOpen(open) {
+  $('session-create-fields').hidden = !open;
+  $('session-create-toggle').setAttribute('aria-expanded', String(open));
+  $('session-create-toggle').textContent = open ? '收起新建会话' : '＋ 新建会话';
+  if (open) requestAnimationFrame(() => $('session-name').focus());
+}
+
 function syncDrawerAccess() {
   const open = document.body.dataset.drawer || null;
   const sidebarHidden = mobileDrawer.matches && open !== 'sidebar';
@@ -386,8 +393,9 @@ function updateControls() {
   const sessionMode = Boolean(activeSessionId);
   const conversation = sessionMode && $('task-type').value === 'conversation';
   const archived = activeSession?.status === 'archived';
+  const missingScope = !sessionMode && !$('discover').checked && !$('file').value.trim();
   $('start').disabled = busy || !ready || archived || (sessionMode && !conversation && !workspaceAvailable);
-  $('start').textContent = busy ? 'Agent 工作中…' : '发送任务 ↑';
+  $('start').textContent = busy ? '处理中…' : '发送';
   $('thread-panel').setAttribute('aria-busy', String(busy));
   $('cancel').hidden = !busy || !activeId;
   $('discover').disabled = sessionMode || busy || !ready;
@@ -405,6 +413,11 @@ function updateControls() {
     : $('discover').checked ? '开始后，问题、目录元数据和已读取的资料内容将发送给 DeepSeek。原文件保持只读。'
     : '开始后，所选文件内容和问题将发送给 DeepSeek。原文件保持只读。';
   if ($('output-file').value.trim()) $('privacy').textContent += ' 输出文件的完整内容经你确认后才新建。';
+  $('composer-settings').classList.toggle('needs-attention', missingScope);
+  $('run-settings-summary').textContent = missingScope ? '需要先选择文件'
+    : sessionMode ? '使用当前会话的固定范围'
+    : $('discover').checked ? '当前工作区目录发现'
+    : `文件：${$('file').value.trim()}`;
   updateAgentControls();
   updateApprovalControls();
 }
@@ -718,6 +731,8 @@ async function loadSessions(selectedId = null, fixed = fixedSessionSelection) {
   sessionCursors = {active: active.next_cursor || null, archived: archived.next_cursor || null};
   renderSessionOptions(); renderSessionList();
   $('session-create').hidden = fixedSessionSelection;
+  $('session-create-toggle').hidden = fixedSessionSelection;
+  if (fixedSessionSelection) setSessionCreateOpen(false);
   const wanted = selectedId || active.sessions?.[0]?.id || null;
   if (wanted) { $('session-select').value = wanted; await selectSession(wanted); }
   else {
@@ -878,6 +893,21 @@ async function initialize() {
 }
 
 $('question').addEventListener('input', countQuestion);
+$('question').addEventListener('keydown', event => {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+  event.preventDefault();
+  if (!$('start').disabled) $('question-form').requestSubmit();
+});
+$('file').addEventListener('input', () => {
+  $('form-error').hidden = true;
+  updateControls();
+});
+$('file').addEventListener('invalid', event => {
+  event.preventDefault();
+  $('composer-settings').open = true;
+  showError(new Error('请先选择要核对的文件，或在本轮设置中启用目录发现。'));
+  requestAnimationFrame(() => $('file').focus());
+});
 $('agent-select').addEventListener('change', () => selectAgent($('agent-select').value));
 $('agent-template').addEventListener('change', fillAgentTemplate);
 $('agent-create').addEventListener('click', () => manage(async () => {
@@ -925,6 +955,8 @@ $('session-mode').addEventListener('change', () => {
 $('session-select').addEventListener('change', () => selectSession($('session-select').value));
 $('session-load-more').addEventListener('click', loadMoreSessions);
 $('run-load-more').addEventListener('click', loadMoreRuns);
+$('session-create-toggle').addEventListener('click', () => setSessionCreateOpen(
+  $('session-create-toggle').getAttribute('aria-expanded') !== 'true'));
 $('session-create').addEventListener('click', async () => {
   $('session-error').hidden = true;
   const scope = $('session-mode').value === 'directory' ? {mode: 'directory'}
@@ -933,6 +965,7 @@ $('session-create').addEventListener('click', async () => {
     const response = await api('/api/sessions', {title: $('session-name').value.trim(), scope,
       ...(selectedAgentId ? {agent_id: selectedAgentId} : {})});
     await loadSessions(response.session.id, fixedSessionSelection);
+    setSessionCreateOpen(false);
   } catch (error) { showError(error, 'session-error'); }
 });
 $('session-rename').addEventListener('click', async () => {
@@ -1058,16 +1091,9 @@ document.addEventListener('keydown', event => {
 });
 const mobileDrawer = matchMedia('(max-width: 767px)');
 const inspectorDrawer = matchMedia('(max-width: 1179px)');
-const compactComposer = mobileDrawer;
-const syncComposerDensity = event => {
-  document.querySelector('.composer-settings').open = !event.matches;
-};
-if (compactComposer.addEventListener) compactComposer.addEventListener('change', syncComposerDensity);
-else compactComposer.addListener(syncComposerDensity);
 for (const media of [mobileDrawer, inspectorDrawer]) {
   if (media.addEventListener) media.addEventListener('change', syncDrawerAccess);
   else media.addListener(syncDrawerAccess);
 }
-syncComposerDensity(compactComposer);
 syncDrawerAccess();
 initialize();

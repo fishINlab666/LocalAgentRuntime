@@ -5,7 +5,8 @@ const vm = require('node:vm');
 
 class Element {
   constructor() { this.children = []; this.listeners = {}; this.attributes = {}; this.dataset = {};
-    this.value = ''; this.hidden = false; this.inert = false; }
+    this.value = ''; this.hidden = false; this.inert = false;
+    this.classList = {toggle() {}}; }
   get firstElementChild() { return this.children[0] || null; }
   set textContent(value) { this.text = String(value); this.children = []; }
   get textContent() { return (this.text || '') + this.children.map(child => child.textContent).join(''); }

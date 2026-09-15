@@ -23,6 +23,10 @@ const { chromium } = require('playwright');
     await page.locator('#question').fill(question);
     await page.locator('#start').click();
   }
+  async function openSettings() {
+    const settings = page.locator('.composer-settings');
+    if (!await settings.evaluate(element => element.open)) await settings.locator('summary').click();
+  }
   async function terminal() {
     await page.waitForFunction(() => !document.querySelector('#start').disabled);
   }
@@ -33,6 +37,7 @@ const { chromium } = require('playwright');
     fs.mkdirSync('artifacts', {recursive: true});
     await page.goto(base, {waitUntil: 'networkidle'});
     assert.match(await page.locator('#connection').innerText(), /模拟/);
+    await openSettings();
     await page.locator('#discover').check();
     assert.equal(await page.locator('#file').isDisabled(), true);
     assert.equal(await page.locator('#file').evaluate(element => element.required), false);
@@ -164,6 +169,7 @@ const { chromium } = require('playwright');
     const config = await page.evaluate(async () => (await fetch('/api/config', {headers: {
       'X-Session-Token': document.querySelector('meta[name="session-token"]').content}})).json());
     const path = require('node:path'), crypto = require('node:crypto');
+    await openSettings();
     await page.locator('#discover').check();
     await page.locator('#output-file').fill('confirmed-report.md');
     await page.locator('#question').fill('依据两份小文件生成核对报告');
@@ -187,12 +193,14 @@ const { chromium } = require('playwright');
     assert.equal(await page.locator('#artifact-list code').textContent(), `SHA-256：${crypto.createHash('sha256').update(actual).digest('hex')}`);
     assert.equal(await page.locator('#citations .citation').count(), 2);
     await page.screenshot({path: 'artifacts/tool-created.png', fullPage: true});
+    await openSettings();
     await page.locator('#output-file').fill('denied-report.md');
     await page.locator('#start').click(); await page.locator('#approval').waitFor({state: 'visible'});
     await page.locator('#approval-deny').click(); await terminal();
     assert.equal(fs.existsSync(path.join(config.workspace, 'denied-report.md')), false);
     assert.match(await page.locator('#failure-message').innerText(), /拒绝/);
     assert.equal(await page.locator('#artifacts').isVisible(), false);
+    await openSettings();
     await page.locator('#output-file').fill('retained-report.md');
     await page.locator('#question').fill('产物后失败');
     await page.locator('#start').click(); await page.locator('#approval').waitFor({state: 'visible'});

@@ -29,6 +29,23 @@ let delayNextSessionPage = false, releaseSessionPage;
 const runPageGate = new Promise(resolve => { releaseRunPage = resolve; });
 const sessionPageGate = new Promise(resolve => { releaseSessionPage = resolve; });
 
+async function assertComposerVisible(page, width, height) {
+  await page.setViewportSize({width, height});
+  const geometry = await page.evaluate(() => {
+    const box = id => {
+      const rect = document.querySelector(id).getBoundingClientRect();
+      return {top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right};
+    };
+    return {question: box('#question'), send: box('#start'), width: innerWidth, height: innerHeight};
+  });
+  for (const [name, box] of Object.entries({question: geometry.question, send: geometry.send})) {
+    assert(box.top >= 0 && box.bottom <= geometry.height,
+      `${name} must stay vertically visible at ${width}x${height}: ${JSON.stringify(box)}`);
+    assert(box.left >= 0 && box.right <= geometry.width,
+      `${name} must stay horizontally visible at ${width}x${height}: ${JSON.stringify(box)}`);
+  }
+}
+
 (async () => {
   const browser = await chromium.launch({headless: true,
     executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
@@ -107,9 +124,40 @@ const sessionPageGate = new Promise(resolve => { releaseSessionPage = resolve; }
   try {
     await page.goto('http://workbench.test/', {waitUntil: 'networkidle'});
     assert.equal(await page.title(), 'Local Agent 工作台');
+    assert.equal(await page.locator('.composer-settings').evaluate(element => element.open), false,
+      'secondary run settings must start collapsed');
+    for (const [width, height] of [[1440, 900], [1280, 800], [1024, 768]]) {
+      await assertComposerVisible(page, width, height);
+    }
+    await page.setViewportSize({width: 1440, height: 900});
+    await page.locator('#question').fill('按 Enter 发送');
+    await page.evaluate(() => {
+      window.__composerSubmitCount = 0;
+      window.__captureComposerSubmit = event => {
+        window.__composerSubmitCount += 1;
+        event.preventDefault(); event.stopImmediatePropagation();
+      };
+      document.querySelector('#question-form').addEventListener(
+        'submit', window.__captureComposerSubmit, {capture: true});
+    });
+    await page.locator('#question').press('Enter');
+    assert.equal(await page.evaluate(() => window.__composerSubmitCount), 1,
+      'Enter in the question box must submit');
+    assert.equal(await page.locator('#question').inputValue(), '按 Enter 发送');
+    await page.evaluate(() => document.querySelector('#question-form').removeEventListener(
+      'submit', window.__captureComposerSubmit, {capture: true}));
+    await page.locator('#question').fill('第一行');
+    await page.locator('#question').press('Shift+Enter');
+    assert.equal(await page.locator('#question').inputValue(), '第一行\n',
+      'Shift+Enter must insert a newline');
     for (const region of ['sidebar', 'thread', 'inspector']) {
       assert.equal(await page.locator(`[data-region="${region}"]`).count(), 1);
     }
+    assert.equal(await page.locator('#session-create-fields').isVisible(), false);
+    await page.locator('#session-create-toggle').click();
+    assert.equal(await page.locator('#session-create-toggle').getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.locator('#session-create-fields').isVisible(), true);
+    await page.locator('#session-create-toggle').click();
     assert.equal(await page.locator('#agent-list [data-agent-id]').count(), 3);
     assert.equal(await page.locator('#session-list [data-session-id]').count(), 20);
     assert.match(await page.locator('#session-list [data-session-id]').first().innerText(), /1970/);
@@ -136,6 +184,15 @@ const sessionPageGate = new Promise(resolve => { releaseSessionPage = resolve; }
     await page.locator('#session-select').selectOption('');
     await page.waitForFunction(() => document.querySelector('#output').hidden);
     assert.equal(await page.locator('#trace').isVisible(), false);
+    await page.locator('#file').evaluate(element => { element.value = ''; });
+    await page.locator('#question').fill('缺少资料范围时给出提示');
+    await page.locator('#question').press('Enter');
+    await page.waitForFunction(() => document.querySelector('.composer-settings').open);
+    assert.match(await page.locator('#form-error').innerText(), /选择.*文件/);
+    await page.waitForFunction(() => document.activeElement?.id === 'file');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'file');
+    await page.locator('#file').fill('demo-note.md');
+    await page.locator('.composer-settings summary').click();
     await page.locator('#session-select').selectOption(sessions[0].id);
     await page.waitForFunction(() => document.querySelectorAll('#session-history button').length === 20);
 

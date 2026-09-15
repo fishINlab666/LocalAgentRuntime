@@ -24,6 +24,9 @@ const { chromium } = require('playwright');
   }
 
   async function createSession(title) {
+    if (!await page.locator('#session-create-fields').isVisible()) {
+      await page.locator('#session-create-toggle').click();
+    }
     await page.locator('#session-name').fill(title);
     await page.locator('#session-mode').selectOption('file');
     await page.locator('#session-file').fill('demo-note.md');
@@ -35,7 +38,11 @@ const { chromium } = require('playwright');
   }
 
   async function submit(question, taskType = 'files') {
-    await page.locator('#task-type').selectOption(taskType);
+    if (await page.locator('#task-type').inputValue() !== taskType) {
+      const settings = page.locator('.composer-settings');
+      if (!await settings.evaluate(element => element.open)) await settings.locator('summary').click();
+      await page.locator('#task-type').selectOption(taskType);
+    }
     await page.locator('#question').fill(question);
     await page.locator('#start').click();
     await page.waitForFunction(value => document.querySelector('#source-line')?.textContent.includes(value), question);

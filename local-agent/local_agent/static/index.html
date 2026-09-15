@@ -41,14 +41,15 @@
         <div id="session-list" class="session-list" aria-label="会话列表"></div>
         <button type="button" id="session-load-more" class="quiet full-width" hidden>加载更多会话</button>
 
-        <div class="session-create-fields">
+        <button type="button" class="secondary full-width" id="session-create-toggle" aria-expanded="false" aria-controls="session-create-fields">＋ 新建会话</button>
+        <div class="session-create-fields" id="session-create-fields" hidden>
           <label for="session-name">新会话名称</label>
           <input id="session-name" maxlength="120" placeholder="例如：项目资料核对">
           <label for="session-mode">资料范围</label>
           <select id="session-mode"><option value="file">单文件</option><option value="directory">目录发现</option></select>
           <label for="session-file">文件路径</label>
           <input id="session-file" maxlength="1024" placeholder="note.md">
-          <button type="button" class="primary full-width" id="session-create">＋ 新建会话</button>
+          <button type="button" class="primary full-width" id="session-create">创建会话</button>
         </div>
 
         <div id="session-actions" class="session-actions" hidden>
@@ -130,11 +131,16 @@
       <section class="composer" aria-labelledby="input-title">
         <form id="question-form">
           <div class="composer-topline"><h2 id="input-title">给 Agent 一个任务</h2><span id="count">0 / 4000</span></div>
-          <textarea id="question" name="question" rows="3" maxlength="4000" required placeholder="问资料里的事实、继续一段会话，或让 Agent 生成文件…"></textarea>
+          <textarea id="question" name="question" rows="2" maxlength="4000" required placeholder="问资料里的事实、继续一段会话，或让 Agent 生成文件…"></textarea>
+          <p id="form-error" class="form-error" role="alert" hidden></p>
+          <div class="composer-actions">
+            <div class="composer-help"><span class="key-hint">Enter 发送 · Shift+Enter 换行</span><p class="privacy" id="privacy">开始后，所选文件内容和问题将发送给 DeepSeek。原文件保持只读。</p></div>
+            <div class="button-row"><button type="button" class="secondary" id="cancel" hidden>取消运行</button><button class="primary send-button" type="submit" id="start" aria-keyshortcuts="Enter" disabled>发送</button></div>
+          </div>
           <div class="suggestions"><button type="button" data-question="资料的主要内容是什么？请引用原文。">概括资料</button><button type="button" data-question="资料中写的预算是多少？">查找预算</button><button type="button" class="sample" id="sample" hidden>使用演示问题</button></div>
 
-          <details class="composer-settings" open>
-            <summary>本轮设置 <span>资料范围 · Skill · MCP · 输出</span></summary>
+          <details class="composer-settings" id="composer-settings">
+            <summary>本轮设置 <span id="run-settings-summary">资料范围 · Skill · MCP · 输出</span></summary>
             <div class="settings-grid">
               <div class="field-group"><label for="task-type">本轮任务</label><select id="task-type"><option value="files">核对资料</option><option value="conversation">聊这段记录</option></select><p class="field-help">核对资料会读取当前范围；聊记录只查询本会话历史。</p></div>
               <div class="field-group"><label class="mode-toggle" for="discover"><input type="checkbox" id="discover" disabled aria-describedby="discover-help">目录发现</label><p class="field-help" id="discover-help">从工作区的 .md / .txt 中按需发现并读取。</p></div>
@@ -145,11 +151,6 @@
             </div>
           </details>
 
-          <p id="form-error" class="form-error" role="alert" hidden></p>
-          <div class="composer-actions">
-            <p class="privacy" id="privacy">开始后，所选文件内容和问题将发送给 DeepSeek。原文件保持只读。</p>
-            <div class="button-row"><button type="button" class="secondary" id="cancel" hidden>取消运行</button><button class="primary send-button" type="submit" id="start" disabled>发送任务 ↑</button></div>
-          </div>
           <button type="button" class="secondary full-width" id="continue-run" hidden>从中断处新建一次继续运行</button>
         </form>
       </section>
