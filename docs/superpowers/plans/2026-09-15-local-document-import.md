@@ -12,7 +12,7 @@
 
 ## §0 当前进度与停止条件
 
-2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过；Task 7 已在 commit `06e4bfe` 完成，导入会话的预声明输出只写独立 `artifacts/`，一次成功、审批、禁止改名/覆盖、真实回执、未知写入恢复和受权下载均已接通。Task 8 已在 commit `417a579` 完成，SQLite、受管资料与 Artifact 作为一个清单约束的目录原子备份，恢复到不存在的 State Store 时重绑目录身份并全量验真；24 项备份/CLI 定向测试、89 项共享链路测试及最终 647 项 Python 回归通过，限定安全 Gate 通过。Task 9 已在 commit `d153368` 完成，受限 HTTP 导入、Agent 隔离、单 worker、幂等重放、失败重试及受限 Session 摘要已接通；11 项导入 HTTP 测试和 55 项 Web 回归通过，限定安全 Gate 通过。Task 10 已在 commit `6d7ddc7` 完成，文件／文件夹预检、顺序原始字节上传、取消与刷新恢复、兼容 Agent、成功后的 Session 身份核验、来源事实和响应式交互已接通；六组浏览器回归通过，三路限定终审通过。Task 11 的固定离线闭环已完成：2 个 Run、6 次脚本化模型请求贯通混合导入、搜索／读取回填、PDF/Word 原位置、删除外部原件后的重启校验、跨 Import 隔离及新 State Store 恢复后追问；127 项导入测试、661 项完整 Python 回归和六组浏览器回归通过，两路限定 Gate PASS。
+2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过；Task 7 已在 commit `06e4bfe` 完成，导入会话的预声明输出只写独立 `artifacts/`，一次成功、审批、禁止改名/覆盖、真实回执、未知写入恢复和受权下载均已接通。Task 8 已在 commit `417a579` 完成，SQLite、受管资料与 Artifact 作为一个清单约束的目录原子备份，恢复到不存在的 State Store 时重绑目录身份并全量验真；24 项备份/CLI 定向测试、89 项共享链路测试及最终 647 项 Python 回归通过，限定安全 Gate 通过。Task 9 已在 commit `d153368` 完成，受限 HTTP 导入、Agent 隔离、单 worker、幂等重放、失败重试及受限 Session 摘要已接通；11 项导入 HTTP 测试和 55 项 Web 回归通过，限定安全 Gate 通过。Task 10 已在 commit `6d7ddc7` 完成，文件／文件夹预检、顺序原始字节上传、取消与刷新恢复、兼容 Agent、成功后的 Session 身份核验、来源事实和响应式交互已接通；六组浏览器回归通过，三路限定终审通过。Task 11 的固定离线闭环已在 commit `3ddb60e` 完成并推送：2 个 Run、6 次脚本化模型请求贯通混合导入、搜索／读取回填、PDF/Word 原位置、删除外部原件后的重启校验、跨 Import 隔离及新 State Store 恢复后追问；127 项导入测试、661 项完整 Python 回归和六组浏览器回归通过，最终限定 Gate PASS。
 
 当前 Codex 进程没有继承模型密钥，受限真实入口已按 `NOT_RUN / CONFIG_MISSING / 0 model calls` 保存原始报告；离线 Provider 不冒充真实模型。实现可以提交和推送，真实 DeepSeek 的 2 Run 语义验收仍是独立待验证项；取得环境变量后只运行这一组，不扩展样例。
 
@@ -1167,6 +1167,8 @@ Review 只检查设计验收项、权限绕过、虚假执行、来源映射、�
 
 Actual: 权限／上下文审查 PASS。重启／恢复审查先发现“reopen 后只 resolve”及异常后必需检查可能不完整两项阻塞；已增加 reopen 后真实 search/read/引用 probe，并要求无 error、必需检查键精确完整且全真，故障注入测试通过；复审 PASS。
 
+Commit: `3ddb60e`（`Complete managed document import loop`），已推送至 `origin/LocalAgentRuntime`。
+
 - [ ] **Step 6: 在所有离线证据通过后运行一次受限 DeepSeek 验收**
 
 只在调用进程已经通过环境变量取得 `DEEPSEEK_API_KEY` 时运行：
@@ -1194,3 +1196,5 @@ git ls-remote origin refs/heads/LocalAgentRuntime
 ```
 
 Expected: 只有本批已审阅文件进入提交；本地与远端 commit 相同。达到停止条件即收口，不追加更多真实样例。
+
+Current: 实现 commit `3ddb60e` 已推送。由于 Step 6 为 `NOT_RUN`，本步骤中的真实结果语义复核与最终状态提交仍待真实 2 Run 完成；不影响已验证实现的远端保存。
