@@ -34,6 +34,9 @@ def _session_web_error(error: SessionError | StoreError) -> WebError:
         "RUN_NOT_INTERRUPTED": 409,
         "WORKSPACE_CHANGED": 409,
         "WORKSPACE_NOT_FOUND": 409,
+        "IMPORT_INTEGRITY_ERROR": 409,
+        "IMPORT_UNAVAILABLE": 409,
+        "IMPORT_OUTPUT_UNSUPPORTED": 409,
         "STATE_IN_USE": 409,
         "CURSOR_INVALID": 400,
     }.get(code, 503 if code.startswith(("SESSION_STORE", "STATE_")) else 400)
@@ -100,10 +103,11 @@ class WebRuns:
         try:
             self.store.recover_interrupted(uuid.uuid4().hex)
             self.service = SessionService(self.store)
+            self.service.recover_imports()
             self.selected_session_id = selected_session_id
             if selected_session_id is not None:
                 selected = self.service.load(selected_session_id)
-                self.workspace = Path(selected.workspace_path)
+                self.workspace = self.service.trace_root(selected, task_type='conversation')
                 self.workspace_identity = (selected.workspace_device, selected.workspace_inode)
             else:
                 self.workspace = initial_workspace
@@ -116,16 +120,29 @@ class WebRuns:
 
     def _workspace_available(self) -> bool:
         try:
+            if self.selected_session_id is not None:
+                selected = self.service.load(self.selected_session_id)
+                if selected.import_id is not None:
+                    self.service.resolver.resolve(selected)
+                    return True
             resolved = self.workspace.resolve(strict=True)
             info = os.stat(resolved)
             return (resolved == self.workspace and resolved.is_dir()
                     and (info.st_dev, info.st_ino) == self.workspace_identity)
-        except (OSError, RuntimeError, ValueError):
+        except (OSError, RuntimeError, ValueError, SessionError):
             return False
 
     def _visible(self, record) -> bool:
         if self.selected_session_id is not None and record.id != self.selected_session_id:
             return False
+        if record.import_id is not None:
+            try:
+                self.service.resolver.resolve(record)
+                return True
+            except SessionError as error:
+                if not error.code.startswith('IMPORT_'):
+                    raise
+                return False
         return (record.workspace_path == str(self.workspace)
                 and (record.workspace_device, record.workspace_inode) == self.workspace_identity)
 
@@ -134,7 +151,9 @@ class WebRuns:
             record = self.service.load(session_id)
         except (SessionError, StoreError) as error:
             raise _session_web_error(error) from None
-        if not self._visible(record):
+        history = (record.import_id is not None and self.service.import_history_bound(record)
+                   and (self.selected_session_id is None or record.id == self.selected_session_id))
+        if not history and not self._visible(record):
             raise WebError(404, 'NOT_FOUND')
         return record
 
@@ -318,6 +337,9 @@ class WebRuns:
 
     # Backward-compatible one-shot execution.
     def start(self, data):
+        if (self.selected_session_id is not None
+                and self.service.load(self.selected_session_id).import_id is not None):
+            raise WebError(409, 'IMPORT_SESSION_REQUIRED')
         path, question = self.validate(data)
         output_path = data.get('output_file')
         with self.lock:
@@ -427,11 +449,14 @@ class WebRuns:
             if self.selected_session_id is not None:
                 record = self._require_session(self.selected_session_id)
                 status = 'archived' if archived else 'active'
-                items = [record] if record.status == status and (agent_id is None or record.agent_id == agent_id) else []
+                items = [record] if (record.status == status
+                    and (record.import_id is None or self._visible(record))
+                    and (agent_id is None or record.agent_id == agent_id)) else []
                 return {"sessions": [self._session_data(item) for item in items],
                         "next_cursor": None}
             page = self.service.list_bound(str(self.workspace), *self.workspace_identity,
-                                           archived=archived, cursor=cursor, agent_id=agent_id)
+                                           archived=archived, cursor=cursor, agent_id=agent_id,
+                                           include_imports=True)
             return {"sessions": [self._session_data(item) for item in page.items],
                     "next_cursor": page.next_cursor}
         except (SessionError, StoreError) as error:
@@ -527,15 +552,16 @@ class WebRuns:
             view['run']['idempotent_replay'] = True
             return view, False
         try:
+            read_root = self.service.trace_root(session, task_type=prepared.submission.task_type)
             provider = self._agent_provider(session)
-        except (ProviderError, AgentError) as error:
+        except (ProviderError, AgentError, SessionError) as error:
             result = {'run_id': prepared.run_id, 'state': 'failed',
                       'stop_reason': error.code, 'model_calls': 0, 'answer': None,
                       'provider': None, 'trace_path': ''}
             prepared.journal.finish_run(result)
             return self.session_snapshot(session.id, prepared.run_id), True
         try:
-            trace = LiveTrace(self.directory, Path(session.workspace_path),
+            trace = LiveTrace(self.directory, read_root,
                 lambda event: self._publish_session(session.id, prepared.run_id, event),
                 run_id=prepared.run_id)
         except (OSError, ValueError):

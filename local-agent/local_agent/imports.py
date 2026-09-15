@@ -315,7 +315,7 @@ class ImportedWorkspace:
     workspace: Path
     artifacts: Path
     manifest: Path
-    locations: tuple[tuple[str, str], ...]
+    locations: Path
     workspace_device: int
     workspace_inode: int
     artifact_device: int
@@ -881,8 +881,10 @@ class ImportStore:
             try:
                 row, files = self._record(import_id)
                 if self._formal_exists(import_id):
-                    if row["status"] != "finalizing":
+                    if row["status"] not in {"finalizing", "ready"}:
                         raise ImportStoreError("IMPORT_INTEGRITY_ERROR")
+                    if row['status'] == 'ready':
+                        self.open(import_id)
                     self._load_publication(row, files)
                 elif row["status"] == "uploading":
                     if not files or any(item["upload_state"] != "stored" for item in files):
@@ -1252,7 +1254,7 @@ class ImportStore:
 
     def _load_publication(self, row, files, *, formal=True):
         try:
-            if (row["status"] != "finalizing" or not self._is_managed_id(row["job_id"])
+            if (row["status"] not in {"finalizing", "ready"} or not self._is_managed_id(row["job_id"])
                     or type(row["manifest_sha256"]) is not str or not _HASH.fullmatch(row["manifest_sha256"])):
                 raise ValueError("publication not anchored")
             batch_fd = self._batch_fd(row["id"], formal=formal)
@@ -1362,10 +1364,14 @@ class ImportStore:
             with lock, self.store.maintenance_gate.start("import-finalize", import_id):
                 try:
                     row, files = self._record(import_id)
-                    if row["status"] != "finalizing" or row["job_id"] != job_id:
+                    if row["status"] not in {"finalizing", "ready"} or row["job_id"] != job_id:
                         raise ImportStoreError(row["error_code"] or "IMPORT_STATE_CONFLICT")
                     if self._formal_exists(import_id):
+                        if row['status'] == 'ready':
+                            self.open(import_id)
                         return self._load_publication(row, files)
+                    if row['status'] == 'ready':
+                        self.open(import_id)
                     if cancelled.is_set():
                         raise ImportStoreError("IMPORT_CANCELLED")
                     self._adopt_staging(row, files)
@@ -1484,11 +1490,34 @@ class ImportStore:
         return tuple(published)
 
     def open(self, import_id) -> ImportedWorkspace:
-        self._known_import_status(import_id)
-        raise ImportStoreError("IMPORT_NOT_READY")
+        lock, _ = self._control(import_id)
+        with lock:
+            status = self._known_import_status(import_id)
+            if status == "unavailable":
+                raise ImportStoreError("IMPORT_UNAVAILABLE")
+            if status != "ready":
+                raise ImportStoreError("IMPORT_NOT_READY")
+            try:
+                row, files = self._record(import_id)
+                published = self._load_publication(row, files)
+                if any(item['parser_json'] != record['parser_json']
+                       for item, record in zip(files, published.file_records)):
+                    raise ValueError('parser record changed')
+                return ImportedWorkspace(
+                    import_id, published.root, published.root / 'originals',
+                    published.workspace, published.artifacts, published.manifest,
+                    published.locations, *published.identities['workspace'],
+                    *published.identities['artifacts'])
+            except (ImportStoreError, OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+                with self.store.transaction() as connection:
+                    connection.execute(
+                        "UPDATE imports SET status='unavailable', error_code='IMPORT_INTEGRITY_ERROR', "
+                        "updated_at=? WHERE id=? AND status='ready'",
+                        (float(self.clock()), import_id))
+                raise ImportStoreError("IMPORT_INTEGRITY_ERROR") from None
 
     def _known_import_status(self, import_id) -> str:
-        if type(import_id) is not str:
+        if not self._is_managed_id(import_id):
             raise ImportStoreError("IMPORT_REQUEST_INVALID")
         try:
             row = self.store.connection().execute(

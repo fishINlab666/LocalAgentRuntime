@@ -41,8 +41,14 @@ def _json(value):
 
 def _open_service(state_dir):
     store = SessionStore.open(Path(state_dir).expanduser())
-    store.recover_interrupted(uuid.uuid4().hex)
-    return store, SessionService(store)
+    try:
+        store.recover_interrupted(uuid.uuid4().hex)
+        service = SessionService(store)
+        service.recover_imports()
+        return store, service
+    except BaseException:
+        store.close()
+        raise
 
 
 def _catalog(state_dir):
@@ -156,12 +162,12 @@ def _sessions_command(args):
 def _persistent_run(args, control):
     store = None
     approvals = None
+    prepared = None
+    provider = trace = None
+    execution_started = False
     try:
         store, service = _open_service(args.state_dir)
         session = service.load(args.session, agent_id=args.agent)
-        agent = AgentDefinition.from_dict(dict(session.agent_snapshot))
-        if not _catalog(args.state_dir).is_enabled(agent.id):
-            raise AgentError('AGENT_DISABLED')
         if args.continue_run is not None:
             prepared = service.continue_interrupted(
                 session.id, args.continue_run,
@@ -179,26 +185,41 @@ def _persistent_run(args, control):
                 skill_id=args.skill,
                 mcp_prompt=_mcp_prompt(args.mcp_prompt),
             ))
+        if not prepared.created:
+            output = service.execute(prepared, None, None)
+            return output, 0 if output['state'] == 'completed' else 1
+        agent = AgentDefinition.from_dict(dict(session.agent_snapshot))
+        if not _catalog(args.state_dir).is_enabled(agent.id):
+            raise AgentError('AGENT_DISABLED')
         control.run_timeout = agent.run_config().run_timeout
+        read_root = service.trace_root(session, task_type=prepared.submission.task_type)
         provider = agent.provider()
-        trace = Trace(args.log_dir, Path(session.workspace_path),
-                      debug_content=args.debug_content, run_id=prepared.run_id)
+        try:
+            trace = Trace(args.log_dir, read_root,
+                          debug_content=args.debug_content, run_id=prepared.run_id)
+        except (OSError, ValueError):
+            raise SessionError('TRACE_ERROR') from None
         if prepared.submission.output_path is not None:
             approvals = ConsoleApprovalBroker(
                 prepared.run_id, publish=trace.emit, journal=prepared.journal
             )
+        execution_started = True
         output = service.execute(
             prepared, provider, trace, approvals=approvals, control=control
         )
         return output, 0 if output["state"] == "completed" else 1
-    except ProviderError as error:
-        return {"error": error.code,
-                "message": "请在环境变量中配置模型密钥；不要将密钥写入代码或聊天。"}, 2
-    except (SessionError, StoreError, AgentError, SkillError) as error:
-        return {"error": error.code}, 2
-    except (OSError, ValueError) as error:
-        return {"error": getattr(error, "code", "LOCAL_CONFIG_ERROR"),
-                "message": "请检查状态目录、日志目录和会话配置。"}, 2
+    except (ProviderError, SessionError, StoreError, AgentError, SkillError, OSError, ValueError) as error:
+        code = getattr(error, 'code', 'LOCAL_CONFIG_ERROR')
+        if prepared is not None and prepared.created and not execution_started:
+            if code in {'WORKSPACE_CHANGED', 'WORKSPACE_NOT_FOUND'}:
+                code = 'WORKSPACE_UNAVAILABLE'
+            return service._execution_failure(prepared, provider, trace, code), 1
+        if isinstance(error, ProviderError):
+            return {'error': code,
+                    'message': '请在环境变量中配置模型密钥；不要将密钥写入代码或聊天。'}, 2
+        if isinstance(error, (OSError, ValueError)):
+            return {'error': code, 'message': '请检查状态目录、日志目录和会话配置。'}, 2
+        return {'error': code}, 2
     finally:
         if approvals is not None:
             approvals.close()

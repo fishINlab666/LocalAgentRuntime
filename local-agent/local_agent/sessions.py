@@ -14,6 +14,8 @@ from typing import Callable, Literal
 import uuid
 
 from .session_store import RunJournal, SessionStore, StoreError
+from .imports import ImportStore, ImportStoreError, PublishedImport
+from .state_maintenance import StateBusy
 
 
 class SessionError(Exception):
@@ -102,6 +104,47 @@ class SessionRecord:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "agent_snapshot", _freeze(self.agent_snapshot))
+
+
+@dataclass(frozen=True)
+class ResolvedWorkspace:
+    read_root: Path
+    read_identity: tuple[int, int]
+    write_root: Path
+    write_identity: tuple[int, int]
+    source_mapper: object | None = None
+
+
+class ManagedWorkspaceResolver:
+    def __init__(self, imports: ImportStore):
+        self.imports = imports
+
+    def resolve(self, session: SessionRecord) -> ResolvedWorkspace:
+        if session.import_id is None:
+            SessionService._check_workspace_identity(
+                session.workspace_path, session.workspace_device, session.workspace_inode)
+            identity = (session.workspace_device, session.workspace_inode)
+            return ResolvedWorkspace(Path(session.workspace_path), identity,
+                                     Path(session.workspace_path), identity)
+        try:
+            if not self.imports._is_managed_id(session.import_id):
+                raise SessionError('IMPORT_INTEGRITY_ERROR')
+            bound = self.imports.store.connection().execute(
+                'SELECT import_id, workspace_device, workspace_inode, agent_id FROM sessions WHERE id=?',
+                (session.id,)).fetchone()
+            if bound != (session.import_id, session.workspace_device, session.workspace_inode, session.agent_id):
+                raise SessionError('IMPORT_INTEGRITY_ERROR')
+            workspace = self.imports.open(session.import_id)
+            if (session.workspace_device, session.workspace_inode) != (
+                    workspace.workspace_device, workspace.workspace_inode):
+                raise SessionError('IMPORT_INTEGRITY_ERROR')
+            return ResolvedWorkspace(workspace.workspace,
+                (workspace.workspace_device, workspace.workspace_inode), workspace.artifacts,
+                (workspace.artifact_device, workspace.artifact_inode))
+        except ImportStoreError as error:
+            raise SessionError(error.code) from None
+        except (sqlite3.Error, StoreError):
+            raise SessionError('SESSION_STORE_ERROR') from None
 
 
 @dataclass(frozen=True)
@@ -298,10 +341,17 @@ class SessionService:
         *,
         clock: Callable[[], float] = time.time,
         id_factory: Callable[[], str] | None = None,
+        imports: ImportStore | None = None,
+        fault=None,
     ):
         self.store = store
         self._clock = clock
         self._id_factory = id_factory or (lambda: uuid.uuid4().hex)
+        self.imports = imports if imports is not None else ImportStore(store)
+        if self.imports.store is not store:
+            raise SessionError('SESSION_STORE_ERROR')
+        self.resolver = ManagedWorkspaceResolver(self.imports)
+        self._fault = fault or (lambda _point: None)
 
     def _new_id(self) -> str:
         value = self._id_factory()
@@ -471,6 +521,106 @@ class SessionService:
             raise SessionError("NOT_FOUND")
         return self._session_from_row(row)
 
+    def attach_import(self, published: PublishedImport, request: dict) -> SessionRecord:
+        """Link a verified publication and its frozen assistant in one transaction."""
+        from .agents import AgentCatalog, AgentError
+
+        if not isinstance(published, PublishedImport):
+            raise SessionError('IMPORT_REQUEST_INVALID')
+        try:
+            lock, _ = self.imports._control(published.import_id)
+            with lock, self.store.maintenance_gate.start('import-link', published.import_id):
+                row, files = self.imports._record(published.import_id)
+                self.imports._validate_request(request)
+                if self.imports._canonical_request(request) != row['request_json']:
+                    raise SessionError('IMPORT_STATE_CONFLICT')
+                if row['status'] == 'unavailable':
+                    raise SessionError('IMPORT_UNAVAILABLE')
+                verified = self.imports._load_publication(row, files)
+                if verified != published:
+                    raise SessionError('IMPORT_INTEGRITY_ERROR')
+                existing = self.store.connection().execute(
+                    'SELECT id FROM sessions WHERE import_id=?', (published.import_id,)).fetchone()
+                if row['status'] == 'ready':
+                    self.imports.open(published.import_id)
+                    if existing is None:
+                        raise SessionError('IMPORT_INTEGRITY_ERROR')
+                    session = self.load(existing[0])
+                    self.resolver.resolve(session)
+                    return session
+                if existing is not None or row['status'] != 'finalizing':
+                    raise SessionError('IMPORT_STATE_CONFLICT')
+                catalog = AgentCatalog(self.store.state_dir / 'agents')
+                agent = catalog.get(request['agent_id'])
+                if not catalog.is_enabled(agent.id):
+                    raise SessionError('AGENT_DISABLED')
+                snapshot = agent.to_dict()
+                if snapshot['strategy'] not in {'directory', 'combined'} or not {
+                        'list_files', 'read_file'}.issubset(snapshot['tools']):
+                    raise SessionError('AGENT_CONFIG_INVALID')
+                title = _validate_title(request['name'])
+                session_id, now = self._new_id(), self._clock()
+                snapshot_json = _canonical_json(snapshot)
+                revision = hashlib.sha256(snapshot_json.encode()).hexdigest()
+                self._fault('before_link_transaction')
+                with self.store.transaction() as connection:
+                    current = connection.execute(
+                        'SELECT status,manifest_sha256,request_fingerprint FROM imports WHERE id=?',
+                        (published.import_id,)).fetchone()
+                    if current != ('finalizing', published.manifest_sha256, published.request_fingerprint):
+                        raise SessionError('IMPORT_STATE_CONFLICT')
+                    for item in verified.file_records:
+                        changed = connection.execute(
+                            'UPDATE import_files SET parser_json=? WHERE import_id=? AND source_id=? AND sha256=?',
+                            (item['parser_json'], published.import_id, item['source_id'], item['sha256']))
+                        if changed.rowcount != 1:
+                            raise SessionError('IMPORT_INTEGRITY_ERROR')
+                    connection.execute(
+                        """INSERT INTO sessions (
+                            id,title,workspace_path,workspace_device,workspace_inode,scope_json,
+                            status,revision,created_at,updated_at,agent_id,agent_revision,
+                            agent_snapshot_json,import_id)
+                            VALUES (?,?,?,?,?,?,'active',1,?,?,?,?,?,?)""",
+                        (session_id, title, str(verified.workspace), *verified.identities['workspace'],
+                         _scope_json(SessionScope('directory', None)), now, now, agent.id, revision,
+                         snapshot_json, published.import_id))
+                    connection.execute(
+                        "UPDATE imports SET status='ready',workspace_device=?,workspace_inode=?,"
+                        "artifact_device=?,artifact_inode=?,error_code=NULL,updated_at=? WHERE id=?",
+                        (*verified.identities['workspace'], *verified.identities['artifacts'],
+                         now, published.import_id))
+                self._fault('after_link_commit')
+                return self.load(session_id)
+        except (ImportStoreError, AgentError, StateBusy) as error:
+            raise SessionError(error.code) from None
+        except (sqlite3.Error, StoreError, OSError):
+            raise SessionError('SESSION_STORE_ERROR') from None
+
+    def recover_imports(self) -> None:
+        """Recover published batches without parsing or changing prior sessions."""
+        try:
+            for published in self.imports.recover_interrupted():
+                row, _ = self.imports._record(published.import_id)
+                try:
+                    self.attach_import(published, json.loads(row['request_json']))
+                except SessionError as error:
+                    if error.code not in {'AGENT_DISABLED', 'AGENT_NOT_FOUND', 'AGENT_CONFIG_INVALID'}:
+                        raise
+                    with self.store.maintenance_gate.start('import-link', published.import_id), \
+                            self.store.transaction() as connection:
+                        connection.execute(
+                            "UPDATE imports SET error_code=?,updated_at=? WHERE id=? AND status='finalizing'",
+                            (error.code, self._clock(), published.import_id))
+            ready = self.store.connection().execute("SELECT id FROM imports WHERE status='ready'").fetchall()
+            for (import_id,) in ready:
+                try:
+                    self.imports.open(import_id)
+                except ImportStoreError as error:
+                    if error.code not in {'IMPORT_INTEGRITY_ERROR', 'IMPORT_UNAVAILABLE'}:
+                        raise
+        except (ImportStoreError, StateBusy) as error:
+            raise SessionError(error.code) from None
+
     @staticmethod
     def _encode_cursor(updated_at: float, session_id: str) -> str:
         payload = _canonical_json([updated_at, session_id]).encode("utf-8")
@@ -522,6 +672,7 @@ class SessionService:
         archived: bool = False,
         cursor: str | None = None,
         agent_id: str | None = None,
+        include_imports: bool = False,
     ) -> Page:
         """List sessions already bound to a startup identity without re-opening it."""
         if (
@@ -534,6 +685,8 @@ class SessionService:
         parameters: list = [workspace_path, workspace_device, workspace_inode]
         status = "archived" if archived else "active"
         where = "workspace_path=? AND workspace_device=? AND workspace_inode=?"
+        if include_imports:
+            where = '((import_id IS NULL AND ' + where + ') OR import_id IS NOT NULL)'
         where += " AND status=?"
         parameters.append(status)
         if agent_id is not None:
@@ -543,17 +696,33 @@ class SessionService:
             updated_at, session_id = self._decode_cursor(cursor)
             where += " AND (updated_at < ? OR (updated_at = ? AND id < ?))"
             parameters.extend((updated_at, updated_at, session_id))
-        parameters.append(self.PAGE_SIZE + 1)
+        if not include_imports:
+            parameters.append(self.PAGE_SIZE + 1)
         try:
-            rows = self.store.connection().execute(
+            query = self.store.connection().execute(
                 f"""SELECT id, title, workspace_path, workspace_device,
                            workspace_inode, scope_json, status, revision,
                            created_at, updated_at, agent_id, agent_revision,
                            agent_snapshot_json, import_id
                     FROM sessions WHERE {where}
-                    ORDER BY updated_at DESC, id DESC LIMIT ?""",
+                    ORDER BY updated_at DESC, id DESC {'' if include_imports else 'LIMIT ?'}""",
                 parameters,
-            ).fetchall()
+            )
+            rows = []
+            try:
+                for row in query:
+                    if include_imports and row[13] is not None:
+                        try:
+                            self.resolver.resolve(self._session_from_row(row))
+                        except SessionError as error:
+                            if not error.code.startswith('IMPORT_'):
+                                raise
+                            continue
+                    rows.append(row)
+                    if len(rows) > self.PAGE_SIZE:
+                        break
+            finally:
+                query.close()
         except (sqlite3.DatabaseError, StoreError):
             raise SessionError("SESSION_STORE_ERROR") from None
         has_more = len(rows) > self.PAGE_SIZE
@@ -888,10 +1057,6 @@ class SessionService:
             )
         if submission.scope != session_scope:
             raise SessionError("SESSION_SCOPE_MISMATCH")
-        if submission.task_type == "files":
-            self._check_workspace_identity(
-                workspace_path, workspace_device, workspace_inode
-            )
         if submission.parent_run_id is not None:
             parent = connection.execute(
                 "SELECT 1 FROM runs WHERE session_id=? AND id=?",
@@ -974,8 +1139,13 @@ class SessionService:
     ) -> PreparedRun:
         submission = _validate_submission(submission)
         try:
-            with self.store.transaction() as connection:
-                return self._submit_in_transaction(connection, session_id, submission)
+            with self.store.maintenance_gate.start('run-submit', uuid.uuid4().hex):
+                if not self._has_submission(session_id, submission.client_request_id):
+                    self._resolve_submission(self.load(session_id), submission)
+                with self.store.transaction() as connection:
+                    return self._submit_in_transaction(connection, session_id, submission)
+        except StateBusy as error:
+            raise SessionError(error.code) from None
         except SessionError:
             raise
         except (sqlite3.DatabaseError, StoreError, OSError):
@@ -985,6 +1155,16 @@ class SessionService:
         self, session_id: str, run_id: str, client_request_id: str
     ) -> PreparedRun:
         client_request_id = _validate_client_request_id(client_request_id)
+        try:
+            with self.store.maintenance_gate.start('run-submit', uuid.uuid4().hex):
+                parent = self.load_run(session_id, run_id)
+                if not self._has_submission(session_id, client_request_id):
+                    self._resolve_submission(self.load(session_id), parent.submission)
+                return self._continue_interrupted(session_id, run_id, client_request_id)
+        except StateBusy as error:
+            raise SessionError(error.code) from None
+
+    def _continue_interrupted(self, session_id, run_id, client_request_id):
         try:
             with self.store.transaction() as connection:
                 row = connection.execute(
@@ -1056,7 +1236,61 @@ class SessionService:
             "idempotent_replay": True,
         }
 
+    def _has_submission(self, session_id, client_request_id):
+        return self.store.connection().execute(
+            'SELECT 1 FROM runs WHERE session_id=? AND client_request_id=?',
+            (session_id, client_request_id)).fetchone() is not None
+
+    def _resolve_submission(self, session, submission):
+        if submission.task_type != 'files':
+            return None
+        if session.import_id is not None and submission.output_path is not None:
+            raise SessionError('IMPORT_OUTPUT_UNSUPPORTED')
+        return self.resolver.resolve(session)
+
+    def import_history_bound(self, session: SessionRecord) -> bool:
+        if not self.imports._is_managed_id(session.import_id):
+            return False
+        row = self.store.connection().execute(
+            'SELECT 1 FROM sessions s JOIN imports i ON s.import_id=i.id '
+            'WHERE s.id=? AND i.id=? AND s.agent_id=i.agent_id AND s.agent_id=?',
+            (session.id, session.import_id, session.agent_id)).fetchone()
+        return row is not None
+
+    def trace_root(self, session: SessionRecord, *, task_type='files') -> Path:
+        if task_type == 'files':
+            return self.resolver.resolve(session).read_root
+        if session.import_id is not None:
+            if not self.import_history_bound(session):
+                raise SessionError('IMPORT_INTEGRITY_ERROR')
+            return self.imports.root / session.import_id / 'workspace'
+        return Path(session.workspace_path)
+
+    @staticmethod
+    def _execution_failure(prepared, provider, trace, code):
+        result = {'run_id': prepared.run_id, 'state': 'failed', 'stop_reason': code,
+                  'model_calls': 0, 'answer': None, 'provider': getattr(provider, 'metadata', {}),
+                  'trace_path': str(getattr(trace, 'path', ''))}
+        try:
+            prepared.journal.finish_run(result)
+        except StoreError:
+            result['stop_reason'] = 'SESSION_STORE_ERROR'
+        return result
+
     def execute(self, prepared: PreparedRun, provider, trace, *, approvals=None,
+                control=None, config=None) -> dict:
+        if not isinstance(prepared, PreparedRun):
+            raise SessionError('SUBMISSION_INVALID')
+        if not prepared.created:
+            return self._stored_result(prepared)
+        try:
+            with self.store.maintenance_gate.start('run-execute', prepared.run_id):
+                return self._execute_prepared(prepared, provider, trace, approvals=approvals,
+                                              control=control, config=config)
+        except StateBusy as error:
+            return self._execution_failure(prepared, provider, trace, error.code)
+
+    def _execute_prepared(self, prepared: PreparedRun, provider, trace, *, approvals=None,
                 control=None, config=None) -> dict:
         """Build a fresh run-local authority set and execute one durable submission."""
         if not isinstance(prepared, PreparedRun):
@@ -1088,20 +1322,7 @@ class SessionService:
         def fail_before_provider(code):
             if assembly is not None:
                 assembly.close()
-            result = {
-                "run_id": prepared.run_id,
-                "state": "failed",
-                "stop_reason": code,
-                "model_calls": 0,
-                "answer": None,
-                "provider": getattr(provider, "metadata", {}),
-                "trace_path": str(getattr(trace, "path", "")),
-            }
-            try:
-                prepared.journal.finish_run(result)
-            except StoreError:
-                result["stop_reason"] = "SESSION_STORE_ERROR"
-            return result
+            return self._execution_failure(prepared, provider, trace, code)
 
         try:
             limits = {key: value for key, value in agent.to_dict()['budgets'].items()
@@ -1119,18 +1340,18 @@ class SessionService:
             if not catalog.is_enabled(agent.id):
                 return fail_before_provider('AGENT_DISABLED')
             if prepared.submission.task_type == "files":
-                self._check_workspace_identity(
-                    session.workspace_path,
-                    session.workspace_device,
-                    session.workspace_inode,
-                )
-                workspace = Path(session.workspace_path)
+                resolved = self._resolve_submission(session, prepared.submission)
+                workspace = resolved.read_root
                 target = session.scope.target_path
                 assembly = assemble(agent, workspace, target, prepared.submission.output_path,
                     CapabilityStore(self.store.state_dir), run_id=prepared.run_id, control=control,
                     agent_catalog=catalog, selected_skill=prepared.submission.skill_id,
                     selected_prompt=prepared.submission.mcp_prompt)
                 engine = assembly.engine
+                if (engine.policy.tool.workspace != resolved.read_root
+                        or engine.policy.tool.workspace_identity != resolved.read_identity):
+                    return fail_before_provider('IMPORT_INTEGRITY_ERROR'
+                                                if session.import_id is not None else 'WORKSPACE_UNAVAILABLE')
                 if (prepared.submission.output_path is not None
                         and self.store.inspect_unknown_publication(
                             prepared.session_id, prepared.submission.output_path
@@ -1164,7 +1385,7 @@ class SessionService:
         except SessionError as error:
             if error.code in {"WORKSPACE_CHANGED", "WORKSPACE_NOT_FOUND"}:
                 return fail_before_provider("WORKSPACE_UNAVAILABLE")
-            raise
+            return fail_before_provider(error.code)
         except Exception as error:
             return fail_before_provider(getattr(error, 'code', 'WORKSPACE_UNAVAILABLE'))
 

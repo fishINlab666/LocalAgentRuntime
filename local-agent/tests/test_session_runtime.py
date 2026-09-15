@@ -48,6 +48,13 @@ class SessionRuntimeTests(unittest.TestCase):
         )
         return session, prepared
 
+    def test_idempotent_submission_replay_does_not_reauthorize_missing_workspace(self):
+        session, first = self.prepare()
+        self.workspace.rename(self.root / 'moved')
+        repeated = self.service.submit(session.id, first.submission)
+        self.assertFalse(repeated.created)
+        self.assertEqual(repeated.run_id, first.run_id)
+
     def seed_long_conversation(self, session, count=20):
         messages = []
         for number in range(count):

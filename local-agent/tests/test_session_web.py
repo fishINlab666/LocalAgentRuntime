@@ -357,5 +357,50 @@ class SessionWebTests(unittest.TestCase):
         self.assertEqual(len(calls), baseline)
 
 
+    def ready_import(self):
+        from test_managed_workspace import publish_import
+        published, request = publish_import(self.server.runs.store)
+        session = self.server.runs.service.attach_import(published, request)
+        return published, session
+
+    def test_import_session_is_listed_and_selected_restart_ignores_forged_path(self):
+        from test_managed_workspace import imported_provider
+        published, session = self.ready_import()
+        self.server.runs.store.connection().execute(
+            'UPDATE sessions SET workspace_path=? WHERE id=?', (str(self.root), session.id))
+        status, value = self.request('GET', '/api/sessions')
+        self.assertEqual(status, 200)
+        self.assertIn(session.id, [item['id'] for item in value['sessions']])
+        provider = imported_provider(published)
+        self.restart_for_session(session.id, provider_factory=lambda: provider)
+        self.assertEqual(self.server.runs.workspace, published.workspace)
+        status, value = self.submit(session.id)
+        self.assertEqual(status, 202, value)
+        run = self.wait_run(session.id, value['run']['id'])
+        self.assertEqual(run['state'], 'completed', run)
+        self.assertEqual(run['result']['answer']['citations'][0]['quote'], '代号：orange-731')
+
+    def test_unavailable_import_is_hidden_but_known_history_remains_readable(self):
+        published, session = self.ready_import()
+        published.chunk_paths[0].write_text('tampered\n')
+        status, value = self.request('GET', '/api/sessions')
+        self.assertEqual(status, 200)
+        self.assertNotIn(session.id, [item['id'] for item in value['sessions']])
+        self.assertEqual(self.request('GET', f'/api/sessions/{session.id}')[0], 200)
+        self.assertEqual(self.request('GET', f'/api/sessions/{session.id}/runs')[0], 200)
+        self.assertEqual(self.submit(session.id), (409, {'error': 'IMPORT_UNAVAILABLE'}))
+        self.assertEqual(self.providers, [])
+        self.restart_for_session(session.id)
+        self.assertEqual(self.request('GET', f'/api/sessions/{session.id}')[0], 200)
+        self.assertEqual(self.submit(session.id), (409, {'error': 'IMPORT_UNAVAILABLE'}))
+
+    def test_selected_import_cannot_use_legacy_one_shot_entry(self):
+        _, session = self.ready_import()
+        self.restart_for_session(session.id)
+        self.assertEqual(self.request('POST', '/api/runs', {
+            'mode': 'directory', 'question': '读取', 'output_file': 'report.md'}),
+            (409, {'error': 'IMPORT_SESSION_REQUIRED'}))
+
+
 if __name__ == "__main__":
     unittest.main()
