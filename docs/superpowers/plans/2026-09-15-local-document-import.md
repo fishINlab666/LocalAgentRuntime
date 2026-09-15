@@ -516,6 +516,7 @@ git commit -m "Publish recoverable imported workspaces"
 - Create: `local-agent/tests/test_managed_workspace.py`
 - Modify: `local-agent/tests/test_session_web.py`
 - Modify: `local-agent/tests/test_session_runtime.py`
+- Modify: `local-agent/tests/test_session_cli.py`
 
 - [ ] **Step 1: 写 Web、CLI 和直接执行共享授权的失败测试**
 
@@ -532,11 +533,13 @@ def test_import_session_ignores_forged_database_workspace_path(self):
 def test_tampered_import_stops_direct_execute_before_provider(self):
     prepared = self.prepare_import_run()
     self.tamper_chunk(prepared.session_id)
-    with self.assertRaisesRegex(SessionError, 'IMPORT_INTEGRITY_ERROR'):
-        self.service.execute(prepared, FailIfCalledProvider(), self.trace())
+    result = self.service.execute(prepared, FailIfCalledProvider(), self.trace())
+    self.assertEqual(result['state'], 'failed')
+    self.assertEqual(result['stop_reason'], 'IMPORT_INTEGRITY_ERROR')
+    self.assertEqual(result['model_calls'], 0)
 ```
 
-再覆盖 `before_link_transaction`、`after_link_commit` 两个关联故障点及重复恢复，断言同一 import 最多产生一个 Session；同时覆盖其他 import ID、目录 inode 替换、symlink、`ready` 摘要错误转为 `unavailable`、Web 列表过滤、CLI continue、selected Session 重启和无效导入会话“历史可读、新 Run 拒绝”。普通 workspace 丢失时既有历史会话行为保持。
+再覆盖 `before_link_transaction`、`after_link_commit` 两个关联故障点及重复恢复，断言同一 import 最多产生一个 Session；同时覆盖其他 import ID、目录 inode 替换、symlink、`ready` 摘要错误转为 `unavailable`、Web 列表过滤、CLI continue、selected Session 重启和无效导入会话“历史可读、新 Run 拒绝”。普通 workspace 丢失时既有历史会话行为保持；文件 Run 的执行前失败沿用现有持久化结果契约，不抛出未记录的异常。
 
 - [ ] **Step 2: 运行并确认现有代码仍信任 `workspace_path`**
 
@@ -545,7 +548,8 @@ Run:
 ```zsh
 cd "/Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent"
 PYTHONPATH=. .venv/bin/python -W error::ResourceWarning -m unittest \
-  tests.test_managed_workspace tests.test_session_runtime tests.test_session_web -v
+  tests.test_managed_workspace tests.test_session_runtime tests.test_session_web \
+  tests.test_session_cli -v
 ```
 
 Expected: 伪造路径或导入 Session 断言 FAIL。
@@ -572,7 +576,7 @@ class ManagedWorkspaceResolver:
 
 - [ ] **Step 4: 替换所有执行入口的路径来源**
 
-`SessionService.submit()` 在短期 gate activity 内完成 resolve 和入队事务；`execute()` 取得覆盖整次 Runtime 的 activity，再次 resolve 并将完整 `ResolvedWorkspace` 传给 assembly，最后在 `finally` 释放。`WebRuns._visible/list_sessions/_require_session` 合并普通绑定 Session 与 resolver 有效的导入 Session。CLI `_open_service/_persistent_run` 构造同一个 ImportStore/resolver；Trace 使用受信 read root。任何入口都不能从导入 Session 的 `workspace_path` 授权。
+`SessionService.submit()` 在短期 gate activity 内完成 resolve 和入队事务；`execute()` 取得覆盖整次 Runtime 的 activity，再次 resolve，最后在 `finally` 释放。本任务保持现有 `assemble(..., workspace: Path, ...)` 接口，只传 `resolved.read_root`；完整 `ResolvedWorkspace` 保留独立写根，Task 7 再接入 assembly。Task 5 期间导入 Session 的 `output_path` 必须在执行前拒绝，不能临时写入只读资料根。`WebRuns._visible/list_sessions/_require_session` 合并普通绑定 Session 与 resolver 有效的导入 Session。CLI `_open_service/_persistent_run` 构造同一个 ImportStore/resolver；Trace 使用受信 read root。任何入口都不能从导入 Session 的 `workspace_path` 授权。
 
 - [ ] **Step 5: 跑三入口检查并提交**
 
@@ -581,7 +585,8 @@ Run:
 ```zsh
 cd "/Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent"
 PYTHONPATH=. .venv/bin/python -W error::ResourceWarning -m unittest \
-  tests.test_managed_workspace tests.test_session_runtime tests.test_session_web -v
+  tests.test_managed_workspace tests.test_session_runtime tests.test_session_web \
+  tests.test_session_cli -v
 ```
 
 Expected: 全部 PASS；Provider 在完整性失败场景调用数为 0。
@@ -592,7 +597,7 @@ Commit:
 git add local-agent/local_agent/imports.py local-agent/local_agent/sessions.py \
   local-agent/local_agent/web_runs.py local-agent/local_agent/__main__.py \
   local-agent/tests/test_managed_workspace.py local-agent/tests/test_session_runtime.py \
-  local-agent/tests/test_session_web.py
+  local-agent/tests/test_session_web.py local-agent/tests/test_session_cli.py
 git commit -m "Resolve managed session workspaces consistently"
 ```
 
