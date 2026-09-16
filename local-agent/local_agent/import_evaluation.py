@@ -6,6 +6,7 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
 import threading
@@ -50,6 +51,40 @@ _MANDATORY_CHECKS = frozenset({
     "other_import_secret_never_reached_provider",
     "fixed_run_and_call_budget",
 })
+
+
+_IDENTIFIER_CHARS = r"A-Za-z0-9_.-"
+_LABEL_CONNECTOR = r"(?:\s|[:：=]|为|是|(?i:is)){0,6}"
+
+
+def _has_exact_identifier(text, value):
+    if not isinstance(text, str):
+        return False
+    return re.search(
+        rf"(?<![{_IDENTIFIER_CHARS}]){re.escape(value)}"
+        rf"(?![{_IDENTIFIER_CHARS}])",
+        text,
+    ) is not None
+
+
+def _has_labeled_value(text, labels, value):
+    if not isinstance(text, str):
+        return False
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    return re.search(
+        rf"(?<![{_IDENTIFIER_CHARS}])(?:{label_pattern})"
+        rf"{_LABEL_CONNECTOR}{re.escape(value)}"
+        rf"(?![{_IDENTIFIER_CHARS}])",
+        text,
+    ) is not None
+
+
+def _has_follow_up_facts(answer):
+    return (
+        _has_labeled_value(answer, ("Budget", "预算"), "42")
+        and _has_labeled_value(answer, ("Owner", "负责人"), "Mei")
+        and _has_exact_identifier(answer, "TXT-READY")
+    )
 
 
 def _pdf_string(value):
@@ -495,9 +530,8 @@ def evaluate_imports(provider_factory, directory: Path,
                 "text_source_location": _source_locations(
                     second.get("answer"), "资料/checkpoint.txt"
                 ) == [{"kind": "text_lines", "start": 1, "end": 1}],
-                "follow_up_facts": all(
-                    fact in (second.get("answer") or {}).get("answer", "")
-                    for fact in (*_FIRST_FACTS, "TXT-READY")
+                "follow_up_facts": _has_follow_up_facts(
+                    (second.get("answer") or {}).get("answer", "")
                 ),
                 "other_import_secret_never_reached_provider": all(
                     "OTHER-IMPORT-SECRET" not in json.dumps(item, ensure_ascii=False)

@@ -14,7 +14,7 @@
 
 2026-09-16：设计稿已由用户确认。Task 1 已在 commit `615b8ec` 完成，四种格式解析与受限子进程的 34 项定向测试通过；Task 2 已在 commit `4d4b587` 完成，Schema v3、旧权限冻结与维护闸门的 50 项相关测试通过；Task 3 已在 commit `af43220` 完成，安全上传、精确受管副本、目录与发布对象身份校验的 68 项相关测试通过；Task 4 已在 commit `ff6b0ab` 完成，受限解析、切块、原子发布、取消和三个崩溃窗口恢复的 137 项相关测试通过；Task 5 已在 commit `23944af` 完成，统一 Resolver、原子 Session 关联、恢复隔离及 Web／CLI／直接执行入口的 172 项相关测试通过；Task 6 已在 commit `567cd9c` 完成，只读搜索、导入事实账本、原始位置引用及持久 Session 回填的 87 项定向测试和 307 项共享链路回归通过；Task 7 已在 commit `06e4bfe` 完成，导入会话的预声明输出只写独立 `artifacts/`，一次成功、审批、禁止改名/覆盖、真实回执、未知写入恢复和受权下载均已接通。Task 8 已在 commit `417a579` 完成，SQLite、受管资料与 Artifact 作为一个清单约束的目录原子备份，恢复到不存在的 State Store 时重绑目录身份并全量验真；24 项备份/CLI 定向测试、89 项共享链路测试及最终 647 项 Python 回归通过，限定安全 Gate 通过。Task 9 已在 commit `d153368` 完成，受限 HTTP 导入、Agent 隔离、单 worker、幂等重放、失败重试及受限 Session 摘要已接通；11 项导入 HTTP 测试和 55 项 Web 回归通过，限定安全 Gate 通过。Task 10 已在 commit `6d7ddc7` 完成，文件／文件夹预检、顺序原始字节上传、取消与刷新恢复、兼容 Agent、成功后的 Session 身份核验、来源事实和响应式交互已接通；六组浏览器回归通过，三路限定终审通过。Task 11 的固定离线闭环已在 commit `3ddb60e` 完成并推送：2 个 Run、6 次脚本化模型请求贯通混合导入、搜索／读取回填、PDF/Word 原位置、删除外部原件后的重启校验、跨 Import 隔离及新 State Store 恢复后追问；127 项导入测试、661 项完整 Python 回归和六组浏览器回归通过，最终限定 Gate PASS。
 
-当前 Codex 进程没有继承模型密钥，受限真实入口已按 `NOT_RUN / CONFIG_MISSING / 0 model calls` 保存原始报告；离线 Provider 不冒充真实模型。实现可以提交和推送，真实 DeepSeek 的 2 Run 语义验收仍是独立待验证项；取得环境变量后只运行这一组，不扩展样例。
+真实 DeepSeek 固定组已执行：1 个持久 Session、2 个 Run、8 次模型调用均完成，预算 `42`、负责人 `Mei`、`TXT-READY` 及 PDF/DOCX/TXT 原始位置引用正确。原始机器报告唯一失败项是旧评分器要求第二轮逐字重复英文标签；原报告及 SHA-256 保留，修正后的标签—值绑定规则只读重放后 22/22 必需检查通过，AI 语义 Gate PASS，未追加真实调用。首轮对非必要文件的额外读取被 `FILE_COUNT_LIMIT` 正确拒绝并回填；两轮“未出现冲突”的措辞超出未完整读取范围，作为 P2 表述限制记录，不扩大本批。证据见[真实验收记录](../../../local-agent/trial/import-live-check.md)。
 
 本批完成条件：Task 1–10 的定向测试、完整 Python 回归和既有浏览器回归通过；Task 11 的固定混合资料闭环证明“导入 → 搜索 → 读取 → ToolCall 结果进入下一轮 → 原始位置引用 → 重启追问 → 隔离与恢复”。离线证据全部通过后，最多执行一个真实 DeepSeek 会话、2 个 Run、12 次模型请求；任一核心失败立即停止并保留证据。达到条件后不增加 OCR、同步、资料删除、向量检索或新格式。
 
@@ -1169,7 +1169,7 @@ Actual: 权限／上下文审查 PASS。重启／恢复审查先发现“reopen 
 
 Commit: `3ddb60e`（`Complete managed document import loop`），已推送至 `origin/LocalAgentRuntime`。
 
-- [ ] **Step 6: 在所有离线证据通过后运行一次受限 DeepSeek 验收**
+- [x] **Step 6: 在所有离线证据通过后运行一次受限 DeepSeek 验收**
 
 只在调用进程已经通过环境变量取得 `DEEPSEEK_API_KEY` 时运行：
 
@@ -1180,9 +1180,9 @@ PYTHONPATH=. .venv/bin/python -m local_agent evaluate-imports
 
 验收只用合成的小混合资料，首问跨 PDF/Word 找两项事实，次问引用上一轮结论并核对文本资料。上限为 2 个 Run、12 次模型请求；输出原始机器报告和待语义复核状态。缺密钥时记录 `NOT_RUN`，不得把离线 Provider 冒充真实模型通过，也不得索取或记录密钥。
 
-Actual: 当前进程无密钥，命令返回 `NOT_RUN / CONFIG_MISSING`，模型调用 0；原始报告位于本地忽略目录 `trial/results/import-evaluation-1e84050dd0624e17a443fe949f4322ca/report.json`。真实 2 Run 尚未执行。
+Actual: 用户在持有环境变量的终端完成固定组。原始报告位于本地忽略目录 `trial/results/import-evaluation-bdfaa2a6a750463f9b09106be9099c95/report.json`：2 个 Run 均完成，共 8/12 次调用；唯一机器失败为旧 `follow_up_facts` 对英文标签的逐字要求。原始报告未覆盖，修正评分重放及语义复核另存。
 
-- [ ] **Step 7: 核对真实结果、更新 §0 并推送**
+- [x] **Step 7: 核对真实结果、更新 §0 并推送**
 
 逐条核对回答事实、引用位置、搜索/读取 ToolCall ID、上下文回填、跨轮历史和任何 Artifact。将 AI 语义复核另存于评测目录，不覆盖原报告，不冒充用户签字。更新本计划 §0 与阶段记录后运行：
 
@@ -1197,4 +1197,4 @@ git ls-remote origin refs/heads/LocalAgentRuntime
 
 Expected: 只有本批已审阅文件进入提交；本地与远端 commit 相同。达到停止条件即收口，不追加更多真实样例。
 
-Current: 实现 commit `3ddb60e` 已推送。由于 Step 6 为 `NOT_RUN`，本步骤中的真实结果语义复核与最终状态提交仍待真实 2 Run 完成；不影响已验证实现的远端保存。
+Current: 两轮回答、引用、调用 ID、上下文回填、跨轮历史、隔离和恢复已逐项复核。评分器误判通过测试先行修正，同一原始结果只读重放为 22/22 必需检查通过；AI 语义 Gate PASS，用户签字仍不由自动化代替。本批达到停止条件，不追加真实样例。

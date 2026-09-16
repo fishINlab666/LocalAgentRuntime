@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from local_agent.import_evaluation import evaluate_imports
+from local_agent.import_evaluation import _has_follow_up_facts, evaluate_imports
 from local_agent.provider import ModelReply
 
 
@@ -37,11 +37,13 @@ def _tool_payload(message):
 class ImportAcceptanceProvider:
     metadata = {"provider": "scripted-acceptance", "model": "none", "simulated": True}
 
-    def __init__(self):
+    def __init__(self, *, localized_follow_up=False, wrong_follow_up=False):
         self.requests = []
         self.pdf_path = None
         self.docx_path = None
         self.text_path = None
+        self.localized_follow_up = localized_follow_up
+        self.wrong_follow_up = wrong_follow_up
 
     def complete(self, messages, tools, timeout):
         self.requests.append({
@@ -105,14 +107,26 @@ class ImportAcceptanceProvider:
                 })],
             }
         elif step == 6:
+            if self.wrong_follow_up:
+                answer = (
+                    "上一轮确认预算是 142、负责人是 Meier；"
+                    "本轮核对 Release checkpoint: TXT-READY-old。"
+                )
+            elif self.localized_follow_up:
+                answer = (
+                    "本轮核对 Release checkpoint: TXT-READY，"
+                    "并沿用上一轮预算 42、负责人 Mei 的结论。"
+                )
+            else:
+                answer = (
+                    "上一轮确认预算是 Budget 42、负责人是 Owner Mei；"
+                    "本轮核对 Release checkpoint: TXT-READY。"
+                )
             message = {
                 "role": "assistant",
                 "content": json.dumps({
                     "status": "answered",
-                    "answer": (
-                        "上一轮确认预算是 Budget 42、负责人是 Owner Mei；"
-                        "本轮核对 Release checkpoint: TXT-READY。"
-                    ),
+                    "answer": answer,
                     "citations": [
                         {"path": self.text_path, "start_line": 1, "end_line": 1},
                     ],
@@ -194,6 +208,45 @@ class ImportAcceptanceTests(unittest.TestCase):
             "logical_path": "资料/checkpoint.txt",
             "locations": [{"kind": "text_lines", "start": 1, "end": 1}],
         })
+
+    def test_follow_up_accepts_localized_labels_with_exact_values(self):
+        provider = ImportAcceptanceProvider(localized_follow_up=True)
+
+        report = evaluate_imports(lambda: provider, self.root / "localized")
+
+        self.assertTrue(report["checks"]["follow_up_facts"], report)
+        self.assertEqual(report["gate"], "SIMULATED_ONLY", report)
+
+    def test_follow_up_rejects_values_embedded_in_different_identifiers(self):
+        provider = ImportAcceptanceProvider(wrong_follow_up=True)
+
+        report = evaluate_imports(lambda: provider, self.root / "wrong-values")
+
+        self.assertFalse(report["checks"]["follow_up_facts"], report)
+        self.assertEqual(report["gate"], "FAILED", report)
+
+    def test_follow_up_rejects_correct_values_attached_to_wrong_labels(self):
+        answer = (
+            "预算 99、负责人 Lee；附件 Mei 的版本 42，"
+            "Release checkpoint: TXT-READY。"
+        )
+
+        self.assertFalse(_has_follow_up_facts(answer))
+
+    def test_follow_up_rejects_checkpoint_with_identifier_suffix(self):
+        answer = "上一轮预算 42、负责人 Mei；当前标识 TXT-READY-old。"
+
+        self.assertFalse(_has_follow_up_facts(answer))
+
+    def test_follow_up_rejects_decimal_budget(self):
+        answer = "上一轮预算 42.5、负责人 Mei；当前标识 TXT-READY。"
+
+        self.assertFalse(_has_follow_up_facts(answer))
+
+    def test_follow_up_rejects_checkpoint_with_dot_version(self):
+        answer = "上一轮预算 42、负责人 Mei；当前标识 TXT-READY.v2。"
+
+        self.assertFalse(_has_follow_up_facts(answer))
 
     def test_cli_without_key_records_not_run(self):
         environment = dict(os.environ)
