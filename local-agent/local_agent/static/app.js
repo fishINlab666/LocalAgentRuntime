@@ -2,10 +2,12 @@
 
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="session-token"]').content;
-let ready = false, simulated = false, activeId = null, busy = false, timer = null, renderedEvents = 0;
-let viewGeneration = 0, renderedRevision = -1;
+let ready = false, simulated = false, liveRunId = null, busy = false, timer = null;
+let viewGeneration = 0, liveRunRevision = -1;
 let activeSessionId = null, activeSession = null, fixedSessionSelection = false;
 let workspaceAvailable = true, historyRuns = [], runHistoryCursor = null, runPageRequest = null;
+let inspectedRunId = null, inspectionToken = 0, detailObserver = null;
+const runDetails = new Map(), detailRequests = new Map();
 let agents = [], capabilities = {skills: [], servers: []}, selectedAgentId = '', managing = false;
 let sessionListGeneration = 0, visibleSessions = [], sessionPageRequest = null;
 let sessionCursors = {active: null, archived: null};
@@ -17,6 +19,7 @@ let importCapabilities = {formats: [], limits: {max_items: 500, max_files: 50,
 const importStateKey = 'local-agent-active-import';
 let pendingApproval = null, approvalSendingId = null, approvalBlockedId = null, approvalDeadline = 0, approvalTimer = null;
 let cancelling = false, cancelSendingId = null;
+let continuableRunId = null;
 let drawerTrigger = null;
 const errors = {
   CONFIG_MISSING: '模型尚未配置。请在已配置 DEEPSEEK_API_KEY 的终端启动页面服务。',
@@ -915,6 +918,7 @@ async function selectAgent(agentId) {
   if (busy || activeImport) return;
   selectedAgentId = agentId;
   activeSessionId = null; activeSession = null; viewGeneration++;
+  resetTranscriptState(); historyRuns = []; runHistoryCursor = null;
   $('session-select').value = ''; $('session-actions').hidden = true; $('session-scope').hidden = true;
   $('question').value = ''; $('output-file').value = ''; countQuestion();
   renderRunHistory([]); clearRunView(); renderAgentList(); renderCapabilities();
@@ -940,7 +944,7 @@ function updateControls() {
     || (sessionMode && !conversation && !workspaceAvailable);
   $('start').textContent = busy ? '处理中…' : '发送';
   $('thread-panel').setAttribute('aria-busy', String(busy));
-  $('cancel').hidden = !busy || !activeId;
+  $('cancel').hidden = !busy || !liveRunId;
   $('discover').disabled = sessionMode || busy || importing || !ready;
   $('file').disabled = sessionMode || busy || importing || $('discover').checked;
   $('file').required = !sessionMode && !$('discover').checked;
@@ -1104,18 +1108,27 @@ function runPath(runId, tail = '') {
     : `/api/runs/${runId}${tail}`;
 }
 
+function resetTranscriptState() {
+  if (detailObserver) detailObserver.disconnect();
+  detailObserver = null; runDetails.clear(); detailRequests.clear();
+  inspectedRunId = null; inspectionToken++;
+}
+
 function clearRunView() {
-  clearTimeout(timer); activeId = null; busy = false; renderedEvents = 0; renderedRevision = -1;
-  pendingApproval = null; cancelling = false; $('output').hidden = true; $('empty').hidden = false;
+  clearTimeout(timer); liveRunId = null; busy = false; liveRunRevision = -1;
+  pendingApproval = null; cancelling = false; $('output').hidden = true;
+  continuableRunId = null;
+  $('output').classList.toggle('session-live-output', false);
+  $('empty').hidden = historyRuns.length > 0;
   $('inspector-run-empty').hidden = false;
-  for (const id of ['scope-summary', 'artifacts', 'evidence', 'trace']) $(id).hidden = true;
+  for (const id of ['scope-summary', 'approval-history', 'artifacts', 'evidence', 'trace']) $(id).hidden = true;
   $('continue-run').hidden = true; updateControls();
 }
 
 function markCurrentRun(runId) {
-  for (const button of $('session-history').querySelectorAll('[data-run-id]')) {
-    if (button.dataset.runId === runId) button.setAttribute('aria-current', 'true');
-    else button.removeAttribute('aria-current');
+  for (const card of $('session-history').querySelectorAll('[data-run-id]')) {
+    if (card.dataset.runId === runId) card.setAttribute('aria-current', 'true');
+    else card.removeAttribute('aria-current');
   }
 }
 
@@ -1124,59 +1137,223 @@ function currentRunPageLoading() {
     && runPageRequest.generation === viewGeneration);
 }
 
-function renderRunHistory(runs, append = false) {
+function runDetailState(runId) {
+  return runDetails.get(runId) || {status: 'idle'};
+}
+
+function transcriptStatus(item, state) {
+  const detail = state.run;
+  if (state.status === 'loading') return {text: '正在载入这轮回答…', tone: ''};
+  if (state.status === 'error') return {text: '暂时无法载入这轮，重新加载。', tone: 'error'};
+  if (!detail) return {text: ['queued', 'running'].includes(item.state) ? 'Agent 正在处理这轮任务…'
+    : item.state === 'waiting_approval' ? '这轮正在等待你的确认。'
+    : '正在载入这轮回答…', tone: item.state === 'waiting_approval' ? 'warning' : ''};
+  if (detail.state === 'completed' && detail.result?.answer) return null;
+  if (['queued', 'running'].includes(detail.state)) return {text: 'Agent 正在处理这轮任务…', tone: ''};
+  if (detail.state === 'waiting_approval') return {text: '这轮正在等待你的确认。', tone: 'warning'};
+  const reason = detail.result?.stop_reason || detail.stop_reason;
+  return {text: detail.state === 'cancelled' ? '这轮已取消。'
+    : detail.state === 'interrupted' ? '这轮因服务停止而中断，可以从右侧执行记录核对。'
+    : `这轮没有生成有效答案：${messageFor(reason)}`, tone: 'error'};
+}
+
+function createRunCard(item) {
+  const card = document.createElement('article');
+  card.className = 'transcript-run'; card.dataset.runId = item.id; card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+  card.setAttribute('aria-label', `查看：${item.question}`);
+  if (item.id === inspectedRunId) card.setAttribute('aria-current', 'true');
+  if (item.id === liveRunId) card.dataset.live = 'true';
+
+  const meta = document.createElement('div'), stateLabel = document.createElement('span'), when = document.createElement('time');
+  meta.className = 'transcript-meta'; stateLabel.className = 'run-state';
+  const detailState = runDetailState(item.id), detail = detailState.run;
+  stateLabel.textContent = runStateLabel(detail?.state || item.state);
+  when.textContent = formatTimestamp(item.started_at || item.created_at);
+  meta.append(stateLabel); if (when.textContent) meta.append(when);
+
+  const user = document.createElement('div'), userLabel = document.createElement('span'), question = document.createElement('p');
+  user.className = 'message transcript-user'; user.dataset.role = 'user'; userLabel.className = 'message-label';
+  userLabel.textContent = '你'; question.className = 'source-line'; question.textContent = item.question;
+  user.append(userLabel, question); card.append(meta, user);
+
+  if (detail?.state === 'completed' && detail.result?.answer) {
+    const assistant = document.createElement('div'), label = document.createElement('span'), answer = document.createElement('p');
+    assistant.className = 'message transcript-assistant'; assistant.dataset.role = 'assistant';
+    label.className = 'message-label'; label.textContent = 'Agent 回答';
+    answer.className = 'transcript-answer run-answer'; answer.textContent = detail.result.answer.answer;
+    assistant.append(label, answer); card.append(assistant);
+  } else {
+    const statusInfo = transcriptStatus(item, detailState), state = document.createElement('div');
+    state.className = `transcript-state${statusInfo?.tone ? ` ${statusInfo.tone}` : ''}`;
+    state.textContent = statusInfo?.text || runStateLabel(item.state); card.append(state);
+    if (detailState.status === 'error') {
+      const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'run-detail-retry';
+      retry.textContent = '重新加载'; retry.addEventListener('click', event => {
+        event.stopPropagation(); loadRunDetail(item.id, {retry: true});
+      }); state.append(document.createElement('br'), retry);
+    }
+  }
+  if (detail?.approvals?.length) {
+    const note = document.createElement('p'); note.className = 'transcript-state warning run-approval-note';
+    note.textContent = `历史审批：${detail.approvals.at(-1).decision || '已处理'}（仅供查看，不会再次执行）。`;
+    card.append(note);
+  }
+  card.addEventListener('click', () => openSessionRun(item.id));
+  card.addEventListener('keydown', event => {
+    if (event.target !== card) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault(); openSessionRun(item.id);
+  });
+  return card;
+}
+
+function observeRunCard(card) {
+  if (runDetailState(card.dataset.runId).status !== 'idle') return;
+  if (!('IntersectionObserver' in globalThis)) return;
+  if (!detailObserver) detailObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      detailObserver.unobserve(entry.target); loadRunDetail(entry.target.dataset.runId);
+    }
+  }, {root: $('conversation-scroll'), rootMargin: '0px'});
+  detailObserver.observe(card);
+}
+
+function findRunCard(runId) {
+  return [...$('session-history').querySelectorAll('[data-run-id]')]
+    .find(card => card.dataset.runId === runId) || null;
+}
+
+function replaceRunCard(runId) {
+  const current = findRunCard(runId);
+  const item = historyRuns.find(run => run.id === runId);
+  if (!current || !item) return;
+  const anchor = visibleRunAnchor();
+  const replacement = createRunCard(item);
+  current.className = replacement.className;
+  current.setAttribute('aria-label', replacement.getAttribute('aria-label'));
+  if (replacement.hasAttribute('aria-current')) current.setAttribute('aria-current', 'true');
+  else current.removeAttribute('aria-current');
+  if (replacement.dataset.live) current.dataset.live = replacement.dataset.live;
+  else delete current.dataset.live;
+  current.replaceChildren(...replacement.childNodes);
+  if (anchor) {
+    const preserved = findRunCard(anchor.runId);
+    if (preserved) {
+      $('conversation-scroll').scrollTop += preserved.getBoundingClientRect().top - anchor.top;
+    }
+  }
+}
+
+function visibleRunAnchor() {
+  const containerTop = $('conversation-scroll').getBoundingClientRect().top;
+  const cards = [...$('session-history').querySelectorAll('[data-run-id]')];
+  const card = cards.find(item => item.getBoundingClientRect().top >= containerTop)
+    || cards.find(item => item.getBoundingClientRect().bottom >= containerTop);
+  return card ? {runId: card.dataset.runId, top: card.getBoundingClientRect().top} : null;
+}
+
+function renderRunHistory(runs, append = false, anchor = null) {
   const merged = append ? [...historyRuns, ...runs] : [...runs];
   historyRuns = [...new Map(merged.map(item => [item.id, item])).values()];
+  if (detailObserver) detailObserver.disconnect();
   $('session-history').replaceChildren();
-  for (const item of historyRuns) {
-    const button = document.createElement('button');
-    button.type = 'button'; button.dataset.runId = item.id;
-    const when = formatTimestamp(item.started_at || item.created_at);
-    button.textContent = `${runStateLabel(item.state)} · ${item.question}${when ? ` · ${when}` : ''}`;
-    button.title = item.question;
-    button.addEventListener('click', () => openSessionRun(item.id));
-    $('session-history').append(button);
+  for (const item of [...historyRuns].reverse()) {
+    const card = createRunCard(item); $('session-history').append(card); observeRunCard(card);
   }
-  markCurrentRun(activeId);
+  $('empty').hidden = historyRuns.length > 0 || !$('output').hidden;
+  markCurrentRun(inspectedRunId);
   $('run-load-more').hidden = !runHistoryCursor;
   $('run-load-more').disabled = currentRunPageLoading() || busy;
+  if (anchor) {
+    const preserved = findRunCard(anchor.runId);
+    if (preserved) {
+      $('conversation-scroll').scrollTop += preserved.getBoundingClientRect().top - anchor.top;
+    }
+  }
+}
+
+async function loadRunDetail(runId, {inspect = false, retry = false} = {}) {
+  if (!activeSessionId) return null;
+  const sessionId = activeSessionId, generation = viewGeneration;
+  const key = `${sessionId}:${runId}:${generation}`;
+  if (detailRequests.has(key)) {
+    const job = await detailRequests.get(key);
+    if (job && inspect && inspectedRunId === runId) renderInspector(job);
+    return job;
+  }
+  const cached = runDetails.get(runId);
+  if (!retry && cached?.status === 'ready') {
+    if (inspect && inspectedRunId === runId) renderInspector(cached.run);
+    return cached.run;
+  }
+  runDetails.set(runId, {status: 'loading'});
+  replaceRunCard(runId);
+  let request;
+  request = (async () => {
+    try {
+      const response = await api(`/api/sessions/${sessionId}/runs/${runId}`);
+      if (sessionId !== activeSessionId || generation !== viewGeneration) return null;
+      const job = normalizedSessionRun(response.run);
+      runDetails.set(runId, {status: 'ready', run: job});
+      historyRuns = historyRuns.map(item => item.id === runId ? {...item, ...response.run} : item);
+      replaceRunCard(runId);
+      if (inspect && inspectedRunId === runId) renderInspector(job);
+      return job;
+    } catch (error) {
+      if (sessionId === activeSessionId && generation === viewGeneration) {
+        runDetails.set(runId, {status: 'error', error}); replaceRunCard(runId);
+      }
+      return null;
+    } finally {
+      if (detailRequests.get(key) === request) detailRequests.delete(key);
+    }
+  })();
+  detailRequests.set(key, request); return request;
 }
 
 async function loadMoreRuns() {
   if (!activeSessionId || !runHistoryCursor || currentRunPageLoading()) return;
   const sessionId = activeSessionId, generation = viewGeneration, cursor = runHistoryCursor;
+  const anchor = visibleRunAnchor();
   const request = {sessionId, generation, cursor};
   runPageRequest = request; $('run-load-more').disabled = true;
   try {
     const response = await api(`/api/sessions/${sessionId}/runs?cursor=${encodeURIComponent(cursor)}`);
     if (sessionId !== activeSessionId || generation !== viewGeneration) return;
     runHistoryCursor = response.next_cursor || null;
-    renderRunHistory(response.runs || [], true);
+    renderRunHistory(response.runs || [], true, anchor);
   } catch (error) {
     if (sessionId === activeSessionId && generation === viewGeneration) showError(error, 'session-error');
   } finally {
     if (runPageRequest === request) runPageRequest = null;
-    if (sessionId === activeSessionId && generation === viewGeneration) renderRunHistory([], true);
+    if (sessionId === activeSessionId && generation === viewGeneration) {
+      $('run-load-more').hidden = !runHistoryCursor;
+      $('run-load-more').disabled = currentRunPageLoading() || busy;
+    }
   }
 }
 
-async function openSessionRun(runId) {
+async function openSessionRun(runId, {focus = true} = {}) {
   if (!activeSessionId) return;
-  const sessionId = activeSessionId, generation = ++viewGeneration;
-  clearTimeout(timer);
-  try {
-    const response = await api(`/api/sessions/${sessionId}/runs/${runId}`);
-    if (sessionId !== activeSessionId || generation !== viewGeneration) return;
-    const job = normalizedSessionRun(response.run);
-    $('question').value = job.question; countQuestion(); $('task-type').value = job.task_type;
-    $('output-file').value = job.output_file || '';
-    prepareOutput(job); render(job);
-    markCurrentRun(job.id);
-    focusRunResult(job);
-    if (busy) timer = setTimeout(poll, 450);
-  } catch (error) {
-    if (sessionId === activeSessionId && generation === viewGeneration) showError(error, 'session-error');
+  inspectedRunId = runId; const token = ++inspectionToken; markCurrentRun(runId);
+  const job = await loadRunDetail(runId, {inspect: true});
+  if (!job || token !== inspectionToken || inspectedRunId !== runId) return;
+  if (!busy) {
+    continuableRunId = job.state === 'interrupted' ? job.id : null;
+    $('continue-run').hidden = !continuableRunId;
   }
+  if (!focus) {
+    $('task-type').value = job.task_type || 'files';
+    $('output-file').value = job.output_file || '';
+    updateControls();
+  }
+  renderInspector(job);
+  if (focus) requestAnimationFrame(() => {
+    const card = findRunCard(runId);
+    if (card && inspectedRunId === runId) card.focus({preventScroll: true});
+  });
 }
 
 function focusRunResult(job) {
@@ -1184,7 +1361,7 @@ function focusRunResult(job) {
     ? $('answer-title') : !$('failure').hidden ? $('failure-title') : null;
   if (!target || document.activeElement === $('question')) return;
   requestAnimationFrame(() => {
-    if (activeId === job.id && document.activeElement !== $('question')) target.focus();
+    if (liveRunId === job.id && document.activeElement !== $('question')) target.focus();
   });
 }
 
@@ -1279,11 +1456,12 @@ async function loadMoreSessions() {
 async function selectSession(sessionId) {
   const generation = ++viewGeneration;
   clearTimeout(timer); activeSessionId = sessionId || null; activeSession = null;
+  resetTranscriptState(); historyRuns = []; runHistoryCursor = null; clearRunView();
   $('session-error').hidden = true;
   if (!activeSessionId) {
     $('session-actions').hidden = true; $('session-scope').hidden = true;
     renderImportSources(null);
-    runHistoryCursor = null; renderRunHistory([]); renderSessionList(); renderAgentList();
+    renderRunHistory([]); renderSessionList(); renderAgentList();
     $('task-type').value = 'files'; clearRunView(); updateControls(); return true;
   }
   try {
@@ -1309,8 +1487,9 @@ async function selectSession(sessionId) {
       + (activeSession.agent_id ? ` · 助手 ${activeSession.agent_id} · 修订 ${(activeSession.agent_revision || '未知').slice(0, 12)}（旧会话保留此版本）` : '')
       + (workspaceAvailable ? '' : ' · 原工作区当前不可用');
     runHistoryCursor = runsResponse.next_cursor || null;
+    inspectedRunId = runsResponse.runs[0]?.id || null;
     renderRunHistory(runsResponse.runs);
-    if (runsResponse.runs.length) await openSessionRun(runsResponse.runs[0].id);
+    if (runsResponse.runs.length) await openSessionRun(runsResponse.runs[0].id, {focus: false});
     else clearRunView();
     const loaded = activeSession?.id === sessionId;
     updateControls();
@@ -1347,23 +1526,54 @@ async function loadSessions(selectedId = null, fixed = fixedSessionSelection) {
 
 function prepareOutput(job) {
   clearTimeout(timer);
-  activeId = job.id; renderedEvents = 0; renderedRevision = -1; viewGeneration++;
+  liveRunId = job.id; liveRunRevision = -1;
   pendingApproval = null; approvalBlockedId = null; cancelling = false; clearTimeout(approvalTimer);
+  continuableRunId = null;
   $('empty').hidden = true; $('output').hidden = false;
-  $('inspector-run-empty').hidden = true; $('trace').hidden = false;
-  for (const id of ['answer-block', 'evidence', 'failure', 'form-error', 'scope-summary', 'approval', 'artifacts']) $(id).hidden = true;
+  $('output').classList.toggle('session-live-output', Boolean(activeSessionId));
+  for (const id of ['answer-block', 'failure', 'form-error', 'approval']) $(id).hidden = true;
   $('continue-run').hidden = true;
-  $('events').replaceChildren(); $('citations').replaceChildren(); $('trace-path').textContent = '';
   $('source-line').textContent = `${job.task_type === 'conversation' ? '会话记录'
     : job.mode === 'directory' ? '目录发现' : job.file || '资料'} · ${job.question}`;
   $('copy').textContent = '复制回答';
+  if (activeSessionId) {
+    historyRuns = [job, ...historyRuns.filter(item => item.id !== job.id)];
+    runDetails.set(job.id, {status: 'ready', run: job});
+    inspectedRunId = job.id; inspectionToken++;
+    renderRunHistory([], true);
+    requestAnimationFrame(() => { $('conversation-scroll').scrollTop = $('conversation-scroll').scrollHeight; });
+  }
 }
 
-function render(job) {
-  if (activeId !== job.id || job.revision < renderedRevision) return;
-  const focusWhenFinished = busy && renderedRevision >= 0 && job.result !== null;
-  renderedRevision = job.revision;
-  for (const event of job.events.slice(renderedEvents)) {
+function renderApprovalHistory(job) {
+  const row = job.approvals?.at(-1) || null;
+  $('approval-history').hidden = !row;
+  if (!row) {
+    for (const id of ['approval-history-action', 'approval-history-details',
+      'approval-history-intent', 'approval-history-status', 'approval-history-content']) {
+      $(id).textContent = '';
+    }
+    return;
+  }
+  const preview = row.preview || {};
+  const decision = {allow: '已批准', deny: '已拒绝', expired: '已过期'}[row.decision]
+    || row.decision || '已处理';
+  const bytes = Number.isFinite(Number(preview.bytes)) ? `${Number(preview.bytes)} 字节` : '大小未记录';
+  const operation = ['create', 'created'].includes(preview.operation)
+    ? '新建，不覆盖' : preview.operation || '操作未记录';
+  $('approval-history-action').textContent = `实际操作：${preview.action_summary || preview.name || '文件操作'}`;
+  $('approval-history-details').textContent = `目标：${preview.path || '未记录'} · ${bytes} · ${operation} · 来源：${sourceLabel(preview.source)} · ${riskLabel(preview.risk)}`;
+  $('approval-history-intent').textContent = `模型意图：${preview.arguments?.intent || '未提供'}（用于说明目的）`;
+  $('approval-history-status').textContent = `审批结果：${decision}。仅供查看，不能再次执行。`;
+  $('approval-history-content').textContent = preview.content || '';
+}
+
+function renderInspector(job) {
+  $('inspector-run-empty').hidden = true;
+  for (const id of ['scope-summary', 'approval-history', 'artifacts', 'evidence']) $(id).hidden = true;
+  $('trace').hidden = false; $('events').replaceChildren(); $('citations').replaceChildren();
+  renderApprovalHistory(job);
+  for (const event of job.events || []) {
     const li = document.createElement('li'), stamp = document.createElement('time'), label = document.createElement('span');
     stamp.textContent = `${event.elapsed.toFixed(1)}s`;
     const detail = event.detail || {};
@@ -1372,9 +1582,52 @@ function render(job) {
       + (detail.intent ? ` · 模型意图：${detail.intent}` : '') + (detail.code ? ` · ${detail.code}` : '');
     li.append(stamp, label); $('events').append(li);
   }
-  renderedEvents = job.events.length; $('event-count').textContent = `${renderedEvents} 个步骤`;
+  $('event-count').textContent = `${job.events?.length || 0} 个步骤`;
+  const result = job.result;
+  $('trace-path').textContent = result?.trace_path || job.trace_path || '';
+  renderArtifacts(job);
+  if (result?.scope) {
+    const scope = result.scope;
+    $('scope-summary').hidden = false;
+    $('scope-summary').textContent = `检查范围：已发现 ${scope.discovered_files.length} 份 · 已读取 ${scope.read_files.length} 份 · 未读取 ${scope.unread_files.length} 份 · 未列出目录 ${scope.unlisted_directories.length} 个。`
+      + (scope.complete ? ' 已检查全部已发现资料。' : ' 检查范围尚不完整。')
+      + (scope.unread_files.length ? ` 未读取：${scope.unread_files.join('、')}。` : '')
+      + (scope.unlisted_directories.length ? ` 未列出目录：${scope.unlisted_directories.join('、')}。` : '');
+  }
+  const answer = result?.answer, citations = answer?.citations || answer?.references || [];
+  $('evidence').hidden = citations.length === 0;
+  $('citation-count').textContent = `${citations.length} 处引用`;
+  for (const citation of citations) {
+    const article = document.createElement('article'), heading = document.createElement('header'), quote = document.createElement('blockquote');
+    article.className = 'citation';
+    const source = citation.source;
+    const importedLocations = source?.kind === 'imported_document'
+      ? (source.locations || []).map(importedLocationLabel).filter(Boolean).join('、') : '';
+    const importedName = source?.kind === 'imported_document'
+      ? `${source.name || source.logical_path}${source.logical_path && source.logical_path !== source.name ? ` · ${source.logical_path}` : ''}${importedLocations ? ` · ${importedLocations}` : ''}`
+      : null;
+    const sourceName = importedName || (typeof source === 'string' ? source : source?.label || source?.name
+      || (source ? `${sourceLabel(source.type)} · ${source.server_id || source.id || citation.source_id || citation.path || ''}` : null));
+    heading.textContent = sourceName || citation.source_id
+      ? `${sourceName || citation.source_id}${citation.start_line && source?.kind !== 'imported_document' ? ` · 第 ${citation.start_line}${citation.end_line === citation.start_line ? '' : '–' + citation.end_line} 行` : ''}`
+      : citation.message_id
+      ? `会话消息 ${citation.message_id} · 字符 ${citation.start}–${citation.end}`
+      : `${citation.path} · 第 ${citation.start_line}${citation.end_line === citation.start_line ? '' : '–' + citation.end_line} 行`;
+    quote.textContent = citation.quote; article.append(heading, quote); $('citations').append(article);
+  }
+}
+
+function render(job) {
+  if (liveRunId !== job.id || job.revision < liveRunRevision) return;
+  const focusWhenFinished = busy && liveRunRevision >= 0 && job.result !== null;
+  liveRunRevision = job.revision;
   busy = job.result === null;
   cancelling = Boolean(job.cancelling) || cancelSendingId === job.id;
+  if (activeSessionId) {
+    runDetails.set(job.id, {status: 'ready', run: job});
+    historyRuns = historyRuns.map(item => item.id === job.id ? {...item, ...job} : item);
+    replaceRunCard(job.id);
+  }
   renderApproval(job);
   $('progress').hidden = !busy;
   if (busy) {
@@ -1385,16 +1638,6 @@ function render(job) {
   } else {
     clearTimeout(timer);
     const result = job.result, answer = result.answer;
-    renderArtifacts(job);
-    $('trace-path').textContent = result.trace_path || '';
-    if (result.scope) {
-      const scope = result.scope;
-      $('scope-summary').hidden = false;
-      $('scope-summary').textContent = `检查范围：已发现 ${scope.discovered_files.length} 份 · 已读取 ${scope.read_files.length} 份 · 未读取 ${scope.unread_files.length} 份 · 未列出目录 ${scope.unlisted_directories.length} 个。`
-        + (scope.complete ? ' 已检查全部已发现资料。' : ' 检查范围尚不完整。')
-        + (scope.unread_files.length ? ` 未读取：${scope.unread_files.join('、')}。` : '')
-        + (scope.unlisted_directories.length ? ` 未列出目录：${scope.unlisted_directories.join('、')}。` : '');
-    }
     if (job.state === 'completed' && answer) {
       status(answer.status === 'not_found' ? '信息未记载' : '回答已完成', answer.status === 'not_found' ? 'warning' : '');
       $('answer-block').hidden = false;
@@ -1402,28 +1645,6 @@ function render(job) {
         : job.task_type === 'conversation' ? '会话中的答案' : '资料中的答案';
       $('answer-text').textContent = answer.answer;
       $('answer-note').textContent = simulated ? '模拟演示：显示读取到的内容，未调用真实模型，也未理解问题。' : '回答通过格式与引用检查；请结合原文判断内容是否准确。';
-      const citations = answer.citations || answer.references || [];
-      $('evidence').hidden = citations.length === 0;
-      $('citation-count').textContent = `${citations.length} 处引用`;
-      $('citations').replaceChildren();
-      for (const citation of citations) {
-        const article = document.createElement('article'), heading = document.createElement('header'), quote = document.createElement('blockquote');
-        article.className = 'citation';
-        const source = citation.source;
-        const importedLocations = source?.kind === 'imported_document'
-          ? (source.locations || []).map(importedLocationLabel).filter(Boolean).join('、') : '';
-        const importedName = source?.kind === 'imported_document'
-          ? `${source.name || source.logical_path}${source.logical_path && source.logical_path !== source.name ? ` · ${source.logical_path}` : ''}${importedLocations ? ` · ${importedLocations}` : ''}`
-          : null;
-        const sourceName = importedName || (typeof source === 'string' ? source : source?.label || source?.name
-          || (source ? `${sourceLabel(source.type)} · ${source.server_id || source.id || citation.source_id || citation.path || ''}` : null));
-        heading.textContent = sourceName || citation.source_id
-          ? `${sourceName || citation.source_id}${citation.start_line && source?.kind !== 'imported_document' ? ` · 第 ${citation.start_line}${citation.end_line === citation.start_line ? '' : '–' + citation.end_line} 行` : ''}`
-          : citation.message_id
-          ? `会话消息 ${citation.message_id} · 字符 ${citation.start}–${citation.end}`
-          : `${citation.path} · 第 ${citation.start_line}${citation.end_line === citation.start_line ? '' : '–' + citation.end_line} 行`;
-        quote.textContent = citation.quote; article.append(heading, quote); $('citations').append(article);
-      }
     } else {
       const cancelled = job.state === 'cancelled';
       const interrupted = job.state === 'interrupted';
@@ -1437,19 +1658,28 @@ function render(job) {
       $('failure-message').textContent = interrupted
         ? '服务曾在这次运行中停止。旧运行不会自动重做；可以新建一次继续运行。'
         : messageFor(reason) + (answer?.answer ? `\n${answer.answer}` : '');
-      $('continue-run').hidden = !interrupted || !activeSessionId;
+      continuableRunId = interrupted && activeSessionId ? job.id : null;
+      $('continue-run').hidden = !continuableRunId;
     }
   }
+  if (!activeSessionId || inspectedRunId === job.id) renderInspector(job);
+  if (activeSessionId && !busy) $('output').hidden = true;
   updateControls();
-  if (focusWhenFinished) focusRunResult(job);
+  if (focusWhenFinished) {
+    if (activeSessionId) requestAnimationFrame(() => {
+      const card = findRunCard(job.id);
+      if (card && document.activeElement !== $('question')) card.focus({preventScroll: true});
+    });
+    else focusRunResult(job);
+  }
 }
 
 async function poll() {
-  if (!activeId) return;
-  const requestedId = activeId, requestedSession = activeSessionId, generation = viewGeneration;
+  if (!liveRunId) return;
+  const requestedId = liveRunId, requestedSession = activeSessionId, generation = viewGeneration;
   try {
     const response = await api(runPath(requestedId));
-    if (requestedId !== activeId || requestedSession !== activeSessionId || generation !== viewGeneration) return;
+    if (requestedId !== liveRunId || requestedSession !== activeSessionId || generation !== viewGeneration) return;
     const job = activeSessionId ? normalizedSessionRun(response.run) : response;
     $('connection-error').hidden = true;
     render(job);
@@ -1458,11 +1688,11 @@ async function poll() {
       const runs = await api(`/api/sessions/${activeSessionId}/runs`);
       if (requestedSession === activeSessionId && generation === viewGeneration) {
         runHistoryCursor = runs.next_cursor || null;
-        renderRunHistory(runs.runs);
+        renderRunHistory(runs.runs, true);
       }
     }
   } catch (error) {
-    if (requestedId !== activeId || requestedSession !== activeSessionId || generation !== viewGeneration) return;
+    if (requestedId !== liveRunId || requestedSession !== activeSessionId || generation !== viewGeneration) return;
     showError(error, 'connection-error');
     if (!connectionExpired(error)) timer = setTimeout(poll, 2000);
   }
@@ -1620,7 +1850,7 @@ document.querySelectorAll('[data-question]').forEach(button => button.addEventLi
 }));
 $('question-form').addEventListener('submit', async event => {
   event.preventDefault(); if (busy || !ready) return;
-  $('form-error').hidden = true; busy = true; activeId = null; viewGeneration++; clearTimeout(timer); updateControls();
+  $('form-error').hidden = true; busy = true; liveRunId = null; clearTimeout(timer); updateControls();
   try {
     const question = $('question').value.trim();
     const outputFile = $('output-file').value.trim();
@@ -1651,17 +1881,17 @@ $('question-form').addEventListener('submit', async event => {
   }
 });
 $('cancel').addEventListener('click', async () => {
-  if (!activeId || !busy || cancelling) return;
-  const requestedId = activeId, requestedSession = activeSessionId, generation = viewGeneration;
+  if (!liveRunId || !busy || cancelling) return;
+  const requestedId = liveRunId, requestedSession = activeSessionId, generation = viewGeneration;
   cancelSendingId = requestedId; cancelling = true; $('cancel').disabled = true; updateApprovalControls();
   try {
     const response = await api(runPath(requestedId, '/cancel'), {});
     const job = requestedSession ? normalizedSessionRun(response.run) : response;
     if (cancelSendingId === requestedId) cancelSendingId = null;
-    if (requestedId === activeId && requestedSession === activeSessionId && generation === viewGeneration) render(job);
+    if (requestedId === liveRunId && requestedSession === activeSessionId && generation === viewGeneration) render(job);
   } catch (error) {
     if (cancelSendingId === requestedId) cancelSendingId = null;
-    if (requestedId === activeId && requestedSession === activeSessionId && generation === viewGeneration) {
+    if (requestedId === liveRunId && requestedSession === activeSessionId && generation === viewGeneration) {
       cancelling = false; $('cancel').disabled = false; showError(error);
       if (!connectionExpired(error)) updateApprovalControls();
     }
@@ -1671,14 +1901,14 @@ async function decideApproval(decision) {
   if (!pendingApproval || !ready || cancelling || Date.now() >= approvalDeadline) return;
   const approvalId = pendingApproval.approval_id || pendingApproval.id;
   if (approvalSendingId === approvalId || approvalBlockedId === approvalId) return;
-  const requestedId = activeId, requestedSession = activeSessionId, generation = viewGeneration;
+  const requestedId = liveRunId, requestedSession = activeSessionId, generation = viewGeneration;
   approvalSendingId = approvalId; $('approval-error').hidden = true; updateApprovalControls();
   try {
     const response = await api(runPath(requestedId, `/approvals/${approvalId}`), {decision});
     const job = requestedSession ? normalizedSessionRun(response.run) : response;
-    if (requestedId === activeId && requestedSession === activeSessionId && generation === viewGeneration) render(job);
+    if (requestedId === liveRunId && requestedSession === activeSessionId && generation === viewGeneration) render(job);
   } catch (error) {
-    if (requestedId !== activeId || requestedSession !== activeSessionId || generation !== viewGeneration) return;
+    if (requestedId !== liveRunId || requestedSession !== activeSessionId || generation !== viewGeneration) return;
     showError(error, 'approval-error');
     if (!connectionExpired(error)) {
       approvalBlockedId = approvalId;
@@ -1686,14 +1916,14 @@ async function decideApproval(decision) {
     }
   } finally {
     if (approvalSendingId === approvalId) approvalSendingId = null;
-    if (requestedId === activeId && requestedSession === activeSessionId && generation === viewGeneration) updateApprovalControls();
+    if (requestedId === liveRunId && requestedSession === activeSessionId && generation === viewGeneration) updateApprovalControls();
   }
 }
 $('approval-allow').addEventListener('click', () => decideApproval('allow'));
 $('approval-deny').addEventListener('click', () => decideApproval('deny'));
 $('continue-run').addEventListener('click', async () => {
-  if (!activeSessionId || !activeId || busy) return;
-  const sessionId = activeSessionId, parentId = activeId, generation = viewGeneration;
+  if (!activeSessionId || !continuableRunId || busy) return;
+  const sessionId = activeSessionId, parentId = continuableRunId, generation = viewGeneration;
   busy = true; updateControls();
   try {
     const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;

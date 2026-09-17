@@ -88,9 +88,9 @@
 
       <div class="thread-scroll" id="conversation-scroll">
         <section class="history-block" aria-labelledby="history-heading">
-          <div class="section-heading compact-heading"><h2 id="history-heading">对话记录</h2><span class="field-help">选择一轮查看完整结果</span></div>
-          <div id="session-history" class="session-history" aria-label="会话历史"></div>
+          <div class="section-heading compact-heading"><h2 id="history-heading">对话记录</h2><span class="field-help">多轮问答按时间连续显示；选择一轮查看依据</span></div>
           <button type="button" id="run-load-more" class="quiet" hidden>加载更早记录</button>
+          <div id="session-history" class="session-history" role="feed" aria-label="会话历史" aria-live="polite"></div>
         </section>
 
         <div id="empty" class="empty">
@@ -168,6 +168,15 @@
         <span class="section-kicker">CURRENT RUN</span><h3 id="run-overview-title">执行概览</h3>
         <p id="inspector-run-empty" class="field-help">开始任务后，这里会显示检查范围、依据、产物和执行步骤。</p>
         <p class="scope-summary field-help" id="scope-summary" hidden></p>
+      </section>
+      <section id="approval-history" class="approval-history result-card inspector-result" aria-labelledby="approval-history-title" hidden>
+        <div class="message-label warning-label">APPROVAL HISTORY</div>
+        <h2 id="approval-history-title">历史审批（只读）</h2>
+        <p id="approval-history-action" class="approval-action"></p>
+        <p id="approval-history-details" class="field-help"></p>
+        <p id="approval-history-intent" class="field-help"></p>
+        <p id="approval-history-status" class="field-help"></p>
+        <details class="approval-preview" open><summary>完整内容预览</summary><pre id="approval-history-content"></pre></details>
       </section>
       <section id="import-sources" class="inspector-block import-sources" aria-labelledby="import-sources-title" hidden>
         <span class="section-kicker">LOCAL SOURCES</span><h3 id="import-sources-title">本次导入资料</h3>

@@ -1,5 +1,15 @@
 # 受限目录发现验收记录
 
+## 当前任务入口（2026-09-17：连续多轮会话页面）
+
+当前为**持久 Session 的连续 transcript 已实现并完成离线验收**。中栏不再只显示一排 Run 按钮和单个选中结果，而是按旧到新同时显示多轮“用户问题 → Agent 最终回答”；刷新和重启继续读取原有持久记录，不会重新提交 Run。右栏仍按选中轮展示引用、产物与执行步骤。
+
+执行态与检查态已经分离：轮询、审批、拒绝和取消只绑定当前 `liveRunId`，查看旧轮只改变 `inspectedRunId`。详情按 Run ID 懒加载和去重，乱序返回只更新原卡；重复重试复用同一在途请求，跨 Session 的迟到结果会被视图代次丢弃。加载更早轮次时保留当前可见卡位置。右栏展示历史审批的决定、目标、风险和完整内容，但不提供执行按钮；刷新后选中持久化的中断 Run，仍可通过独立 `continuableRunId` 新建继续运行。动态问题与回答继续使用 `textContent`，普通时间线只显示后端已校验的最终 `result.answer`。
+
+验证证据：TDD 首次在“应有 20 张 transcript 卡、实际为 0”处按预期失败；最终 `browser_workbench.cjs` 覆盖 20/22 轮分页、旧到新顺序、乱序详情、单卡重试去重、键盘操作、中断 Run 续跑、A/B 切换、审批与取消目标、视口锚点及 390/1024/1440px；`browser_sessions.cjs` 覆盖三轮同时可见、刷新无新增 POST 和历史审批完整只读预览。`browser_web.cjs`、`browser_imports.cjs`、`browser_tools.cjs`、`browser_extensions.cjs` 均通过；完整 Python 回归 667 项通过。桌面合成页面已人工核对，并据此修复了用户卡白字白底的样式覆盖；同一审阅者对四项修复进行有界复核后给出 PASS。本轮没有调用 DeepSeek，不改变 Runtime、SQLite、模型 Context 或工具权限。
+
+设计见[连续会话设计](../../docs/superpowers/specs/2026-09-17-local-agent-conversation-transcript-design.md)，实施与停止条件见[实施计划](../../docs/superpowers/plans/2026-09-17-local-agent-conversation-transcript.md)。本批到此停止；流式 token、跨会话 Memory、消息编辑和批量 transcript 后端接口继续后置。
+
 ## 当前任务入口（2026-09-17：Superpowers Skill + 官方 MCP 真实试用）
 
 当前为**一个独立 Superpowers Skill 与一个外部官方 MCP 的安装、绑定和真实联合 Run 已核实**。默认持久 State Store 已安装 `receiving-code-review`，并通过受限本地 stdio 连接固定版本 `mcp-server-time==2026.8.18`，只开放 `get_current_time`；新 Agent `superpowers-time-demo` 为只读配置，未改变已有三个 Agent。

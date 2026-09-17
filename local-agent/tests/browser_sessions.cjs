@@ -45,7 +45,8 @@ const { chromium } = require('playwright');
     }
     await page.locator('#question').fill(question);
     await page.locator('#start').click();
-    await page.waitForFunction(value => document.querySelector('#source-line')?.textContent.includes(value), question);
+    await page.waitForFunction(value => [...document.querySelectorAll(
+      '#session-history article[data-run-id]')].some(card => card.textContent.includes(value)), question);
     await waitTerminal();
   }
 
@@ -60,27 +61,49 @@ const { chromium } = require('playwright');
     assert.equal(await page.locator('#file').isDisabled(), true);
     assert.equal(await page.locator('#discover').isDisabled(), true);
     await submit('第一次核对项目代号');
-    assert.match(await page.locator('#answer-text').innerText(), /浏览器-481/);
-    assert.equal(await page.locator('#session-history button').count(), 1);
+    let transcriptCards = page.locator('#session-history article[data-run-id]');
+    assert.equal(await transcriptCards.count(), 1);
+    assert.match(await transcriptCards.first().innerText(), /浏览器-481/);
     await submit('第二次核对项目代号');
-    assert.equal(await page.locator('#session-history button').count(), 2);
+    assert.equal(await transcriptCards.count(), 2);
+    await submit('我上一次要求了什么？', 'conversation');
+    assert.equal(await transcriptCards.count(), 3);
+    assert.match(await transcriptCards.last().innerText(), /第二次核对项目代号/);
+    assert.match(await page.locator('#citations').innerText(), /会话消息/);
+    assert.equal(await page.locator('#output-file').isDisabled(), true);
 
     const requestsBeforeReload = runPosts;
     await page.reload({waitUntil: 'networkidle'});
-    await page.waitForFunction(() => document.querySelectorAll('#session-history button').length === 2);
+    await page.waitForFunction(() => document.querySelectorAll(
+      '#session-history article[data-run-id]').length === 3);
+    transcriptCards = page.locator('#session-history article[data-run-id]');
     assert.equal(await page.locator('#session-select').inputValue(), sessionA);
     assert.equal(runPosts, requestsBeforeReload, 'reload must only read durable history');
-    assert.match(await page.locator('#answer-text').innerText(), /浏览器-481/);
-
-    await submit('我上一次要求了什么？', 'conversation');
-    assert.match(await page.locator('#answer-text').innerText(), /第二次核对项目代号/);
+    for (let index = 0; index < 3; index++) {
+      await transcriptCards.nth(index).scrollIntoViewIfNeeded();
+    }
+    await page.waitForFunction(() => {
+      const cards = [...document.querySelectorAll('#session-history article[data-run-id]')];
+      return cards.length === 3
+        && cards[0].textContent.includes('浏览器-481')
+        && cards[1].textContent.includes('浏览器-481')
+        && cards[2].textContent.includes('第二次核对项目代号');
+    });
+    const durableTranscript = await transcriptCards.allInnerTexts();
+    assert.match(durableTranscript[0], /第一次核对项目代号/);
+    assert.match(durableTranscript[0], /浏览器-481/);
+    assert.match(durableTranscript[1], /第二次核对项目代号/);
+    assert.match(durableTranscript[1], /浏览器-481/);
+    assert.match(durableTranscript[2], /我上一次要求了什么/);
+    assert.match(durableTranscript[2], /第二次核对项目代号/);
     assert.match(await page.locator('#citations').innerText(), /会话消息/);
     assert.equal(await page.locator('#output-file').isDisabled(), true);
 
     const sessionB = await createSession('会话 B');
     assert.notEqual(sessionB, sessionA);
     await submit('B 会话核对');
-    assert.equal(await page.locator('#session-history button').count(), 1);
+    transcriptCards = page.locator('#session-history article[data-run-id]');
+    assert.equal(await transcriptCards.count(), 1);
     await page.locator('#output-file').fill('session-report.md');
     await page.locator('#question').fill('B 会话生成报告');
     await page.locator('#start').click();
@@ -88,22 +111,31 @@ const { chromium } = require('playwright');
     assert.equal(await page.locator('#approval-actions').isVisible(), true);
     await page.locator('#approval-allow').click();
     await waitTerminal();
-    await page.waitForFunction(() => document.querySelectorAll('#session-history button').length === 2);
-    await page.locator('#session-history button').first().click();
-    await page.waitForFunction(() => !document.querySelector('#approval').hidden);
-    assert.equal(await page.locator('#approval-actions').isVisible(), false,
-      'historical approval preview must be read-only');
+    await page.waitForFunction(() => document.querySelectorAll(
+      '#session-history article[data-run-id]').length === 2);
+    await transcriptCards.last().click();
+    const historicalApproval = transcriptCards.last().locator('.run-approval-note');
+    await historicalApproval.waitFor({state: 'visible'});
+    assert.match(await historicalApproval.innerText(), /仅供查看/,
+      'historical approval must remain visible and read-only in the transcript');
+    await page.locator('#approval-history').waitFor({state: 'visible'});
+    assert.match(await page.locator('#approval-history').innerText(), /session-report\.md/);
+    assert((await page.locator('#approval-history-content').textContent()).trim().length > 0,
+      'historical approval must retain the complete content preview');
+    assert.equal(await page.locator('#approval-history button').count(), 0,
+      'historical approval must not expose action buttons');
+    assert.equal(await page.locator('#approval').isVisible(), false);
 
     await page.locator('#session-select').selectOption(sessionA);
     await page.waitForFunction(id => document.querySelector('#session-select').value === id
-      && document.querySelectorAll('#session-history button').length === 3, sessionA);
+      && document.querySelectorAll('#session-history article[data-run-id]').length === 3, sessionA);
     let releaseLate;
     const late = new Promise(resolve => { releaseLate = resolve; });
     await page.route(`**/api/sessions/${sessionA}/runs/*`, async route => {
       if (route.request().method() !== 'GET') return route.continue();
       const response = await route.fetch(); await late; await route.fulfill({response}).catch(() => {});
     });
-    await page.locator('#session-history button').first().click();
+    await page.locator('#session-history article[data-run-id]').first().click();
     await page.locator('#session-select').selectOption(sessionB);
     await page.waitForFunction(id => document.querySelector('#session-select').value === id, sessionB);
     releaseLate(); await page.waitForTimeout(250);

@@ -12,9 +12,11 @@
 
 ## §0 当前进度与停止条件
 
-2026-09-17：设计主线 Gate 已完成。初审发现“执行中的 Run”和“正在查看的 Run”共用状态、以及打开历史轮会错误递增页面代次两项 P1；设计已修订并由同一审阅者复核为 PASS。当前进入 TDD 实施。
+2026-09-17：**实现、受影响回归与有界代码 Gate 均已完成，状态为 PASS。** 设计初审指出执行 Run 与检查 Run 需要独立状态；实现复核又发现历史审批详情、刷新后继续中断 Run、重试去重和卡片键盘语义四个缺口，均已按原范围修复，并由同一审阅者复核为 PASS。
 
-完成条件：同一 Session 三轮问答同时可见且刷新后仍在；历史详情乱序、Run 续页和 A/B Session 快速切换不串线；新 Run 等待审批时可查看旧轮，但审批、拒绝和取消仍只作用于新 Run；既有会话、工具、Skill/MCP 与响应式浏览器回归通过。达到这些条件后收口，不增加流式 token、跨会话 Memory、消息编辑、批量 transcript 后端接口或真实 DeepSeek 调用。
+TDD 首次在“首屏应有 20 张 transcript 卡、实际为 0”处按预期失败。最终 `browser_workbench.cjs`、`browser_sessions.cjs`、`browser_tools.cjs`、JavaScript 语法与 `git diff --check` 通过；此前同一实现上的 `browser_web.cjs`、`browser_imports.cjs`、`browser_extensions.cjs` 与完整 Python 667 项结果继续有效。页面合成数据核对已完成，本批没有调用 DeepSeek。
+
+完成条件已经满足：同一 Session 三轮问答同时可见且刷新后仍在；历史详情乱序、Run 续页和 A/B Session 快速切换不串线；新 Run 等待审批时可查看旧轮，但审批、拒绝和取消仍只作用于新 Run；历史审批完整只读；持久中断 Run 可继续；既有会话与工具回归通过。本批在此收口，不增加流式 token、跨会话 Memory、消息编辑、批量 transcript 后端接口或真实 DeepSeek 调用。
 
 ## 文件职责
 
@@ -33,23 +35,23 @@
 - Modify: `local-agent/tests/browser_workbench.cjs`
 - Modify: `local-agent/tests/browser_sessions.cjs`
 
-- [ ] **Step 1: 改写工作台断言，要求所有轮次同时存在**
+- [x] **Step 1: 改写工作台断言，要求所有轮次同时存在**
 
 在合成夹具中断言 `#session-history article[data-run-id]` 按旧到新排列，每张卡都有用户问题；至少三张卡加载后同时显示各自的 `data-role="assistant"` 最终回答。点击旧卡只改变 `aria-current` 和右栏内容，不能删除其他卡。
 
-- [ ] **Step 2: 固定执行态与检查态隔离**
+- [x] **Step 2: 固定执行态与检查态隔离**
 
 让新提交进入 `waiting_approval`，再点击旧卡；记录审批与取消请求 URL，断言它们仍指向新 Run。旧轮只能在右栏显示历史详情，不能把旧审批变成可执行操作。
 
-- [ ] **Step 3: 固定并发和分页行为**
+- [x] **Step 3: 固定并发和分页行为**
 
 分别延迟两条旧 Run 详情和第二页 Run 摘要，倒序释放；断言详情回到各自卡片、分页仍能完成。切换到另一个 Session 后再释放旧详情，断言旧内容不会进入新会话。加载更早记录时记录首个可见卡片位置，加载后位置偏差不超过 2px。
 
-- [ ] **Step 4: 固定持久会话行为**
+- [x] **Step 4: 固定持久会话行为**
 
 在 `browser_sessions.cjs` 中完成三轮后断言三个问题和回答同时存在；刷新后仍同时存在，且刷新不增加 Run POST。
 
-- [ ] **Step 5: 运行测试并确认按预期失败**
+- [x] **Step 5: 运行测试并确认按预期失败**
 
 Run:
 
@@ -68,7 +70,7 @@ Expected: 因当前 `#session-history` 仍是按钮列表、只显示一个 `#an
 - Modify: `local-agent/local_agent/static/app.js`
 - Modify: `local-agent/local_agent/static/app.css`
 
-- [ ] **Step 1: 建立 transcript 状态模型**
+- [x] **Step 1: 建立 transcript 状态模型**
 
 将 `activeId` 拆为：
 
@@ -80,27 +82,27 @@ const runDetails = new Map(), detailRequests = new Map();
 
 `viewGeneration` 只在切换 Session、切换 Agent或清空持久会话视图时递增。同一 Session 内打开卡片、加载详情和提交新 Run 不递增。
 
-- [ ] **Step 2: 渲染纵向时间线骨架**
+- [x] **Step 2: 渲染纵向时间线骨架**
 
 摘要按时间从旧到新生成 `article[data-run-id]`。每张卡始终显示用户问题、时间和文字状态；终态详情只从已验证的 `result.answer.answer` 渲染助手正文。失败、取消、中断和待确认显示明确文字状态，动态内容全部通过 `textContent` 写入。
 
-- [ ] **Step 3: 按需加载详情并更新原卡**
+- [x] **Step 3: 按需加载详情并更新原卡**
 
 实现以 `sessionId + runId + viewGeneration` 为键的 `loadRunDetail`。最新 Run 自动加载；卡片进入视口或被选择时加载；相同请求复用 Promise。迟到详情只在 Session 和视图代次仍匹配时进入 `runDetails`，然后更新对应卡和当前右栏。
 
-- [ ] **Step 4: 保留现有单 Run 控件**
+- [x] **Step 4: 保留现有单 Run 控件**
 
 现有审批、进度、失败和回答 DOM 继续服务 `liveRunId`，并挂入当前执行卡；历史卡使用轻量摘要。右栏引用、产物和执行记录由 `inspectedRunId` 的详情渲染。检查历史轮不得更改执行控件的目标。
 
-- [ ] **Step 5: 实现顶部续页锚点**
+- [x] **Step 5: 实现顶部续页锚点**
 
 加载前记录当前首个可见卡的 `getBoundingClientRect().top`，合并旧摘要并重渲染后用差值调整 `scrollTop`。Run ID 去重；续页请求继续受 Session 和 `viewGeneration` 约束。
 
-- [ ] **Step 6: 完成 CSS 与可访问状态**
+- [x] **Step 6: 完成 CSS 与可访问状态**
 
 把横向 pill 列表改为纵向 `article` 时间线；用户/Agent 标签可读，当前运行、失败和选中态同时使用文字或图标，不只依赖颜色。390、1024、1440px 下输入区可见、时间线内部滚动且页面无横向溢出。
 
-- [ ] **Step 7: 运行 Task 1 两个浏览器测试至通过**
+- [x] **Step 7: 运行 Task 1 两个浏览器测试至通过**
 
 Run:
 
@@ -117,15 +119,15 @@ NODE_PATH=/Users/wujingyu/.cache/codex-runtimes/codex-primary-runtime/dependenci
 - Modify: `local-agent/tests/browser_workbench.cjs`
 - Modify: `local-agent/tests/browser_sessions.cjs`
 
-- [ ] **Step 1: 让轮询只跟随 `liveRunId`**
+- [x] **Step 1: 让轮询只跟随 `liveRunId`**
 
 轮询、取消、审批和中断继续均捕获 `liveRunId + activeSessionId + viewGeneration`；Run 终态后更新相应卡、清空 live 状态，再刷新第一页摘要。查看旧轮只改变 `inspectedRunId/inspectionToken`。
 
-- [ ] **Step 2: 让检查器只跟随选择代次**
+- [x] **Step 2: 让检查器只跟随选择代次**
 
 点击卡片时增加 `inspectionToken`。右栏只接受仍匹配的选择结果；详情缓存仍可供其他卡片渲染，不因选择变化作废。
 
-- [ ] **Step 3: 跑竞态与审批断言**
+- [x] **Step 3: 跑竞态与审批断言**
 
 Run Task 2 Step 7。Expected: 乱序详情、分页、跨 Session、审批/取消目标和历史只读断言全部 PASS。
 
@@ -135,7 +137,7 @@ Run Task 2 Step 7。Expected: 乱序详情、分页、跨 Session、审批/取�
 - Modify: `local-agent/trial/directory-check.md`
 - Modify only if wording is stale: `local-agent/README.md`
 
-- [ ] **Step 1: 运行静态和受影响回归**
+- [x] **Step 1: 运行静态和受影响回归**
 
 ```zsh
 cd /Users/wujingyu/Desktop/AI/projects/dev-agent/local-agent
@@ -149,11 +151,11 @@ python3 -W error::ResourceWarning -m unittest discover -s tests
 git diff --check
 ```
 
-- [ ] **Step 2: 做一次页面级核对**
+- [x] **Step 2: 做一次页面级核对**
 
 在本地合成夹具或现有 8772 服务刷新页面，检查三轮可见、历史检查、当前审批、加载更早和 390/1024/1440px 布局。只使用本地数据，不调用 DeepSeek。
 
-- [ ] **Step 3: 更新唯一当前状态入口**
+- [x] **Step 3: 更新唯一当前状态入口**
 
 在 `trial/directory-check.md` 顶部记录：实现范围、关键证据、仍后置事项和本轮没有真实模型调用。README 仅在现有玩法说明与实际页面不一致时修改。
 
