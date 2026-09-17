@@ -1,5 +1,13 @@
 # 受限目录发现验收记录
 
+## 当前任务入口（2026-09-17：Superpowers Skill + 官方 MCP 真实试用）
+
+当前为**一个独立 Superpowers Skill 与一个外部官方 MCP 的安装、绑定和真实联合 Run 已核实**。默认持久 State Store 已安装 `receiving-code-review`，并通过受限本地 stdio 连接固定版本 `mcp-server-time==2026.8.18`，只开放 `get_current_time`；新 Agent `superpowers-time-demo` 为只读配置，未改变已有三个 Agent。
+
+最终 Run `807bb4dc7604455f987cf9687601087b` 为非模拟 DeepSeek `completed / ANSWER_VALIDATED`。模型实际读取 Skill，调用官方 MCP，首次直接读 README 被 `PATH_NOT_DISCOVERED` 拒绝后，收到错误、列出目录并重试成功；本 Run 的 5 个工具结果都按原调用 ID 进入后续上下文。MCP 返回 `2026-09-17T20:10:30+08:00 / Thursday`，位于独立主机 `20:10:23` 至 `20:10:35` 的记录窗口内；JSONL、SQLite、引用和最终语义 9/9 项核对通过。第一次答案格式失败的 Run 原样保留，没有冒充成功。
+
+本批达到停止条件，不再增加第二个 Skill/MCP 或更多真实样例。证据与限制见[真实验收记录](superpowers-mcp-live-check.md)，安装和实施过程见[实施计划 §0](../../docs/superpowers/plans/2026-09-16-superpowers-official-mcp-live-trial.md)。该结论只覆盖本地只读 Skill 与官方 Time MCP 的一次代表性闭环，不代表远程 MCP/OAuth、脚本型 Skill 或全部生态已经支持。
+
 ## 当前任务入口（2026-09-16：受管本地文档导入）
 
 当前为**受管文档导入 Task 1–11 已完成实现，固定离线与真实 DeepSeek AI 语义 Gate 均 PASS**。页面可将 `.md/.txt`、带文字层 PDF 和 DOCX 保存为 State Store 内的私有副本，在兼容的目录型助手中通过 `search_documents` 定位、`read_file` 读取，并把结果按原 ToolCall ID 交回下一轮；最终引用可回到原文本行、PDF 页、DOCX 段落或表格行。扫描件／纯图片 PDF 不支持 OCR。
