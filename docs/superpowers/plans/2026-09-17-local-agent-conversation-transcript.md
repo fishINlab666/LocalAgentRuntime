@@ -159,6 +159,6 @@ git diff --check
 
 在 `trial/directory-check.md` 顶部记录：实现范围、关键证据、仍后置事项和本轮没有真实模型调用。README 仅在现有玩法说明与实际页面不一致时修改。
 
-- [ ] **Step 4: 提交并推送当前分支**
+- [x] **Step 4: 提交并推送当前分支**
 
 只暂存本计划列出的文件与已经确认的设计文档；不纳入工作区既有未跟踪文件。提交前再次确认 `git status --short` 和 `git diff --cached --check`，然后推送 `LocalAgentRuntime`。
