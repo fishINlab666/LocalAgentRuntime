@@ -17,7 +17,7 @@ import uuid
 
 from .state_maintenance import StateMaintenanceGate
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 SUMMARY_MAX_BYTES = 6 * 1024
 
 _V1_SCHEMA = """
@@ -793,6 +793,9 @@ class SessionStore:
                         self._migrate_v2(connection)
                     if version < 3:
                         self._migrate_v3(connection)
+                    if version < 4:
+                        self._migrate_v4(connection)
+                    connection.commit()
                 except Exception as error:
                     if connection is not None and connection.in_transaction:
                         connection.rollback()
@@ -924,11 +927,84 @@ class SessionStore:
                    ON sessions(import_id) WHERE import_id IS NOT NULL"""
             )
             connection.execute("PRAGMA user_version=3")
-            connection.commit()
         except Exception:
             if connection.in_transaction:
                 connection.rollback()
             raise
+
+    @staticmethod
+    def _migrate_v4(connection: sqlite3.Connection) -> None:
+        if not connection.in_transaction:
+            connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """CREATE TABLE channel_bindings (
+                   id TEXT PRIMARY KEY CHECK(id='feishu'),
+                   app_id TEXT NOT NULL, tenant_key TEXT NOT NULL,
+                   open_id TEXT NOT NULL, chat_id TEXT NOT NULL,
+                   session_id TEXT NOT NULL REFERENCES sessions(id),
+                   agent_id TEXT NOT NULL,
+                   revision INTEGER NOT NULL CHECK(revision > 0),
+                   enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+                   created_at REAL NOT NULL, updated_at REAL NOT NULL
+               )"""
+        )
+        connection.execute(
+            """CREATE TABLE channel_events (
+                   id TEXT PRIMARY KEY,
+                   binding_id TEXT NOT NULL REFERENCES channel_bindings(id),
+                   binding_revision INTEGER NOT NULL,
+                   session_id TEXT NOT NULL REFERENCES sessions(id),
+                   agent_id TEXT NOT NULL,
+                   app_id TEXT NOT NULL, tenant_key TEXT NOT NULL,
+                   event_type TEXT NOT NULL, message_id TEXT NOT NULL,
+                   event_id TEXT NOT NULL, event_ids_json TEXT NOT NULL,
+                   fingerprint TEXT NOT NULL,
+                   binding_json TEXT NOT NULL, request_json TEXT NOT NULL,
+                   client_request_id TEXT NOT NULL,
+                   run_id TEXT,
+                   state TEXT NOT NULL CHECK(state IN (
+                       'received','dispatching','dispatched','rejected',
+                       'invalidated','interrupted_before_dispatch','handled','terminal'
+                   )),
+                   error_code TEXT, received_at REAL NOT NULL,
+                   updated_at REAL NOT NULL, dispatched_at REAL,
+                   UNIQUE(app_id,tenant_key,event_type,message_id),
+                   UNIQUE(app_id,tenant_key,event_type,event_id),
+                   UNIQUE(session_id,client_request_id),
+                   FOREIGN KEY(run_id,session_id) REFERENCES runs(id,session_id)
+               )"""
+        )
+        connection.execute(
+            "CREATE INDEX channel_events_state ON channel_events(state,received_at)"
+        )
+        connection.execute(
+            """CREATE TABLE channel_outbox (
+                   id TEXT PRIMARY KEY,
+                   event_id TEXT NOT NULL REFERENCES channel_events(id),
+                   run_id TEXT REFERENCES runs(id),
+                   kind TEXT NOT NULL, binding_json TEXT NOT NULL,
+                   body TEXT NOT NULL, uuid TEXT NOT NULL UNIQUE,
+                   state TEXT NOT NULL CHECK(state IN (
+                       'pending','sending','retry_wait','accepted',
+                       'unknown','failed','suppressed'
+                   )),
+                   attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+                   next_attempt_at REAL NOT NULL,
+                   message_id TEXT, error_code TEXT,
+                   created_at REAL NOT NULL, updated_at REAL NOT NULL,
+                   UNIQUE(event_id,kind)
+               )"""
+        )
+        connection.execute(
+            """CREATE UNIQUE INDEX channel_outbox_run_lifecycle
+               ON channel_outbox(run_id,kind)
+               WHERE run_id IS NOT NULL
+               AND kind IN ('running','waiting_approval','terminal')"""
+        )
+        connection.execute(
+            "CREATE INDEX channel_outbox_due ON channel_outbox(state,next_attempt_at)"
+        )
+        connection.execute("PRAGMA user_version=4")
 
     def _backup_before_migration(
         self, connection: sqlite3.Connection, version: int

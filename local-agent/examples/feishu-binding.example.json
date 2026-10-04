@@ -1,0 +1,9 @@
+{
+  "app_id": "cli_replace",
+  "tenant_key": "replace_tenant_key",
+  "open_id": "ou_replace",
+  "chat_id": "oc_replace",
+  "session_id": "replace_session_id",
+  "agent_id": "directory-qa",
+  "enabled": true
+}

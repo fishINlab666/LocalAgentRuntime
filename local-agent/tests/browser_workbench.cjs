@@ -23,6 +23,8 @@ const makeRun = number => ({id: `run-${String(number).padStart(2, '0')}`,
   output_file: null, state: 'completed', phase: 'ended', stop_reason: 'ANSWERED',
   started_at: 100 - number, finished_at: 101 - number});
 const runs = Array.from({length: 22}, (_, index) => makeRun(index + 1));
+const generatedArtifact = {id: 'artifact-generated', path: 'generated.md', bytes: 42,
+  sha256: 'a'.repeat(64), receipt: {operation: 'created'}};
 const requests = [];
 let delayNextRunPage = false, releaseRunPage;
 let delayNextSessionPage = false, releaseSessionPage;
@@ -31,6 +33,7 @@ const sessionPageGate = new Promise(resolve => { releaseSessionPage = resolve; }
 const runDetailGates = new Map();
 let releaseRun03 = () => {}, releaseRun04 = () => {};
 let failRun05Once = false;
+let approvalPollGate = null;
 
 function gateRunDetail(runId) {
   let release, markRequested;
@@ -38,6 +41,13 @@ function gateRunDetail(runId) {
   const requested = new Promise(resolve => { markRequested = resolve; });
   runDetailGates.set(runId, {waiting, markRequested});
   return {release, requested};
+}
+
+function gateApprovalPoll() {
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  approvalPollGate = {waiting, release};
+  return approvalPollGate;
 }
 
 async function assertComposerVisible(page, width, height) {
@@ -75,7 +85,7 @@ async function assertComposerVisible(page, width, height) {
       try { body = request.postDataJSON(); } catch (_) {}
     }
     requests.push({method: request.method(), path, cursor: url.searchParams.get('cursor'),
-      archived: url.searchParams.get('archived'), body});
+      archived: url.searchParams.get('archived'), body, headers: request.headers()});
     if (['/', '/app.js', '/app.css'].includes(path)) {
       const file = path === '/' ? 'index.html' : path.slice(1);
       return route.fulfill({status: 200,
@@ -129,8 +139,9 @@ async function assertComposerVisible(page, width, height) {
     if (approvalMatch && request.method() === 'POST') {
       return send({run: {id: approvalMatch[2], session_id: approvalMatch[1],
         question: '请生成一份报告', task_type: 'files', output_file: 'generated.md',
-        state: 'completed', phase: 'ended', revision: 2, events: [], approvals: [], artifacts: [],
-        result: {stop_reason: 'ANSWERED', trace_path: 'trace-approval-run', artifacts: [],
+        state: 'completed', phase: 'ended', revision: 2, events: [], approvals: [],
+        artifacts: [generatedArtifact],
+        result: {stop_reason: 'ANSWERED', trace_path: 'trace-approval-run', artifacts: [generatedArtifact],
           answer: {status: 'answered', answer: '合成报告已生成', citations: []}}}});
     }
     const cancelMatch = path.match(/^\/api\/sessions\/([^/]+)\/runs\/(approval-run)\/cancel$/);
@@ -139,6 +150,12 @@ async function assertComposerVisible(page, width, height) {
         question: '请生成一份报告', task_type: 'files', output_file: 'generated.md',
         state: 'cancelled', phase: 'ended', revision: 2, events: [], approvals: [], artifacts: [],
         result: {stop_reason: 'CANCELLED', trace_path: 'trace-approval-run', artifacts: [], answer: null}}});
+    }
+    const artifactMatch = path.match(
+      /^\/api\/sessions\/([^/]+)\/runs\/(approval-run)\/artifacts\/(artifact-generated)\/download$/);
+    if (artifactMatch) {
+      return route.fulfill({status: 200, contentType: 'text/plain; charset=utf-8',
+        body: '<script>window.__artifactInjected = true</script>\n# 合成报告'});
     }
     const runMatch = path.match(/^\/api\/sessions\/([^/]+)\/runs\/([^/]+)$/);
     if (runMatch) {
@@ -150,6 +167,9 @@ async function assertComposerVisible(page, width, height) {
             answer: {status: 'answered', answer: '中断任务已继续完成', citations: []}}}});
       }
       if (runMatch[2] === 'approval-run') {
+        if (approvalPollGate) {
+          const gate = approvalPollGate; approvalPollGate = null; await gate.waiting;
+        }
         return send({run: {id: 'approval-run', session_id: runMatch[1],
           question: '请生成一份报告', task_type: 'files', output_file: 'generated.md',
           state: 'waiting_approval', phase: 'approval', revision: 1,
@@ -263,7 +283,7 @@ async function assertComposerVisible(page, width, height) {
     assert.match(await page.locator('#active-capabilities').innerText(), /read_file/);
     assert.equal(await transcriptCards.last().getAttribute('aria-current'), 'true');
     const inspectedCard = page.locator('#session-history article[data-run-id="run-02"]');
-    await inspectedCard.click();
+    await inspectedCard.locator('.run-inspect').click();
     await page.waitForFunction(() => document.querySelector(
       '#session-history article[data-run-id="run-02"]')?.textContent.includes('回答 第 2 轮问题'));
     assert.equal(await inspectedCard.getAttribute('aria-current'), 'true');
@@ -273,7 +293,10 @@ async function assertComposerVisible(page, width, height) {
         Boolean(element.closest('[data-region="inspector"]'))), true, `${id} must live in inspector`);
     }
     assert.equal(await page.locator('#trace').isVisible(), true);
-    await page.locator('#session-select').selectOption('');
+    await page.locator('#session-select').evaluate(element => {
+      element.value = '';
+      element.dispatchEvent(new Event('change', {bubbles: true}));
+    });
     await page.waitForFunction(() => document.querySelector('#output').hidden);
     assert.equal(await page.locator('#trace').isVisible(), false);
     await page.locator('#file').evaluate(element => { element.value = ''; });
@@ -287,6 +310,8 @@ async function assertComposerVisible(page, width, height) {
     await page.locator('.composer-settings summary').click();
     await page.evaluate(() => {
       window.__nativeIntersectionObserver = window.IntersectionObserver;
+      if (detailObserver) detailObserver.disconnect();
+      detailObserver = null;
       window.IntersectionObserver = class {
         observe() {}
         unobserve() {}
@@ -295,14 +320,18 @@ async function assertComposerVisible(page, width, height) {
     });
     const run03Gate = gateRunDetail('run-03'), run04Gate = gateRunDetail('run-04');
     releaseRun03 = run03Gate.release; releaseRun04 = run04Gate.release;
-    await page.locator('#session-select').selectOption(sessions[0].id);
+    await page.locator('[data-session-id="session-01"]').click();
     await page.waitForFunction(() => document.querySelectorAll(
       '#session-history article[data-run-id]').length === 20);
     const run03Card = page.locator('#session-history article[data-run-id="run-03"]');
     const run04Card = page.locator('#session-history article[data-run-id="run-04"]');
-    assert.equal(await run04Card.getAttribute('role'), 'button');
-    await run03Card.click();
-    await run04Card.click();
+    assert.equal(await run04Card.getAttribute('role'), null,
+      'the run article must stay semantic content rather than impersonating a button');
+    assert.equal(await run04Card.getAttribute('tabindex'), null);
+    assert.equal(await run04Card.locator('.run-inspect').count(), 1,
+      'each run must expose a dedicated inspect button');
+    await run03Card.locator('.run-inspect').click();
+    await run04Card.locator('.run-inspect').click();
     await Promise.all([run03Gate.requested, run04Gate.requested]);
     releaseRun04();
     await page.waitForFunction(() => document.querySelector(
@@ -315,13 +344,15 @@ async function assertComposerVisible(page, width, height) {
     assert.equal(await run04Card.getAttribute('aria-current'), 'true',
       'an earlier detail response must not replace the last inspected run');
     assert.equal(await page.locator('#trace-path').textContent(), 'trace-run-04');
+    const run05RequestsBefore = requests.filter(item => item.method === 'GET'
+      && item.path === '/api/sessions/session-01/runs/run-05').length;
     failRun05Once = true;
     const run05Card = page.locator('#session-history article[data-run-id="run-05"]');
-    await run05Card.click();
+    await run05Card.locator('.run-inspect').click();
     await run05Card.locator('.run-detail-retry').waitFor({state: 'visible'});
     assert.match(await run05Card.innerText(), /暂时无法载入这轮/);
     assert.equal(await transcriptCards.count(), 20, 'one failed detail must keep the rest of the transcript');
-    await run04Card.focus();
+    await run04Card.locator('.run-inspect').focus();
     await page.keyboard.press('Enter');
     assert.equal(await run04Card.getAttribute('aria-current'), 'true',
       'Enter on a run card must inspect that run');
@@ -337,10 +368,10 @@ async function assertComposerVisible(page, width, height) {
     assert.equal(await run04Card.getAttribute('aria-current'), 'true',
       'keyboard retry inside a card must not inspect that card');
     assert.equal(requests.filter(item => item.method === 'GET'
-      && item.path === '/api/sessions/session-01/runs/run-05').length, 2,
+      && item.path === '/api/sessions/session-01/runs/run-05').length - run05RequestsBefore, 2,
     'an initial failure plus repeated retry input must issue only one retry GET');
     runs.find(item => item.id === 'run-06').state = 'interrupted';
-    await page.locator('#session-history article[data-run-id="run-06"]').click();
+    await page.locator('#session-history article[data-run-id="run-06"] .run-inspect').click();
     await page.locator('#continue-run').waitFor({state: 'visible'});
     assert.match(await page.locator(
       '#session-history article[data-run-id="run-06"]').innerText(), /已中断/);
@@ -351,7 +382,7 @@ async function assertComposerVisible(page, width, height) {
       && item.path === '/api/sessions/session-01/continue');
     assert.equal(continueRequest?.body?.run_id, 'run-06',
       'continue must post the inspected interrupted run as its parent');
-    await run04Card.click();
+    await run04Card.locator('.run-inspect').click();
     assert.equal(await page.locator('#continue-run').isVisible(), false,
       'continuation must follow the inspected interrupted run only');
     await page.evaluate(() => {
@@ -387,29 +418,33 @@ async function assertComposerVisible(page, width, height) {
 
     await page.setViewportSize({width: 390, height: 844});
     assert.equal(await page.locator('.composer-settings').evaluate(element => element.open), false);
+    await page.waitForFunction(() => document.querySelector('#sidebar-panel')?.inert
+      && document.querySelector('#inspector-panel')?.inert);
     assert.equal(await page.locator('#sidebar-panel').evaluate(element => element.inert), true);
     assert.equal(await page.locator('#inspector-panel').evaluate(element => element.inert), true);
-    await page.locator('#sidebar-toggle').focus();
+    await page.locator('#mobile-agent-switch').focus();
     await page.keyboard.press('Tab');
-    assert.equal(await page.evaluate(() => document.activeElement.id), 'inspector-toggle',
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'work-rail-toggle',
       'Tab must skip both hidden drawers');
     assert(Number.parseFloat(await page.locator('.transcript-answer').first().evaluate(element =>
       getComputedStyle(element).fontSize)) >= 16);
-    for (const selector of ['.suggestions button', '#session-history article[data-run-id]']) {
-      assert((await page.locator(selector).first().boundingBox()).height >= 44,
+    for (const selector of ['#mobile-agent-switch', '#work-rail-toggle',
+      '#session-history .run-inspect', '#start']) {
+      const box = await page.locator(selector).first().boundingBox();
+      assert(box && box.height >= 44,
         `${selector} must remain a 44px touch target`);
     }
-    await page.locator('#sidebar-toggle').click();
+    await page.locator('#mobile-agent-switch').click();
     assert.equal(await page.locator('body').getAttribute('data-drawer'), 'sidebar');
-    assert.equal(await page.locator('#sidebar-toggle').getAttribute('aria-expanded'), 'true');
+    assert.equal(await page.locator('#mobile-agent-switch').getAttribute('aria-expanded'), 'true');
     assert.equal(await page.locator('#sidebar-panel').evaluate(element => element.inert), false);
     assert.equal(await page.locator('#inspector-panel').evaluate(element => element.inert), true);
     assert.equal(await page.locator('#workspace-backdrop').isVisible(), true);
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('body').getAttribute('data-drawer'), null);
-    assert.equal(await page.locator('#sidebar-toggle').getAttribute('aria-expanded'), 'false');
+    assert.equal(await page.locator('#mobile-agent-switch').getAttribute('aria-expanded'), 'false');
     assert.equal(await page.locator('#sidebar-panel').evaluate(element => element.inert), true);
-    assert.equal(await page.evaluate(() => document.activeElement.id), 'sidebar-toggle');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'mobile-agent-switch');
     await page.locator('#inspector-toggle').click();
     assert.equal(await page.locator('body').getAttribute('data-drawer'), 'inspector');
     assert.equal(await page.locator('#inspector-panel').evaluate(element => element.inert), false);
@@ -421,28 +456,93 @@ async function assertComposerVisible(page, width, height) {
     await page.locator('.composer-settings summary').click();
     await page.locator('#output-file').fill('generated.md');
     await page.locator('#question').fill('请生成一份报告');
+    assert.equal(await page.locator('#session-list .session-attention').count(), 0,
+      'durable session summaries alone must not invent an attention marker');
+    const approvalGate = gateApprovalPoll();
     await page.locator('#start').click();
+    await page.waitForFunction(() => document.querySelector(
+      '#session-list [data-session-id="session-01"] .session-attention')?.textContent === '运行中',
+    null, {timeout: 5000});
+    approvalGate.release();
     await page.locator('#approval').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#approval').getAttribute('data-decision-mode'), 'live');
+    assert.equal(await page.locator(
+      '#session-list [data-session-id="session-01"] .session-attention').innerText(), '待确认');
     assert.equal(await page.locator('#thread-panel').getAttribute('aria-busy'), 'true');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'approval-title');
     assert((await page.locator('#approval-allow').boundingBox()).height >= 44);
     const oldRunCard = page.locator('#session-history article[data-run-id="run-02"]');
-    await oldRunCard.click();
+    await oldRunCard.locator('.run-inspect').click();
     await page.waitForFunction(() => document.querySelector(
       '#session-history article[data-run-id="run-02"]')?.getAttribute('aria-current') === 'true');
     assert.equal(await page.locator('#approval').isVisible(), true,
       'inspecting an old run must keep the live approval visible');
+    assert.equal(await page.locator(
+      '#session-list [data-session-id="session-01"] .session-attention').innerText(), '待确认',
+    'inspecting an old run must not move or clear the live session marker');
     assert.equal(await page.locator('#approval-actions').isVisible(), true);
     await page.locator('#approval-allow').click();
     await page.waitForFunction(() => document.querySelector('#thread-panel')?.getAttribute('aria-busy') === 'false');
+    assert.equal(await page.locator('#session-list .session-attention').count(), 0,
+      'terminal approval result must clear the session marker');
     assert(requests.some(item => item.method === 'POST'
       && item.path === '/api/sessions/session-01/runs/approval-run/approvals/approval-1'),
     'approval must remain bound to the live approval-run while an old run is inspected');
+    const completedRun = page.locator('#session-history article[data-run-id="approval-run"]');
+    const inlineArtifact = completedRun.locator('.run-artifacts .artifact-card');
+    await inlineArtifact.waitFor({state: 'visible'});
+    assert.match(await inlineArtifact.innerText(), /generated\.md.*已新建/s,
+      'the generated file must be delivered under the answer that created it');
+    const previewButton = inlineArtifact.locator('.artifact-preview');
+    assert.equal(await previewButton.count(), 1);
+    assert.equal(await inlineArtifact.locator('.artifact-download').count(), 1);
+    await previewButton.click();
+    await page.locator('#artifact-preview-dialog').waitFor({state: 'visible'});
+    await page.waitForFunction(() => document.querySelector('#artifact-preview-content')
+      ?.textContent.includes('<script>'), null, {timeout: 3000});
+    assert.match(await page.locator('#artifact-preview-content').textContent(), /<script>/);
+    assert.equal(await page.evaluate(() => window.__artifactInjected), undefined,
+      'artifact preview must render script-looking content as inert text');
+    const screenshotDir = process.env.WORKBENCH_SCREENSHOT_DIR;
+    if (screenshotDir) fs.mkdirSync(screenshotDir, {recursive: true});
+    for (const [width, height] of [[390, 844], [1024, 768], [1440, 900]]) {
+      await page.setViewportSize({width, height});
+      const previewGeometry = await page.locator('#artifact-preview-dialog').evaluate(element => {
+        const box = element.getBoundingClientRect();
+        return {left: box.left, top: box.top, right: box.right, bottom: box.bottom,
+          viewportWidth: innerWidth, viewportHeight: innerHeight,
+          pageWidth: document.documentElement.scrollWidth};
+      });
+      assert(previewGeometry.left >= 0 && previewGeometry.right <= previewGeometry.viewportWidth + 1,
+        `preview must fit horizontally at ${width}x${height}: ${JSON.stringify(previewGeometry)}`);
+      assert(previewGeometry.top >= 0 && previewGeometry.bottom <= previewGeometry.viewportHeight + 1,
+        `preview must fit vertically at ${width}x${height}: ${JSON.stringify(previewGeometry)}`);
+      assert(previewGeometry.pageWidth <= previewGeometry.viewportWidth + 1,
+        `page must not overflow horizontally at ${width}x${height}`);
+      if (screenshotDir) await page.screenshot({
+        path: `${screenshotDir}/workbench-artifact-preview-${width}.png`, fullPage: false});
+    }
+    await page.setViewportSize({width: 390, height: 844});
+    await page.locator('#artifact-preview-close').click();
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('artifact-preview')), true,
+      'closing preview must restore focus to its trigger');
+    await inlineArtifact.locator('.artifact-download').click();
+    const artifactRequest = requests.find(item => item.method === 'GET'
+      && item.path.endsWith('/approval-run/artifacts/artifact-generated/download'));
+    assert.equal(artifactRequest?.headers['x-session-token'], '__SESSION_TOKEN__');
+    assert.equal(artifactRequest?.headers['x-agent-id'], 'directory-qa');
+    await completedRun.locator('.run-inspect').click();
+    await page.locator('#inspector-toggle').click();
+    await page.waitForFunction(() => document.body.dataset.drawer === 'inspector');
+    await page.locator('#artifact-list .artifact-card').waitFor({state: 'visible'});
+    await page.locator('#inspector-close').click();
     await page.locator('#start').click();
     await page.locator('#approval').waitFor({state: 'visible'});
-    await oldRunCard.click();
+    await oldRunCard.locator('.run-inspect').click();
     await page.locator('#cancel').click();
     await page.waitForFunction(() => document.querySelector('#thread-panel')?.getAttribute('aria-busy') === 'false');
+    assert.equal(await page.locator('#session-list .session-attention').count(), 0,
+      'cancelled run must clear the session marker');
     assert(requests.some(item => item.method === 'POST'
       && item.path === '/api/sessions/session-01/runs/approval-run/cancel'),
     'cancel must remain bound to the live approval-run while an old run is inspected');

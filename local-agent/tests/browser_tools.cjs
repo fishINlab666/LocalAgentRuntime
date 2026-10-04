@@ -2,10 +2,11 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+let focusedElement = null;
 
 class Element {
   constructor(tagName = 'div') { this.tagName = tagName.toUpperCase(); this.children = []; this.listeners = {}; this.attributes = {}; this.dataset = {};
-    this.value = ''; this.hidden = false; this.inert = false;
+    this.value = ''; this.hidden = false; this.inert = false; this.open = false; this.disabled = false;
     this.classList = {toggle() {}}; }
   get firstElementChild() { return this.children[0] || null; }
   set textContent(value) { this.text = String(value); this.children = []; }
@@ -14,10 +15,15 @@ class Element {
   replaceChildren(...children) { this.text = ''; this.children = children; }
   addEventListener(name, handler) { this.listeners[name] = handler; }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name] ?? null; }
+  hasAttribute(name) { return Object.hasOwn(this.attributes, name); }
   removeAttribute(name) { delete this.attributes[name]; }
   querySelectorAll() { return []; }
-  focus() {}
+  contains(node) { return node === this || this.children.some(child => child?.contains?.(node)); }
+  focus() { focusedElement = this; }
   click() { if (this.listeners.click) return this.listeners.click(); }
+  showModal() { this.open = true; }
+  close() { this.open = false; }
   remove() {}
 }
 
@@ -33,6 +39,8 @@ const config = {workspace: '/synthetic', ready: true, provider: {simulated: true
 const context = vm.createContext({
   document: {
     body,
+    get activeElement() { return focusedElement; },
+    contains: element => Object.values(elements).includes(element) || body.contains(element),
     getElementById: id => elements[id],
     querySelector: selector => selector === 'meta[name="session-token"]'
       ? {content: 'synthetic-session'} : selector === '.composer-settings' ? composerSettings : null,
@@ -41,6 +49,9 @@ const context = vm.createContext({
     addEventListener() {},
   },
   AbortController,
+  Blob,
+  TextDecoder,
+  TextEncoder,
   setTimeout: (fn, delay) => { timers.set(++nextTimer, {fn, delay}); return nextTimer; },
   clearTimeout: id => timers.delete(id),
   requestAnimationFrame: callback => callback(),
@@ -57,6 +68,7 @@ const context = vm.createContext({
   },
 });
 const flush = () => new Promise(resolve => setImmediate(resolve));
+const descendants = element => element.children.flatMap(child => [child, ...descendants(child)]);
 const snapshot = (id, extra = {}) => ({id, revision: 1, mode: 'single', file: 'note.md', question: '生成摘要',
   output_file: 'report.md', result: null, state: 'waiting_approval', cancelling: false, events: [], ...extra});
 const approval = {id: 'approval-1', run_id: 'run-1', call_id: 'call-1', name: 'write_file',
@@ -67,20 +79,152 @@ const receipt = {path: 'report.md', bytes: 36, operation: 'created', sha256: 'a'
 const result = {answer: null, artifacts: [receipt], stop_reason: 'CANCELLED'};
 
 (async () => {
-  for (const id of ['output-file', 'approval', 'approval-content', 'approval-allow', 'approval-deny', 'artifacts']) {
+  for (const id of ['output-file', 'approval', 'approval-content', 'approval-allow', 'approval-deny',
+    'artifacts', 'artifact-preview-dialog', 'artifact-preview-title', 'artifact-preview-meta',
+    'artifact-preview-status', 'artifact-preview-error', 'artifact-preview-content',
+    'artifact-preview-download', 'artifact-preview-close']) {
     assert(elements[id], `Missing tool page element: ${id}`);
   }
   vm.runInContext(source, context);
   await flush();
+
+  const receiptCases = [
+    ['queued', '已接收', 'neutral'],
+    ['running', '正在处理', 'info'],
+    ['waiting_approval', '需要你确认', 'warning'],
+    ['unable', '未完成', 'danger'],
+    ['validation_failed', '校验失败', 'danger'],
+    ['timed_out', '已超时', 'danger'],
+    ['cancelled', '已取消', 'neutral'],
+    ['interrupted', '已中断', 'warning'],
+    ['failed', '失败', 'danger'],
+  ];
+  for (const [state, label, tone] of receiptCases) {
+    const summary = {id: `receipt-${state}`, state, question: '核对状态'};
+    const detail = state === 'queued' ? null : {...summary, events: [],
+      result: ['running', 'waiting_approval'].includes(state) ? null
+        : {answer: null, artifacts: [], stop_reason: state.toUpperCase()}};
+    const view = context.projectRunReceipt(summary, detail, {
+      liveRunId: state === 'running' ? summary.id : null,
+      continuableRunId: state === 'interrupted' ? summary.id : null,
+    });
+    assert.equal(view.label, label, `${state} receipt label`);
+    assert.equal(view.tone, tone, `${state} receipt tone`);
+    if (!detail) {
+      assert.equal(view.citationCount, null, 'summary-only receipt cannot invent citation count');
+      assert.equal(view.artifactCount, null, 'summary-only receipt cannot invent artifact count');
+      assert.equal(view.stepCount, null, 'summary-only receipt cannot invent step count');
+    }
+  }
+  const completedSummary = {id: 'receipt-completed', state: 'completed', question: '完成状态'};
+  const completed = context.projectRunReceipt(completedSummary, {...completedSummary, events: [{event: 'run.ended'}],
+    result: {answer: {status: 'answered', answer: '完成', citations: [{quote: '依据'}]},
+      artifacts: [{id: 'artifact-1'}], stop_reason: 'ANSWERED'}}, {});
+  assert.equal(completed.label, '已完成');
+  assert.equal(completed.tone, 'success');
+  assert.equal(completed.citationCount, 1);
+  assert.equal(completed.artifactCount, 1);
+  assert.equal(completed.stepCount, 1);
+  const emptyCompleted = context.projectRunReceipt(completedSummary, {...completedSummary, events: [],
+    result: {answer: null, artifacts: [], stop_reason: 'INVALID_ANSWER'}}, {});
+  assert.equal(emptyCompleted.label, '未完成', 'completed without a validated answer is not success');
+  assert.equal(emptyCompleted.tone, 'danger');
+
+  for (const [state, label, tone] of [
+    ['queued', '运行中', 'info'], ['running', '运行中', 'info'],
+    ['waiting_approval', '待确认', 'warning'],
+  ]) {
+    const attention = context.projectSessionAttention('session-1', {
+      id: 'live-run', session_id: 'session-1', state});
+    assert.equal(attention.label, label, `${state} session attention label`);
+    assert.equal(attention.tone, tone, `${state} session attention tone`);
+  }
+  assert.equal(context.projectSessionAttention('session-2', {
+    id: 'live-run', session_id: 'session-1', state: 'running'}), null,
+  'another session cannot inherit the live marker');
+  assert.equal(context.projectSessionAttention('session-1', {
+    id: 'live-run', session_id: 'session-1', state: 'completed'}), null,
+  'terminal state must clear the live marker');
+
+  const fileAgent = {id: 'file-qa', name: '文件助手', enabled: true, revision: 'file-r1',
+    model: {provider: 'deepseek', name: 'deepseek-file'}};
+  const directoryAgent = {id: 'directory-qa', name: '目录助手', enabled: true,
+    revision: 'directory-r1', model: {provider: 'deepseek', name: 'deepseek-directory'}};
+  const disabledAgent = {id: 'disabled', name: '停用助手', enabled: false,
+    model: {provider: 'deepseek', name: 'deepseek-disabled'}};
+  const agentWorkspace = context.projectAgentWorkspace(
+    [fileAgent, directoryAgent, disabledAgent],
+    [
+      {id: 'file-session', agent_id: 'file-qa'},
+      {id: 'directory-session', agent_id: 'directory-qa'},
+    ],
+    'file-qa',
+  );
+  assert.equal(agentWorkspace.agents.map(item => item.id).join(','), 'file-qa,directory-qa',
+    'daily agent dock must omit disabled agents');
+  assert.equal(agentWorkspace.sessions.map(item => item.id).join(','), 'file-session',
+    'session pane must only show the selected agent sessions');
+
+  const frozenModel = context.projectModelStatus(
+    {ready: true, provider: {provider: 'deepseek', model: 'runtime-model'}},
+    directoryAgent,
+    {agent_revision: 'file-r1', agent_snapshot: fileAgent},
+    {state: 'waiting_approval'},
+  );
+  assert.equal(frozenModel.model, 'deepseek-file',
+    'durable session must display its frozen agent model');
+  assert.equal(frozenModel.source, 'session_snapshot');
+  assert.equal(frozenModel.status, '等待确认');
+  for (const [liveState, expected] of [
+    [null, '就绪'], ['queued', '排队中'], ['running', '调用中'],
+    ['waiting_approval', '等待确认'],
+  ]) {
+    const statusView = context.projectModelStatus(
+      {ready: true, provider: {provider: 'deepseek'}}, fileAgent, null,
+      liveState ? {state: liveState} : null);
+    assert.equal(statusView.status, expected, `${liveState || 'idle'} model status`);
+    assert.equal(statusView.model, 'deepseek-file');
+    assert.equal(statusView.source, 'agent');
+  }
+  assert.equal(context.projectModelStatus(
+    {ready: false, provider: null, error: 'CONFIG_MISSING'}, fileAgent, null,
+    {state: 'running'}).status, '不可用', 'provider failure must outrank live run wording');
+
+  const workCompleted = {id: 'completed-run', session_id: 'session-1', state: 'completed',
+    question: '生成报告', finished_at: 20};
+  const otherCompleted = {id: 'other-run', session_id: 'session-2', state: 'completed',
+    question: '其他会话', finished_at: 30};
+  const workRail = context.projectWorkRail('session-1',
+    {id: 'live-run', session_id: 'session-1', state: 'waiting_approval', question: '写入报告'},
+    [otherCompleted, workCompleted],
+    new Map([['completed-run', {status: 'ready', run: {...workCompleted,
+      result: {artifacts: [{id: 'artifact-1', path: 'report.md'}, {path: 'transient.md'}]}}}]]));
+  assert.equal(workRail.waiting.length, 1);
+  assert.equal(workRail.running.length, 0);
+  assert.equal(workRail.completed[0].id, 'completed-run');
+  assert.equal(workRail.completed[0].artifacts.length, 1,
+    'work rail must only expose persisted artifacts');
+  assert.equal(context.projectWorkRail('session-2',
+    {id: 'foreign-live', session_id: 'session-1', state: 'running'}, [], new Map()).running.length, 0,
+  'another session live run must not leak into the work rail');
+
   const job = snapshot('run-1', {pending_approval: approval});
   context.prepareOutput(job); context.render(job);
+  assert.equal(typeof context.renderDecisionCard, 'function',
+    'approval rendering must have one decision-card module interface');
   assert.equal(elements.approval.hidden, false);
+  assert.equal(elements.approval.dataset.decisionMode, 'live');
   assert.equal(elements['run-status'].textContent, '等待确认');
   assert.equal(elements['approval-content'].textContent, approval.content, 'Full body stays plain text');
   assert.match(elements['approval-action'].textContent, /新建 report\.md/);
   assert.match(elements['approval-intent'].textContent, /保存摘要/);
   assert.match(elements['approval-details'].textContent, /report\.md.*36.*新建.*内置.*中风险/);
   assert.equal(elements['output-file'].disabled, true);
+
+  context.renderApprovalHistory({approvals: [{id: 'history-approval', decision: 'allow',
+    preview: {...approval, operation: 'created'}}]});
+  assert.equal(elements['approval-history'].dataset.decisionMode, 'historical');
+  assert.match(elements['approval-history-status'].textContent, /仅供查看/);
 
   let release;
   respond = async () => {
@@ -102,16 +246,33 @@ const result = {answer: null, artifacts: [receipt], stop_reason: 'CANCELLED'};
   assert.equal(elements.artifacts.hidden, false, 'Created file remains visible after cancellation');
   assert.match(elements['artifact-list'].textContent, /report\.md.*36/);
   assert.match(elements['artifact-note'].textContent, /后续步骤已取消/);
+  assert.equal(descendants(elements['artifact-list'].children[0])
+    .filter(element => element.tagName === 'BUTTON').length, 0,
+  'transient receipt without durable artifact ID must not expose actions');
 
   vm.runInContext("activeSessionId = 'session-1'; activeSession = {agent_id: 'directory-qa'}", context);
   const downloadable = {...receipt, id: 'artifact-1'};
-  respond = async () => ({ok: true, blob: async () => ({kind: 'artifact-blob'})});
+  respond = async () => ({ok: true, blob: async () => new Blob([approval.content], {type: 'text/plain'})});
   const downloadJob = snapshot('download-run', {state: 'completed', result: {...result,
     artifacts: [downloadable]}});
   context.prepareOutput(downloadJob); context.render(downloadJob);
   const artifactCard = elements['artifact-list'].children[0];
-  const downloadButton = artifactCard.children.find(child => child.tagName === 'BUTTON');
+  const artifactButtons = descendants(artifactCard).filter(child => child.tagName === 'BUTTON');
+  const previewButton = artifactButtons.find(button => button.textContent === '预览');
+  const downloadButton = artifactButtons.find(button => button.textContent === '下载文件');
+  assert(previewButton, 'Persisted text artifact must expose a preview button');
   assert(downloadButton, 'Persisted session artifact must expose an authenticated download button');
+  await previewButton.listeners.click();
+  assert.equal(elements['artifact-preview-dialog'].open, true);
+  assert.equal(elements['artifact-preview-content'].textContent, approval.content,
+    'preview body stays literal plain text');
+  assert.match(elements['artifact-preview-meta'].textContent, /完整性校验通过/);
+  assert.equal(context.injected, undefined, 'script-looking preview text must not execute');
+  const previewRequest = requests.at(-1);
+  assert.equal(previewRequest.path,
+    '/api/sessions/session-1/runs/download-run/artifacts/artifact-1/download');
+  assert.equal(previewRequest.headers['X-Session-Token'], 'synthetic-session');
+  assert.equal(previewRequest.headers['X-Agent-ID'], 'directory-qa');
   await downloadButton.listeners.click();
   const downloadRequest = requests.at(-1);
   assert.equal(downloadRequest.path,
@@ -121,6 +282,38 @@ const result = {answer: null, artifacts: [receipt], stop_reason: 'CANCELLED'};
   assert.equal(downloadRequest.headers['X-Agent-ID'], 'directory-qa');
   assert.equal(objectUrls.length, 1);
   assert.deepEqual(revokedUrls, ['blob:artifact']);
+
+  const binaryArtifact = {...downloadable, id: 'artifact-bin', path: 'report.bin'};
+  context.renderArtifacts(snapshot('binary-run', {state: 'completed', result: {...result,
+    artifacts: [binaryArtifact]}}));
+  const binaryButtons = descendants(elements['artifact-list'].children[0])
+    .filter(child => child.tagName === 'BUTTON');
+  assert.equal(binaryButtons.some(button => button.textContent === '预览'), false,
+    'unknown artifact type must keep download but not guess a preview');
+  assert.equal(binaryButtons.some(button => button.textContent === '下载文件'), true);
+
+  respond = async () => ({ok: true, blob: async () => new Blob([
+    Uint8Array.from([0xc3, 0x28])], {type: 'text/plain'})});
+  context.renderArtifacts(downloadJob);
+  const invalidPreview = descendants(elements['artifact-list'].children[0])
+    .find(button => button.tagName === 'BUTTON' && button.textContent === '预览');
+  await invalidPreview.listeners.click();
+  assert.match(elements['artifact-preview-error'].textContent, /有效 UTF-8/);
+  assert.equal(elements['artifact-preview-content'].textContent, '');
+
+  let releasePreview;
+  respond = async () => {
+    await new Promise(resolve => { releasePreview = resolve; });
+    return {ok: true, blob: async () => new Blob(['迟到正文'], {type: 'text/plain'})};
+  };
+  const latePreview = invalidPreview.listeners.click();
+  assert.match(elements['artifact-preview-meta'].textContent, /等待服务端完整性校验/);
+  assert.doesNotMatch(elements['artifact-preview-meta'].textContent, /校验通过/,
+    'loading state must not claim that integrity verification already passed');
+  vm.runInContext('viewGeneration += 1', context);
+  releasePreview(); await latePreview;
+  assert.notEqual(elements['artifact-preview-content'].textContent, '迟到正文',
+    'a response from an old view generation must not enter the current preview');
 
   const normalized = context.normalizedSessionRun({id: 'stored-run', state: 'completed',
     question: 'q', task_type: 'files', result: {answer: null, artifacts: [receipt]},

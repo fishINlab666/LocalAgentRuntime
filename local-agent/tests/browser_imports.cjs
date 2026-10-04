@@ -310,8 +310,8 @@ async function captureComposerKeys(page) {
 
     for (const width of [320, 375, 768, 1024, 1440]) {
       await page.setViewportSize({width, height: 812});
-      if (width < 768 && await page.locator('body').getAttribute('data-drawer') !== 'sidebar') {
-        await page.locator('#sidebar-toggle').click();
+      if (width < 1200 && await page.locator('body').getAttribute('data-drawer') !== 'sidebar') {
+        await page.locator(width < 768 ? '#mobile-agent-switch' : '#sidebar-toggle').click();
       }
       await openImport(page);
       const box = await page.locator('#import-start').boundingBox();

@@ -1,4 +1,20 @@
+# 当前任务：飞书首批接入（2026-09-24）
+
+用户已确认文字私聊、本机审批、显式取消。设计 Gate、首批代码、固定离线与正式 CLI 浏览器验证已完成。2026-10-03，真实飞书只读任务 `e408065a4fd84f748952ccb5591371d8` 已核实：本人私聊事件生成唯一 Run，真实 DeepSeek（非模拟、直连）调用 3 次，2 次目录列举和 2 次文件读取均成功并按原调用 ID 回到模型，最终 `completed / ANSWER_VALIDATED`；“收到、运行中、完成”三类通知均一次被飞书接受。回答中的广州/深圳数字、缺失项、过期纪要和两处引用与虚构验收资料一致，未创建产物。
+
+同日，真实写入任务 `0d1484da4c154c889d16826b34bcab37` 经本机审批后完成：真实 DeepSeek 调用 4 次，2 次目录列举、2 次读取和 1 次 `write_file` 均成功并回填模型；批准预览、实际文件和 Artifact 的 SHA-256 同为 `01e19ccd4f3e8d97639855d77cda60f13a6ea32ffd1b06929d465a67e9df59d8`，文件为 `output/gzsz-brief-1003.md`、3623 bytes、权限 `0600`。第一次写入 Run `749b32a9515a429e9622b53fb2eb5db4` 因审批过期停止且未落盘，历史保留。第二次 Run 的终态通知首次为 `unknown`，只补发通知一次后飞书接受，客户端可见同一 Run ID 的“已完成；已登记产物 1 份”；补发没有重跑模型或再次写文件。
+
+随后，取消验收 Run `adddf978697944948061448af496631e` 在 `write_file` 等待审批时由本人飞书命令显式取消，最终为 `cancelled / CANCELLED`；写工具收到失败回执，没有 Artifact，`output/gzsz-cancel-1003.md` 不存在，模型请求停在 4 次，没有取消后重做。Run 的持久快照不再暴露可操作审批；审批表保留的 `pending` 行仅为历史记录。取消终态通知一次被飞书接受，客户端可见“已取消；已登记产物 0 份”。
+
+**当前结论：飞书首批真实验收 PASS。** 本人私聊只读问答、本机审批后真实写入与回传、待审批显式取消且不落盘/不重做均已取得真实飞书、DeepSeek、工具、State Store、文件系统和客户端可见证据。技术与白话交接见[飞书验收记录](feishu-check.md)；实施状态见[实施计划 §0](../../docs/superpowers/plans/2026-09-24-feishu-channel.md)，范围见[设计方案](../../docs/superpowers/specs/2026-09-24-feishu-channel-design.md)。本批按既定范围收口；附件、群聊、手机访问和撤回自动取消仍后置。下列既有阶段证据保留。
+
 # 受限目录发现验收记录
+
+## 当前任务入口（2026-09-20：Steadbot 风格工作台视觉重构）
+
+当前为**代码完成、固定离线验证完成、最终代码 Gate PASS；真实模型未调用，用户最终体验验收待进行**。页面已从旧蓝灰技术三栏整体替换为暖纸色通信工作台：左侧固定区分多个 Agent，当前 Agent 只显示自己的 Session 与资料范围；中间是连续对话和悬浮 Composer，持续显示真实模型名与运行状态；右侧工作栏只投影当前 Session 的真实 Run／Artifact，引用、审批历史和 Trace 进入覆盖式详情 Sheet。Artifact 文件卡直接出现在对应回答下方，并保留认证下载、严格 UTF-8 纯文本预览和脚本不执行边界。正式范围见[视觉重设计规格](../../docs/superpowers/specs/2026-09-19-local-agent-workbench-decision-delivery-design.md)，实施与停止条件见[新视觉重构计划](../../docs/superpowers/plans/2026-09-20-local-agent-workbench-visual-redesign.md)。
+
+验证证据：项目 `.venv` 下完整 Python 回归 667 项通过；JavaScript 语法和七组浏览器脚本全部通过；1440×900、1024×768、768×1024、375×812 四个固定视口无页面级横向滚动，桌面固定栏、平板互斥抽屉和手机 Agent 切换均已核对。最终 Review Gate 首次发现 inline Artifact、1180–1199px 抽屉隔离和触控尺寸缺口，修复后由同一审阅者有界复核为 PASS。实现未修改后端、Provider、SQLite schema 或权限协议，也没有调用 DeepSeek。第一阶段只显示当前客户端已知的 `运行中／待确认`，不声称支持跨重启未读；用户必须通过 loopback HTTP 服务打开页面，不能直接打开 `static/index.html`。
 
 ## 当前任务入口（2026-09-17：连续多轮会话页面）
 

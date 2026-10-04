@@ -3,6 +3,7 @@
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import re
 import secrets
@@ -42,9 +43,12 @@ class WebServer(ThreadingHTTPServer):
 
     def __init__(self, address, handler, runs):
         self.runs = runs
+        self.feishu = None
         super().__init__(address, handler)
 
     def server_close(self):
+        if self.feishu is not None:
+            self.feishu.close()
         super().server_close()
         self.runs.close()
 
@@ -231,6 +235,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, content, kind)
             if path == '/api/config':
                 return self.respond(200, self.server.runs.config())
+            if path == '/api/channels/feishu':
+                result = (self.server.feishu.status(agent_id) if self.server.feishu else
+                          {'channel': {'enabled': False}})
+                return self.respond(200, result)
             if path == '/api/agents':
                 return self.respond(200, self.server.runs.list_agents())
             if path == '/api/capabilities':
@@ -317,6 +325,11 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(data, dict) or set(data) != {'decision'}:
                 raise WebError(400, 'INVALID_REQUEST')
             return self.respond(200, self.server.runs.decide(parts[3], parts[5], data['decision']))
+        if path == '/api/channels/feishu/retry':
+            if (not self.server.feishu or not isinstance(data, dict)
+                    or set(data) != {'outbox_id'} or not isinstance(data['outbox_id'], str)):
+                raise WebError(400, 'INVALID_REQUEST')
+            return self.respond(200, self.server.feishu.retry(data['outbox_id'], agent_id))
         if (len(parts) == 5 and parts[1:3] == ['api', 'sessions']
                 and parts[4] in {'rename', 'archive', 'restore'}):
             return self.respond(200, self.server.runs.change_session(parts[3], parts[4], data))
@@ -355,21 +368,48 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def create_server(workspace, directory, *, state_dir=None, session_id=None, port=8765,
-                  provider_factory=DeepSeekProvider.from_env):
+                  provider_factory=DeepSeekProvider.from_env, feishu_config=None):
     runs = WebRuns(workspace, directory, provider_factory, state_dir=state_dir,
                    selected_session_id=session_id)
-    server = WebServer(('127.0.0.1', port), Handler, runs)
+    try:
+        server = WebServer(('127.0.0.1', port), Handler, runs)
+    except Exception:
+        runs.close()
+        raise
     server.token = secrets.token_hex(32)
     server.origin = f'http://127.0.0.1:{server.server_port}'
+    if feishu_config is not None:
+        try:
+            from .channels.config import load_config, ChannelConfigError
+            from .channels.service import ChannelService
+            config = load_config(feishu_config)
+            if config['enabled'] and not os.environ.get('FEISHU_APP_SECRET', '').strip():
+                raise ChannelConfigError('FEISHU_APP_SECRET_MISSING')
+            server.feishu = ChannelService(runs, config, server.origin)
+            if config['enabled']:
+                from .channels.feishu import FeishuTransport
+                def durable_receive(envelope):
+                    try:
+                        return server.feishu.receive(envelope)
+                    finally:
+                        runs.close_thread_connection()
+                transport = FeishuTransport(config['app_id'], os.environ['FEISHU_APP_SECRET'],
+                                            durable_receive)
+                server.feishu.start(transport)
+        except Exception:
+            server.server_close()
+            raise
     return server
 
 
 def serve(workspace, directory, *, state_dir=None, session_id=None, port=8765,
-          provider_factory=DeepSeekProvider.from_env, open_browser=False):
+          provider_factory=DeepSeekProvider.from_env, open_browser=False, feishu_config=None):
     server = create_server(workspace, directory, state_dir=state_dir,
                            session_id=session_id, port=port,
-                           provider_factory=provider_factory)
+                           provider_factory=provider_factory, feishu_config=feishu_config)
     print(f'本地资料会话：{server.origin}\n工作区：{server.runs.workspace}\n按 Ctrl+C 关闭服务。', flush=True)
+    if server.feishu:
+        print('飞书渠道已配置；实际连接与送达状态请在工作台查看。', flush=True)
     if open_browser:
         webbrowser.open(server.origin)
     try:

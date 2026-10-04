@@ -247,6 +247,7 @@ def _build_parser():
     web.add_argument("--port", type=int, default=8765)
     web.add_argument("--demo", action="store_true", help="显式使用测试替身，不调用真实模型")
     web.add_argument("--open", action="store_true", help="启动后在浏览器打开页面")
+    web.add_argument("--feishu-config", type=Path, help="飞书本人私聊绑定 JSON；密钥仅从环境读取")
 
     demo = commands.add_parser("demo", help="无需密钥的模拟演示，不代表真实模型验收")
     demo.add_argument("--log-dir", type=Path, default=ROOT / "runs")
@@ -364,11 +365,21 @@ def main() -> int:
         if not 0 <= args.port <= 65535:
             parser.error("--port 必须在 0–65535 之间")
         from .web import serve
+        from .channels.config import ChannelConfigError
+        from .channels.store import ChannelError
+        if args.demo and args.feishu_config:
+            parser.error("飞书真实入口不能与 --demo 混用；离线测试使用独立测试替身")
         try:
             return serve(args.workspace, args.log_dir, state_dir=args.state_dir,
                          session_id=args.session, port=args.port,
                          provider_factory=DemoProvider if args.demo else DeepSeekProvider.from_env,
-                         open_browser=args.open)
+                         open_browser=args.open, feishu_config=args.feishu_config)
+        except (ChannelConfigError, ChannelError) as error:
+            print(f"飞书渠道无法启动：{error}。请按 README 检查绑定及环境变量，不要发送密钥到聊天中。")
+            return 2
+        except RuntimeError:
+            print("飞书传输无法启动。请安装 requirements-feishu.txt 的固定依赖，并检查本机渠道状态。")
+            return 2
         except (OSError, ValueError, SessionError, StoreError):
             print("无法启动页面：请检查工作区、日志目录和端口是否可用；可通过 --port 更换端口。")
             return 2

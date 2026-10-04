@@ -33,32 +33,53 @@ const { chromium } = require('playwright');
   async function noOverflow() {
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   }
+  async function openInspector() {
+    if (await page.locator('body').getAttribute('data-drawer') !== 'inspector') {
+      await page.locator('#inspector-toggle').click();
+      await page.waitForFunction(() => document.body.dataset.drawer === 'inspector');
+    }
+  }
+  async function openTrace() {
+    await openInspector();
+    if (!await page.locator('#trace').evaluate(element => element.open)) {
+      await page.locator('#trace summary').click();
+    }
+  }
+  async function closeInspector() {
+    if (await page.locator('body').getAttribute('data-drawer') === 'inspector') {
+      await page.locator('#inspector-close').click();
+    }
+  }
   try {
     fs.mkdirSync('artifacts', {recursive: true});
     await page.goto(base, {waitUntil: 'networkidle'});
     assert.match(await page.locator('#connection').innerText(), /模拟/);
-    await openSettings();
-    await page.locator('#discover').check();
+    await page.locator('[data-agent-id="directory-qa"]').click();
+    await page.waitForFunction(() => document.querySelector('#agent-select').value === 'directory-qa');
     assert.equal(await page.locator('#file').isDisabled(), true);
     assert.equal(await page.locator('#file').evaluate(element => element.required), false);
     await page.locator('#question').fill('合并项目代号、评审人和演示日期');
     await page.locator('#start').click(); await terminal();
-    assert.deepEqual(lastRunBody, {mode: 'directory', question: '合并项目代号、评审人和演示日期'});
+    assert.deepEqual(lastRunBody, {mode: 'directory', question: '合并项目代号、评审人和演示日期',
+      agent_id: 'directory-qa'});
     assert.equal(await page.locator('#citations .citation').count(), 2);
     assert.match(await page.locator('#citations').innerText(), /review\.md/);
     assert.match(await page.locator('#scope-summary').innerText(), /已发现 2.*已读取 2.*未读取 0.*未列出目录 0/);
     assert.match(await page.locator('#source-line').innerText(), /目录发现/);
     assert(!((await page.locator('#source-line').innerText()).includes('null')));
-    await page.locator('#trace summary').click();
+    await openTrace();
     assert.match(await page.locator('#events').innerText(), /列出目录/);
     const directoryRequests = runRequests;
     await page.reload({waitUntil: 'networkidle'}); await terminal();
     assert.equal(runRequests, directoryRequests);
     assert.equal(await page.locator('#discover').isChecked(), true);
+    assert.equal(await page.locator('#agent-select').inputValue(), 'directory-qa');
     assert.equal(await page.locator('#file').isDisabled(), true);
     assert.equal(await page.locator('#file').inputValue(), '');
+    await openInspector();
     assert.equal(await page.locator('#scope-summary').isVisible(), true);
     await page.screenshot({path: 'artifacts/web-directory.png', fullPage: true});
+    await closeInspector();
     await page.locator('#question').fill('慢速目录发现');
     await page.locator('#start').click();
     await page.locator('#cancel').waitFor({state: 'visible'});
@@ -73,7 +94,11 @@ const { chromium } = require('playwright');
     assert.equal(await page.locator('#discover').isChecked(), true);
     assert.equal(await page.locator('#file').isDisabled(), true);
     assert.match(await page.locator('#scope-summary').innerText(), /未列出目录 1.*检查范围尚不完整.*未列出目录：\./);
-    await page.locator('#sample').click();
+    await page.locator('[data-agent-id="file-qa"]').click();
+    await page.waitForFunction(() => document.querySelector('#agent-select').value === 'file-qa');
+    await openSettings();
+    await page.locator('#file').fill('demo-note.md');
+    await page.locator('#question').fill('项目代号、评审人和演示日期分别是什么？引用原文。');
     assert.equal(await page.locator('#discover').isChecked(), false);
     assert.equal(await page.locator('#file').isDisabled(), false);
     assert.equal(await page.locator('#file').inputValue(), 'demo-note.md');
@@ -84,10 +109,11 @@ const { chromium } = require('playwright');
     assert.match(await page.locator('#citations').innerText(), /<script>/);
     assert.equal(await page.locator('#citations script').count(), 0);
     assert.equal(await page.evaluate(() => window.injected), undefined);
-    await page.locator('#trace summary').click();
+    await openTrace();
     assert.match(await page.locator('#events').innerText(), /工具结果已回填/);
     assert(!((await page.locator('#events').innerText()).includes('浏览器-481')));
     await page.screenshot({path: 'artifacts/web-answer-desktop.png', fullPage: true});
+    await closeInspector();
     await noOverflow();
     await submit('标识纠错成功'); await terminal();
     assert.equal(await page.locator('#run-status').innerText(), '回答已完成');
@@ -169,8 +195,9 @@ const { chromium } = require('playwright');
     const config = await page.evaluate(async () => (await fetch('/api/config', {headers: {
       'X-Session-Token': document.querySelector('meta[name="session-token"]').content}})).json());
     const path = require('node:path'), crypto = require('node:crypto');
+    await page.locator('[data-agent-id="directory-qa"]').click();
+    await page.waitForFunction(() => document.querySelector('#agent-select').value === 'directory-qa');
     await openSettings();
-    await page.locator('#discover').check();
     await page.locator('#output-file').fill('confirmed-report.md');
     await page.locator('#question').fill('依据两份小文件生成核对报告');
     await page.locator('#start').click();

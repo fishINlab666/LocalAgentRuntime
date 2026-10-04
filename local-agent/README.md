@@ -2,7 +2,56 @@
 
 输入问题并选择单文件或目录模式。模型自主发起 `read_file`，或先 `list_files` 发现路径再选文件读取；程序把带原调用编号的工具结果交回下一轮模型请求，再校验回答与本次原文引用。填写输出路径后，还可由模型提出完整报告，经用户确认后新建文件，并将实际写入回执交回模型。浏览器页面与命令行共用同一 Runtime。
 
+## 飞书本人私聊接入
+
+首批代码、离线检查及受限真实飞书验收均已完成并 **PASS**：本人私聊只读任务、真实审批写入、Artifact 回填，以及待审批显式取消且不落盘/不重做均有证据。当前只支持同一台电脑上的本人私聊；审批、全文和文件都在本机工作台。消息撤回不会取消任务，请用 `/取消`。证据与限制见[验收记录](trial/feishu-check.md)。
+
+一次性准备：
+
+1. 在[飞书开发者后台](https://open.feishu.cn/app)创建企业自建应用、开启机器人。开通 `im:message.p2p_msg:readonly`、`im:message:send_as_bot`；发布/测试可见范围只选择本人。准备应用凭证页面的 App ID 与 App Secret，不把 Secret 发到聊天或写入配置文件。
+2. 关闭占用同一 State Store 的旧工作台。在 `local-agent/` 执行以下命令。首次脚本会隐藏读取 App Secret（已有环境变量则沿用），随后询问 App ID，只建立临时飞书连接，不运行模型、不回复消息：
+
+```sh
+.venv/bin/python -m pip install -r requirements-feishu.txt
+bash trial/connect-feishu.command
+```
+
+3. 终端显示“连接已建立”后，保持终端开启，在后台选择长连接、订阅 `im.message.receive_v1`，按后台要求使其对本人测试范围生效。这样即使后台要求先在线再保存，也无需预填私聊 ID。
+4. 在本人和机器人的私聊中，发送终端生成的 `/绑定 随机码` 整行；不要转发该码。监听只接受同应用的匹配码、用户身份、同租户私聊。收到后连接停止，并在本机显示 `app_id / tenant_key / open_id / chat_id`；确认刚才的消息由你本人发送，在终端输入“绑定”才保存私有 `runs/feishu-binding.json`，创建虚构资料会话。普通消息和“第一个发消息的人”不会自动成为主人。监听最多等待 5 分钟，Ctrl+C 随时退出，不保存原消息。
+5. 同一脚本随后隐藏读取缺少的 DeepSeek Key，启动正式服务并打开本机工作台。首次绑定只证明身份链路；仍须完成下方固定真实任务，才能称为真实验收通过。字段依据[官方收件文档](https://open.feishu.cn/document/server-docs/im-v1/message/events/receive)。
+
+已有绑定时，再次启动只需：
+
+```sh
+bash trial/start-feishu.command
+```
+
+启动脚本仅在终端隐藏读取缺少的 `FEISHU_APP_SECRET` 与 `DEEPSEEK_API_KEY`，导出到当前进程环境，不保存、不回显。已有环境变量直接沿用。页面地址为 `http://127.0.0.1:8780/`；终端保持开启。关闭用 Ctrl+C，SDK 子进程和在途执行同时停止。地址没有自动打开时，可直接在同机浏览器打开它。连通状态和通知结果在当前绑定会话的右栏查看。
+
+若已从可信事件取得四个非密钥 ID，也可用 `.venv/bin/python trial/prepare-feishu.py` 离线填写；该默认模式不联网、不读取密钥，不覆盖已有配置。
+
+已有 Session 可复制 [绑定字段示例](examples/feishu-binding.example.json) 并填写匹配的 Agent/Session/主体 ID。直接启动的正式入口为：
+
+```sh
+.venv/bin/python -m local_agent serve --workspace examples/feishu-workspace --feishu-config runs/feishu-binding.json --port 8780 --open
+```
+
+如果绑定的是其他资料范围，把 `--workspace` 换成实际目录，或用 `--session 会话编号` 打开固定会话。`--state-dir` 须与建会话时相同。启动脚本支持 `bash trial/start-feishu.command 配置路径 状态目录`。当前服务不热加载绑定文件；改绑/停用需停止旧服务、修改配置并重启，既有待发通知不能转给新收件人。不要加 `--demo`；飞书入口禁止与模拟 Provider 混用。
+
+飞书可发送：普通资料问题、`/记录 问题`、`/状态`、`/取消 完整任务编号`。写文件用下面两行作为一条消息发送：
+
+```text
+/报告 output/gzsz-brief.md
+用01-weekly.md和02-actions.md整理广深会前提纲。按营业供给、自然/商业流量、进店下单、首屏套餐四层排查，标明来源、两城差异、过期纪要和待问项；只出讨论稿，优先级由我决定。
+```
+
+输出路径必须预先声明且文件不存在。用完 `gzsz-brief.md` 再试时换新文件名。首批不接收飞书附件；可先在工作台导入文档，再绑定该持久会话。飞书只收到固定状态和无密钥的本机链接，不收到经营正文。“同意”文字不会批准写文件。通知显示未知/失败时可点右栏“仅补发通知”，不会重做任务。
+
+日志：State Store 的 `channel-events.jsonl` 记录收件/重复/派发/终态/送达；同库三张 channel 表保留对应关系，原模型 trace 仍在运行日志目录。`.venv/bin/python trial/inspect-feishu.py` 可只读检查真实记录，报告本身不等于验收签字。真实验收仅跑[固定两条任务](trial/feishu-check.md#真实验收固定两条任务)，不要反复发送整组。
+
 ## 当前状态
+
+飞书首批接入状态和使用入口见下文[飞书本人私聊接入](#飞书本人私聊接入)；当前总状态以[阶段记录](trial/directory-check.md)为准。
 
 **受管本地文档导入闭环已完成固定真实验收。** 页面可以选择文件或文件夹，将 `.md/.txt`、带文字层 PDF 和 DOCX 保存为 State Store 内的私有副本，并在新建的持久会话中按需搜索、读取和返回原始页码／段落／表格行。离线固定组、完整 Python 661 项和六组浏览器回归通过；真实 DeepSeek 固定组以 2 个 Run、8 次模型请求验证了事实、引用、工具结果回填、跨重启历史、跨 Import 隔离和成对备份恢复。原始机器报告因旧评分器要求英文标签而保留为 `FAILED`，修正后只读重放 22/22 必需检查通过，AI 语义 Gate PASS，未追加真实调用；细节与边界见[真实验收记录](trial/import-live-check.md)。
 
@@ -112,7 +161,7 @@ python3 -m local_agent serve --workspace examples/workspace --demo --port 8766 -
 
 `--demo` 用于原只读问答演示，输出路径请留空；始终显示模拟标识，直接回显读到的文本，不理解问题，不能代替真实问答验收。页面只监听 127.0.0.1，检查 Host、Origin 和随机进程令牌，不提供公网或局域网服务。默认日志不保存正文；问答和结果暂存在服务内存供页面查看。
 
-页面测试：`PYTHONPATH=. python3 -W error::ResourceWarning -m unittest tests.test_web -v`。浏览器测试使用本地合成 Provider，覆盖问答、引用、取消、刷新、跨任务迟到响应、提交超时、审批、会话隔离、Agent/Skill/MCP 管理、游标续页、移动抽屉和窄屏；`browser_workbench.cjs` 专门检查三栏工作台。截图保存在 `artifacts/`。页面真实使用体验仍需用户以自己的资料核对，原内核 12 条真实评测不重复计为网页实测。
+页面测试：`PYTHONPATH=. python3 -W error::ResourceWarning -m unittest tests.test_web -v`。浏览器测试使用本地合成 Provider，覆盖问答、引用、取消、刷新、跨任务迟到响应、提交超时、审批、会话隔离、Agent/Skill/MCP 管理、游标续页、响应式抽屉和窄屏；`browser_workbench.cjs` 检查连续对话与运行隔离，`browser_visual_redesign.cjs` 检查 Agent 轨、Session、工作栏、Composer 模型状态和四个固定视口。截图保存在 `artifacts/`。页面真实使用体验仍需用户以自己的资料核对，原内核 12 条真实评测不重复计为网页实测。
 
 本机完整浏览器回归命令（Node Playwright 来自已安装运行环境；不属于产品依赖）：
 

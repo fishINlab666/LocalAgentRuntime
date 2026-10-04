@@ -111,7 +111,7 @@ class AgentSessionTests(unittest.TestCase):
     def test_v1_migration_preserves_history_and_marks_unknown_run_configuration(self):
         self.legacy_database()
         store = self.open_store()
-        self.assertEqual(store.user_version(), 3)
+        self.assertEqual(store.user_version(), 4)
         service = SessionService(store)
         self.assertEqual(service.load('old-file').agent_id, 'file-qa')
         self.assertEqual(service.load('old-directory').agent_id, 'directory-qa')

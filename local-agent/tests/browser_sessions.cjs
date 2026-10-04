@@ -28,7 +28,7 @@ const { chromium } = require('playwright');
       await page.locator('#session-create-toggle').click();
     }
     await page.locator('#session-name').fill(title);
-    await page.locator('#session-mode').selectOption('file');
+    assert.equal(await page.locator('#session-mode').inputValue(), 'file');
     await page.locator('#session-file').fill('demo-note.md');
     const before = await page.locator('#session-select option').count();
     await page.locator('#session-create').click();
@@ -79,6 +79,8 @@ const { chromium } = require('playwright');
     transcriptCards = page.locator('#session-history article[data-run-id]');
     assert.equal(await page.locator('#session-select').inputValue(), sessionA);
     assert.equal(runPosts, requestsBeforeReload, 'reload must only read durable history');
+    assert.equal(await page.locator('#session-list .session-attention').count(), 0,
+      'reload must not invent cross-restart unread or waiting markers from session summaries');
     for (let index = 0; index < 3; index++) {
       await transcriptCards.nth(index).scrollIntoViewIfNeeded();
     }
@@ -104,6 +106,7 @@ const { chromium } = require('playwright');
     await submit('B 会话核对');
     transcriptCards = page.locator('#session-history article[data-run-id]');
     assert.equal(await transcriptCards.count(), 1);
+    await page.locator('.composer-settings summary').click();
     await page.locator('#output-file').fill('session-report.md');
     await page.locator('#question').fill('B 会话生成报告');
     await page.locator('#start').click();
@@ -113,12 +116,13 @@ const { chromium } = require('playwright');
     await waitTerminal();
     await page.waitForFunction(() => document.querySelectorAll(
       '#session-history article[data-run-id]').length === 2);
-    await transcriptCards.last().click();
+    await transcriptCards.last().locator('.run-inspect').click();
     const historicalApproval = transcriptCards.last().locator('.run-approval-note');
     await historicalApproval.waitFor({state: 'visible'});
     assert.match(await historicalApproval.innerText(), /仅供查看/,
       'historical approval must remain visible and read-only in the transcript');
     await page.locator('#approval-history').waitFor({state: 'visible'});
+    assert.equal(await page.locator('#approval-history').getAttribute('data-decision-mode'), 'historical');
     assert.match(await page.locator('#approval-history').innerText(), /session-report\.md/);
     assert((await page.locator('#approval-history-content').textContent()).trim().length > 0,
       'historical approval must retain the complete content preview');
@@ -126,7 +130,7 @@ const { chromium } = require('playwright');
       'historical approval must not expose action buttons');
     assert.equal(await page.locator('#approval').isVisible(), false);
 
-    await page.locator('#session-select').selectOption(sessionA);
+    await page.locator(`[data-session-id="${sessionA}"]`).click();
     await page.waitForFunction(id => document.querySelector('#session-select').value === id
       && document.querySelectorAll('#session-history article[data-run-id]').length === 3, sessionA);
     let releaseLate;
@@ -135,8 +139,8 @@ const { chromium } = require('playwright');
       if (route.request().method() !== 'GET') return route.continue();
       const response = await route.fetch(); await late; await route.fulfill({response}).catch(() => {});
     });
-    await page.locator('#session-history article[data-run-id]').first().click();
-    await page.locator('#session-select').selectOption(sessionB);
+    await page.locator('#session-history article[data-run-id]').first().locator('.run-inspect').click();
+    await page.locator(`[data-session-id="${sessionB}"]`).click();
     await page.waitForFunction(id => document.querySelector('#session-select').value === id, sessionB);
     releaseLate(); await page.waitForTimeout(250);
     assert.equal(await page.locator('#session-select').inputValue(), sessionB,
